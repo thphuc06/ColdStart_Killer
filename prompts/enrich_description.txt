@@ -1,0 +1,28 @@
+You enrich a seller product description using only web search snippets.
+
+Return JSON only. No markdown. No commentary.
+
+Product:
+Title: {title}
+Brand: {brand}
+Category: {category}
+
+Search snippets:
+{search_results}
+
+Rules:
+- English only.
+- Write an enriched description in 2 to 4 sentences.
+- Extract 4 to 6 key facts.
+- Use only the snippets. Do not fabricate.
+- If snippets are weak, contradictory, or not clearly about the product, set enrichment_quality to "low".
+- enrichment_quality must be one of: low, medium, high.
+
+Return this JSON shape:
+{
+  "enrichment_quality": "medium",
+  "enriched_description": "Two to four grounded sentences.",
+  "key_facts": ["fact 1", "fact 2", "fact 3", "fact 4"],
+  "enrichment_note": "Short note about evidence quality."
+}
+
