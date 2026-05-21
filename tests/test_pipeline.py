@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.retrieval_output import REQUIRED_OUTPUT_FIELDS
-from src.search_pipeline import build_union_with_pipeline, run_search
+from src.search_pipeline import atlas_search_compound, bm25_subpipeline, build_union_with_pipeline, run_search
 
 
 MOCK_FIXTURE = {
@@ -57,6 +57,18 @@ def test_build_union_with_pipeline_returns_list() -> None:
     assert pipeline
     assert "$vectorSearch" in pipeline[0]
     assert any("$unionWith" in stage for stage in pipeline)
+
+
+def test_atlas_search_compound_does_not_use_exact_language_filter() -> None:
+    compound = atlas_search_compound("fast charger", {"in_stock": True})
+    assert "filter" not in compound
+
+
+def test_bm25_subpipeline_filters_retrieval_units_after_search() -> None:
+    pipeline = bm25_subpipeline("fast charger", {"in_stock": True}, channel_limit=5)
+    assert pipeline[0]["$search"]["index"] == "text_index"
+    assert pipeline[1] == {"$match": {"unit_type": "proposition", "language": "en", "in_stock": True}}
+    assert pipeline[2] == {"$limit": 5}
 
 
 def test_run_search_with_mock_collection_returns_required_output_fields() -> None:

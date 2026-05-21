@@ -17,9 +17,9 @@
 | Proposition generation (Qwen3:8B, 3-8 facts) | Qwen3:8B generates 3-8 atomic facts | Implemented | Match |
 | HyPE generation (Qwen3:8B, 3-6 queries) | Qwen3:8B generates 3-6 buyer-intent queries | Implemented | Match |
 | Embedding model (BAAI/bge-m3, 1024-dim, normalized) | BAAI/bge-m3 1024-dimensional normalized embeddings | Implemented | Match |
-| Hybrid retrieval ($rankFusion + $unionWith fallback) | Native `$rankFusion` plus `$unionWith` fallback | Implemented | Match |
+| Hybrid retrieval (`$unionWith` default + optional `$rankFusion`) | Native `$rankFusion` plus `$unionWith` fallback | `$unionWith` is the stable default; `$rankFusion` builder is retained for higher Atlas tiers | Free-tier compatible |
 | RRF scoring (k=60) | Reciprocal Rank Fusion with k=60 | Implemented | Match |
-| Vector search (numCandidates=150, limit=50) | `$vectorSearch` with `numCandidates=150`, `limit=50` | Implemented | Match |
+| Vector search (`numCandidates=400`, channel `limit=20`) | `$vectorSearch` over HyPE units | Implemented | Current tuned setting |
 
 ---
 
@@ -27,14 +27,14 @@
 
 | Component | Spec Said | Actually Built | Reason |
 |-----------|-----------|----------------|--------|
-| Dataset | 5,000 items / 4 categories | 3,000 source / 2 categories (All Beauty + Cell Phones) | Scope adjusted for hackathon timeline |
-| Indexed items | ~37,500 units projected | ~1,610 items / ~16,332 retrieval units actual | Matches reduced dataset scope |
+| Dataset | 3,000-item MVP / 20-category diverse slice | `mvp_3000_items_diverse.csv` with 3,000 indexed products | Scope adjusted for hackathon timeline |
+| Indexed items | ~30,000 retrieval units projected | 3,000 items / ~29,753 retrieval units actual | Matches current MVP dataset |
 | Atlas index names | `retrieval_units_vector_idx` / `retrieval_units_text_idx` | `vector_index` / `text_index` | Simplified naming during Atlas setup |
-| BM25 target | Proposition-only | Proposition + `hype_question` units | Improved recall for demo queries |
+| BM25 target | Proposition-only | Proposition-only (`unit_type = proposition`) | Match |
 | Fusion weights | Dynamic by query type | Fixed 0.60 vector / 0.40 BM25 | Query type detection not implemented |
 | Cold-start boost | Gated by `fused_score >= 0.65` | Unconditional 0.03 boost | Simplified for demo |
 | Contextual headers | Full semantic prefix | Category + brand + `price_bucket` prefix | Sufficient for embedding quality |
-| Web enrichment | 4 parallel Brave queries | Up to 3 sequential queries | Rate limit safety |
+| Web enrichment | Multi-query Tavily search for sparse items | Optional/offline only; core 3K dataset does not require live enrichment | Dataset is already content-rich |
 | Item schema | Includes `proposition_quality`, `key_facts[]` | Simplified `DescriptionEnriched` without `key_facts[]` | Not required for retrieval quality |
 
 ---
@@ -74,11 +74,11 @@
 | Metric | Value |
 |--------|-------|
 | Source dataset | ~3,000 items |
-| Indexed items | ~1,610 |
-| Retrieval units | ~16,332 |
-| HyPE units (with embedding) | ~7,576 |
-| Proposition units | ~8,756 |
-| Categories | All Beauty, Cell Phones & Accessories |
+| Indexed items | 3,000 |
+| Retrieval units | ~29,753 |
+| HyPE units (with embedding) | ~13,580 |
+| Proposition units | ~16,173 |
+| Categories | 20-category diverse MVP slice |
 | Embedding model | BAAI/bge-m3 (1024-dim) |
 | LLM | Qwen3:8B via Ollama |
 | Atlas indexes | `vector_index`, `text_index` |
@@ -93,7 +93,7 @@
 | LLM generation (propositions/HyPE) | ✅ | ❌ |
 | BGE-M3 embedding | ✅ | ❌ |
 | MongoDB indexing | ✅ | ❌ |
-| Seller insert UI | ✅ | ❌ |
+| Notebook-based indexing flow | ✅ | ❌ |
 | Query processing + embedding | ✅ | ❌ |
 | Hybrid search pipeline | ✅ | ✅ |
 | MongoDB aggregation | ✅ | ✅ |
@@ -104,11 +104,11 @@
 # ColdStart Killer — Project Master Report (Final)
 
 **Project:** MongoDB Hackathon — Item Cold-Start Recommendation Engine
-**Stack:** MongoDB Atlas Vector Search + Atlas Search + Aggregation Pipeline + RAG + CRAG
+**Stack:** MongoDB Atlas Vector Search + Atlas Search + Aggregation Pipeline + RAG-style retrieval + CRAG-inspired reliability roadmap
 **Version:** v3.3 (Canonical Technical Baseline)
 **Embedder:** BAAI/bge-m3 (1024-dim, fp16, local GPU — RTX 5060 8GB)
 **LLM:** Qwen3:8B via Ollama (local, `think=False` top-level param)
-**Dataset:** Amazon Reviews 2023 — `mvp_5000_items_diverse.csv` (Beauty + Cell Phones + Electronics + Fashion, 5,000 items, English canonical retrieval)
+**Dataset:** Amazon Reviews 2023 — `mvp_3000_items_diverse.csv` (3,000-item, 20-category diverse MVP slice, English canonical retrieval)
 
 ---
 
@@ -143,10 +143,10 @@ Thay vì sinh hypothetical document ở query-time (tốn kém), hệ thống **
 Song song với HyPE (intent space), hệ thống trích xuất các **mệnh đề nguyên tử (atomic propositions)** từ mô tả sản phẩm — ví dụ: *"Product has SPF50+ and PA++++ sun protection"*, *"Suitable for oily and combination skin"*, *"60ml volume"*. Các propositions này được lưu trữ cho **BM25 full-text search** (Atlas Search), không embed, tạo ra một không gian truy xuất riêng biệt xử lý các truy vấn spec-heavy và fact-exact.
 
 **③ MongoDB làm Computational Engine cốt lõi:**
-Toàn bộ logic retrieval, scoring, filtering, ranking và explanation được xử lý **bên trong MongoDB Aggregation Pipeline** — tận dụng `$rankFusion` (Reciprocal Rank Fusion native), `$vectorSearch`, `$search` (Atlas BM25), `$group`, `$lookup`, `$addFields` — không cần xử lý Python ở giữa pipeline. MongoDB không chỉ là storage; nó là **active computational engine** của hệ thống.
+Toàn bộ logic retrieval, scoring, filtering, ranking và explanation được xử lý **bên trong MongoDB Aggregation Pipeline** — hiện dùng `$unionWith` + manual RRF as the Atlas M0/free-tier compatible default, đồng thời giữ `$rankFusion` path cho cluster tier hỗ trợ. Pipeline kết hợp `$vectorSearch`, `$search` (Atlas BM25), `$group`, `$lookup`, `$addFields` — không cần xử lý Python ở giữa ranking pipeline. MongoDB không chỉ là storage; nó là **active computational engine** của hệ thống.
 
-**④ CRAG Layer + Reliability Scoring:**
-Lớp Corrective RAG heuristic (không dùng LLM ở query-time) đánh giá chất lượng từng result theo 4 tín hiệu: retrieval confidence, proposition grounding, enrichment quality, seller confirmation. Mỗi kết quả được gắn nhãn ✅ HIGH / ⚠️ MEDIUM / 🔴 LOW — hệ thống **biết khi nào nó không chắc**, thay vì black-box.
+**④ Explainable Retrieval + CRAG Roadmap:**
+Phiên bản hiện tại trả về `matched_intent`, `matched_fact`, `matched_channels`, rank theo từng channel, score contribution và `cold_start_note` để giải thích tại sao sản phẩm được surfaced. CRAG reliability layer đầy đủ (`accept` / `corrected` / `fallback_broad`, HIGH/MEDIUM/LOW confidence) là phần roadmap tiếp theo, chưa phải core path hiện tại.
 
 ## 1.3. Giá Trị Mang Lại
 
@@ -185,10 +185,11 @@ Hai modalities này **bổ sung chứ không overlap** nhau vì chúng xử lý 
 ║  SELLER PATH (offline / near-realtime, LLM cho phép)             ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║                                                                  ║
-║  Seller nhập: title + brand + price + category                   ║
+║  MVP input: mvp_3000_items_diverse.csv                           ║
+║  Each row: title + brand + price + category + product_text_for_llm║
 ║         ↓                                                        ║
-║  [1] Agentic Web Search Enrichment (trigger: < 30 words)         ║
-║       4 parallel queries → LLM synthesize → enriched description ║
+║  [1] Optional Tavily Web Enrichment (trigger: < 30 words)        ║
+║       Tavily snippets → LLM synthesize → enriched description    ║
 ║         ↓                                                        ║
 ║  [2] Proposition Chunking (3–8 propositions, conf >= 0.60)       ║
 ║       → atomic English facts → text_search (NO embed)           ║
@@ -214,25 +215,23 @@ Hai modalities này **bổ sung chứ không overlap** nhau vì chúng xử lý 
 ║     không mua kem chống nắng"                                    ║
 ║         ↓                                                        ║
 ║  [1] Query Transformation → English canonical queries            ║
-║       Fast path (rule-based, ~1ms) hoặc                          ║
-║       Slow path (LLM fallback, chỉ khi query > 18 words)         ║
+║       Detect VI/EN, Qwen translate if Vietnamese, regex filters  ║
 ║         ↓                                                        ║
-║  [2] Synonym Expansion (SYNONYM_MAP dict lookup)                 ║
+║  [2] Build HyPE query + BM25 query                               ║
 ║         ↓                                                        ║
 ║  [3] bge-m3 encode hype_search_query_en (1 lần, ~20ms)           ║
 ║         ↓                                                        ║
-║  [4] MongoDB Aggregation Pipeline (10 stages)                    ║
-║       $rankFusion                                                ║
+║  [4] MongoDB Aggregation Pipeline                                ║
+║       $unionWith manual RRF default ($rankFusion optional)       ║
 ║         ├── intentPipeline: $vectorSearch HyPE (cosine 1024-dim) ║
 ║         └── factPipeline:   $search BM25 English propositions    ║
 ║       $group → $lookup → $match → $addFields scores              ║
-║       $addFields RELIABILITY signals                             ║
-║       diversity cap → $sort → $project                           ║
+║       score bonuses → $sort → $project                           ║
 ║         ↓                                                        ║
-║  [5] CRAG Evaluation Layer                                       ║
-║       accept / corrected / fallback_broad                        ║
+║  [5] Explainable output                                          ║
+║       matched_intent / matched_fact / debug / cold_start_note    ║
 ║         ↓                                                        ║
-║  Top-10 products + explanation + reliability flag                ║
+║  Top-10 products + explanation/debug fields                      ║
 ╚══════════════════════════════════════════════════════════════════╝
 ```
 
@@ -365,7 +364,7 @@ Query-time:
 | Similarity | Cosine |
 
 **Tại sao BGE-M3 là lựa chọn tối ưu cho bài toán này:**
-- Multi-linguality: map "kem chống nắng" và "sunscreen" vào cùng semantic space mà không cần translation layer
+- Multi-linguality: supports cross-lingual vector matching; current query processor still translates Vietnamese to English so BM25 and metadata filters stay canonical
 - Multi-functionality: hỗ trợ dense (dùng), sparse (tương lai khi MongoDB native support), multi-vector ColBERT
 - Long-context: 8192 tokens cho phép embed full product page nếu cần enrichment phức tạp
 - Đã được validate trên Vietnamese retrieval benchmarks (aclanthology.org/2026.findings-eacl.110)
@@ -376,12 +375,12 @@ Query-time:
 |:---|:---|:---|
 | **Multi-aspect HyPE** | Vake et al. (2025), SSRN 5139335 | E-commerce cold-start thay vì document QA; dynamic multi-aspect (function/persona/occasion/constraint/...); English canonical 3–6 queries/item; thêm Contextual Chunk Headers prefix |
 | **Proposition Chunking** | Chen et al. (2023), arXiv:2312.06648 | Store cho BM25 text search thay vì vector (propositions là atomic facts, keyword-rich); thêm proposition_type classification |
-| **Contextual Chunk Headers** | Anthropic Contextual Retrieval (2024) | Prepend product metadata (category path, brand, skin_type) vào HyPE text trước khi embed; ngăn semantic drift trong tiếng Việt đa nghĩa |
-| **Query Transformations** | LangChain Multi-Query Retriever | Fast path rule-based (~1ms) + slow path LLM fallback; output structured JSON với hard_filters; thêm negation detection |
-| **Fusion Retrieval ($rankFusion)** | RRF + MongoDB native operator | Dual-space: HyPE intent (dense) × Proposition facts (BM25) — 2 modalities khác nhau căn bản, không phải 2 searches trên cùng document |
-| **CRAG (heuristic)** | Yan et al. (2024), arXiv:2401.15884 | Không dùng LLM evaluator (quá chậm); heuristic 4-signal reliability scoring; giữ query path < 400ms |
+| **Contextual Chunk Headers** | Anthropic Contextual Retrieval (2024) | Prepend product metadata (`category`, `brand`, `price_bucket`) vào HyPE text trước khi embed; ngăn semantic drift |
+| **Query Transformations** | LangChain Multi-Query Retriever inspiration | Current: language detect, Qwen VI→EN translation when needed, regex price filters, HyPE/BM25 query text, BGE-M3 embedding. Future: synonym expansion, negation, dynamic query type |
+| **Fusion Retrieval (`$unionWith` RRF default, `$rankFusion` optional)** | Manual RRF on M0/free tier; native `$rankFusion` as upgrade path | Dual-space: HyPE intent (dense) × Proposition facts (BM25) — 2 modalities khác nhau căn bản, không phải 2 searches trên cùng document |
+| **CRAG-inspired reliability** | Yan et al. (2024), arXiv:2401.15884 | Roadmap: current implementation exposes matched channels and debug fields; full heuristic accept/correct/fallback layer is not yet in the core path |
 | **Explainable Retrieval** | NirDiamant/RAG_Techniques | Explanation từ metadata retrieval units, không cần LLM; tính trong $project stage |
-| **RAGAS Evaluation** | Es et al. (2023), arXiv:2309.15217 | Custom metrics thêm: cold_coverage@K, cold_relevance@K, cold_start_window_seconds |
+| **RAGAS / LLM-as-Judge Evaluation** | Es et al. (2023), arXiv:2309.15217 | Roadmap for offline evaluation; current notebooks validate pipeline health and qualitative search behavior |
 
 ---
 
@@ -394,7 +393,7 @@ flowchart TD
     subgraph OFFLINE["🏭 SELLER PATH — Offline/Near-Realtime (LLM allowed)"]
         direction TB
         S1["Seller Input\ntitle, brand, price, category"] --> S2
-        S2{"combined_words\n< 30?"} -- Yes --> S3["Agentic Web Search Enrichment\n4 parallel queries → LLM synthesize\n→ enriched_description + key_facts[]"]
+        S2{"combined_words\n< 30?"} -- Yes --> S3["Optional Tavily Web Enrichment\nTavily snippets → LLM synthesize\n→ enriched_description + key_facts[]"]
         S2 -- No --> S4
         S3 --> S4["Proposition Chunking\n3–8 English atomic facts\nconf >= 0.60\nNO embedding → text_search"]
         S4 --> S5["Dynamic HyPE Generation\n3–6 English queries/item\nRequired: function + persona + occasion\nOptional: constraint, compatibility, gift, spec, style"]
@@ -406,10 +405,10 @@ flowchart TD
     subgraph ONLINE["⚡ BUYER PATH — Online (target P95 < 400ms)"]
         direction TB
         Q1["User Query\n(Vietnamese / English / any language)"] --> Q2
-        Q2{"query > 18 words\nor multi-constraint?"} -- No --> Q3["Fast Path\nRule-based Transform\n~1ms, no LLM\nprice + negation + aspect + occasion"]
-        Q2 -- Yes --> Q4["Slow Path LLM\nQwen3:8B fallback\nStructured JSON output"]
+        Q2{"Vietnamese query?"} -- No --> Q3["English query\nkept as-is"]
+        Q2 -- Yes --> Q4["Qwen3:8B translate to English\npreserve brand, model, price"]
         Q3 --> Q5
-        Q4 --> Q5["Synonym Expansion\nSYNONYM_MAP dict\n'da dầu' → 'oily skin, kiềm dầu'"]
+        Q4 --> Q5["Regex hard filters\nprice_min / price_max / in_stock\nBuild HyPE + BM25 query text"]
         Q5 --> Q6["bge-m3 Encode\nhype_search_query_en → 1024-dim\n(1 lần duy nhất)"]
         Q6 --> AGG
     end
@@ -418,28 +417,19 @@ flowchart TD
 
     subgraph AGG["🔄 MongoDB Aggregation Pipeline (10 Stages)"]
         direction TB
-        AG1["Stage 1: $rankFusion\n├── intentPipeline: $vectorSearch HyPE\n│   numCandidates=150, limit=50\n│   filter: unit_type=hype_question, lang=en\n└── factPipeline: $search BM25 propositions\n    text_search boost 1.5, fuzzy title fallback"]
-        AG1 --> AG2["Stage 2: $group by item_id\nmax(fused_score), best_hype, best_proposition\nmatched_channels addToSet"]
+        AG1["Stage 1: $unionWith manual RRF default\n├── vector branch: $vectorSearch HyPE\n│   numCandidates=400, limit=20\n│   filter: unit_type=hype_question, lang=en\n└── BM25 branch: $search propositions\n    text_search/raw_text/title/brand"]
+        AG1 --> AG2["Stage 2: $group by item_id\nmanual RRF contribution, best_vector, best_bm25\nmatched_channels addToSet"]
         AG2 --> AG3["Stage 3: $lookup → items collection\nJoin product metadata"]
         AG3 --> AG4["Stage 4: $match Hard Filters\nin_stock, price_vnd ≤ max, category_id ∉ exclude"]
-        AG4 --> AG5["Stage 5–6: $addFields Scoring\nrecency_score (7-day decay)\nseller_confirmed_score\nmulti_channel_bonus (0.05)\nmetadata_score composite"]
-        AG5 --> AG6["Stage 7: $addFields final_score\n= fused_score + 0.10×metadata\n+ multi_channel_bonus\n+ cold_start_boost (if score≥0.65)"]
-        AG6 --> AG7["Stage 7b: Reliability Signals\nretrieval_confidence, proposition_grounded\nenrichment_quality, seller_confirmed"]
-        AG7 --> AG8["Stage 8–9: Sort + Diversity Cap\nlimit 30 → $group by category_id\nmax 3 items/category → unwind → limit 10"]
-        AG8 --> AG9["Stage 10: $project\nclean output + explanation object\nmatched_intent, matched_fact, cold_start_note"]
+        AG4 --> AG5["Stage 5–6: $addFields Scoring\nvector/BM25 RRF contributions\nmulti_channel_bonus (0.05)\ncontent_richness_bonus"]
+        AG5 --> AG6["Stage 7: $addFields score\n= fusion_score + multi_channel_bonus\n+ cold_start_boost + content_richness_bonus"]
+        AG6 --> AG8["Stage 8: Sort + top_k\ncurrent code does not apply category diversity cap"]
+        AG8 --> AG9["Stage 9: $project\nclean output + debug object\nmatched_intent, matched_fact, cold_start_note"]
     end
 
-    AGG --> CRAG
+    AGG --> OUT
 
-    subgraph CRAG["🛡️ CRAG Evaluation Layer"]
-        direction LR
-        C1["Compute reliability\nper result (4 signals)"] --> C2{"CRAG Action"}
-        C2 -- "accept (top≥0.70, rel≥0.65)" --> OUT
-        C2 -- "corrected (filter low-rel)" --> OUT
-        C2 -- "fallback_broad (all low)" --> C3["Re-search\nnumCandidates=300\nno aspect filter"] --> OUT
-    end
-
-    OUT["📦 Final Output\nTop-10 products\n+ explanation\n+ reliability flag ✅⚠️🔴\n+ cold_start_note\n+ debug info"]
+    OUT["📦 Final Output\nTop-10 products\n+ matched intent/fact\n+ cold_start_note\n+ debug info\n(CRAG reliability is roadmap)"]
 ```
 
 ## 3.2. Seller Path — Indexing Pipeline Chi Tiết
@@ -448,7 +438,7 @@ flowchart TD
 
 **Trigger:** `combined_words < 30` (title + features + description + details)
 
-Thay vì single-query extraction (chỉ lấy 1 góc nhìn), Agent chạy 4 queries song song từ các góc độ khác nhau, rồi LLM **synthesize** (không phải extract thô) thành enriched description coherent:
+Thay vì single-query extraction (chỉ lấy 1 góc nhìn), Agent dùng Tavily search với nhiều query từ các góc độ khác nhau, rồi LLM **synthesize** (không phải extract thô) thành enriched description coherent:
 
 ```python
 ENRICH_AGENT_QUERIES = [
@@ -457,7 +447,7 @@ ENRICH_AGENT_QUERIES = [
     "{title} {category} usage occasions",
     "{brand} {title} ingredients materials"
 ]
-# → 4 parallel Brave Search → LLM tổng hợp → enriched_description + key_facts[]
+# → Tavily Search → LLM tổng hợp → enriched_description + key_facts[]
 ```
 
 **Kết quả so sánh:**
@@ -473,7 +463,7 @@ Agentic synthesis (mới):
   → Cohesive, rich, sẵn sàng cho Proposition Chunking
 ```
 
-**⚠️ Lưu ý triển khai Hackathon:** Web enrichment live có rủi ro: chậm, nguồn không đồng nhất, hallucination. Với 5,000 items của `mvp_5000_items_diverse.csv` (đã có `combined_words >= 150`), enrichment không cần thiết. Chỉ trigger enrichment cho items mới có `combined_words < 30` — và với demo, nên **pre-compute** enrichment offline cho 50–100 sản phẩm demo, không chạy live.
+**⚠️ Lưu ý triển khai Hackathon:** Web enrichment live có rủi ro: chậm, nguồn không đồng nhất, hallucination. Với 3,000 items của `mvp_3000_items_diverse.csv` (đã được lọc content-rich), enrichment không cần thiết trong core insert path. Chỉ trigger Tavily enrichment cho items mới có `combined_words < 30` — và với demo, nên **pre-compute** enrichment offline cho 50–100 sản phẩm demo, không chạy live.
 
 ### Bước 2: Proposition Chunking
 
@@ -536,31 +526,36 @@ embedding_text = "[Category: Beauty > Skincare > Sunscreen | Brand: Anessa | Ski
                                                           ─────────
 Total per item                                            ~15.5–30KB
 
-5,000 items × ~30KB max = ~150MB  ✅ trong Atlas M0 free tier (512MB limit)
+3,000 items × ~30KB max = ~90MB  ✅ trong Atlas M0 free tier (512MB limit)
 ```
 
 ## 3.3. Buyer Path — Query Pipeline Chi Tiết
 
 ### Bước 1: Query Transformation
 
-**Fast path (rule-based, ~1ms, no LLM):**
+**Current implementation (`src/query_processor.py`):**
 ```python
-# Regex detect: price ("dưới 300k" → max_price_vnd: 300000)
-# Negation detect: "không mua kem chống nắng" → exclude_categories: ["sunscreen"]
-# Aspect detect: occasion/persona/function keywords
-# Output:
+# 1. Detect Vietnamese vs English.
+# 2. If Vietnamese, translate to English with Qwen3 via Ollama.
+# 3. Extract explicit price filters with regex.
+# 4. Build:
+#    - hype_search_query_en: semantic buyer-intent phrase
+#    - bm25_search_query_en: keyword-focused product query
+# 5. Embed hype_search_query_en once with BGE-M3.
 {
-  "query_type": "gift",
-  "hype_search_query_en": "birthday skincare gift for girlfriend with oily skin",
-  "bm25_search_query_en": "skincare gift oily skin moisturizer toner serum",
-  "hard_filters": { "max_price_vnd": 300000, "exclude_categories": ["sunscreen"] }
+  "original_query": "ốp điện thoại samsung galaxy a14 dưới 500k",
+  "language_detected": "vi",
+  "english_query": "samsung galaxy a14 phone case under 500k",
+  "hype_search_query_en": "user looking for samsung galaxy a14 phone case under 500k for everyday use",
+  "bm25_search_query_en": "samsung galaxy a14 phone case under 500k",
+  "hard_filters": { "in_stock": true, "price_max": 500000 },
+  "query_embedding": [/* 1024 floats */]
 }
 ```
 
-**Slow path (LLM, chỉ khi > 18 words hoặc nhiều constraints):**
-Qwen3:8B via Ollama, `think=False` top-level param (CRITICAL: không để trong `options` dict — sẽ gây model chỉ output thinking tokens với content rỗng).
+**Note:** Search aggregation receives an already-built fixture and does not call LLM. Query-time Qwen is currently used only by the query processor for Vietnamese translation; caching or a rule-based Vietnamese fast path is a future latency optimization.
 
-### Bước 2: Synonym Expansion
+### Bước 2: Synonym Expansion (Roadmap)
 
 ```python
 SYNONYM_MAP = {
@@ -573,7 +568,7 @@ SYNONYM_MAP = {
 # "quà sinh nhật cho bạn gái da dầu" → thêm "oily skin, kiềm dầu, gift, tặng bạn"
 ```
 
-### Bước 3: Dynamic Fusion Weights
+### Bước 3: Dynamic Fusion Weights (Roadmap)
 
 ```python
 weights = {
@@ -583,6 +578,8 @@ weights = {
     "vague_intent":{"intent": 0.60, "fact": 0.40},
 }.get(query_type, {"intent": 0.55, "fact": 0.45})
 ```
+
+Current implementation uses fixed weights: `0.60` vector / `0.40` BM25.
 
 ## 3.4. MongoDB Aggregation Pipeline — Core Implementation
 
@@ -596,7 +593,37 @@ Fallback ($unionWith workaround): Atlas M0 compatible. Fallback quality is compa
 Confirm version: db.runCommand({ buildInfo: 1 }).version
 ```
 
-### Stage 1: $rankFusion — Hybrid Dual-Space Search
+### Stage 1: Hybrid Dual-Space Search
+
+**Current implementation:** `src/search_pipeline.py` uses `$unionWith` + manual RRF as the default because it works on Atlas free tier/M0 and preserves clear multi-channel debug fields. A `$rankFusion` builder remains in code for higher Atlas tiers, but it is not the default demo path.
+
+```javascript
+// Default Atlas M0-compatible shape, simplified:
+[
+  { $vectorSearch: {
+      index: "vector_index",
+      path: "embedding",
+      queryVector: queryEmbedding,
+      numCandidates: 400,
+      limit: 20,
+      filter: { unit_type: "hype_question", language: "en", in_stock: true }
+  }},
+  { $setWindowFields: { sortBy: { raw_vector_score: -1 }, output: { rank_vector: { $documentNumber: {} }}}},
+  { $addFields: { channel: "vector", fusion_score: 0.60 / (60 + "$rank_vector") }},
+  { $unionWith: {
+      coll: "retrieval_units",
+      pipeline: [
+        { $search: { index: "text_index", compound: { should: [/* text_search/raw_text/title/brand */] }}},
+        { $match: { unit_type: "proposition", language: "en", in_stock: true }},
+        { $limit: 20 },
+        { $setWindowFields: { sortBy: { raw_bm25_score: -1 }, output: { rank_bm25: { $documentNumber: {} }}}},
+        { $addFields: { channel: "bm25", fusion_score: 0.40 / (60 + "$rank_bm25") }}
+      ]
+  }}
+]
+```
+
+Optional `$rankFusion` production-tier shape:
 
 ```javascript
 {
@@ -605,17 +632,17 @@ Confirm version: db.runCommand({ buildInfo: 1 }).version
       pipelines: {
         intentPipeline: [  // Dense: HyPE buyer intent
           { $vectorSearch: {
-              index: "retrieval_units_vector_idx",
+              index: "vector_index",
               path: "embedding",
               queryVector: queryEmbedding,  // 1024-dim từ bge-m3
-              numCandidates: 150, limit: 50,
+              numCandidates: 400, limit: 20,
               filter: { unit_type: "hype_question", language: "en" }
           }},
           { $addFields: { channel: "hype", matched_text: "$raw_text", matched_aspect: "$aspect" }}
         ],
         factPipeline: [  // BM25: Proposition facts
           { $search: {
-              index: "retrieval_units_text_idx",
+              index: "text_index",
               compound: {
                 should: [
                   { text: { query: bm25QueryEn, path: "text_search",
@@ -623,11 +650,10 @@ Confirm version: db.runCommand({ buildInfo: 1 }).version
                   { text: { query: bm25QueryEn, path: ["item_title_en", "item_brand"],
                             fuzzy: { maxEdits: 1 }}}
                 ],
-                filter: [{ equals: { path: "unit_type", value: "proposition" }},
-                         { equals: { path: "language", value: "en" }}]
               }
           }},
-          { $limit: 50 },
+          { $match: { unit_type: "proposition", language: "en", in_stock: true }},
+          { $limit: 20 },
           { $addFields: { channel: "proposition", matched_text: "$raw_text" }}
         ]
       }
@@ -644,16 +670,16 @@ $$RRF\_Score(d) = \sum_{r \in R} \frac{1}{k + rank_r(d)}$$
 
 Với $k=60$ (smoothing constant), công thức này **bỏ qua scale variance** giữa cosine similarity score (bounded 0–1) và BM25 score (unbounded), chỉ dùng ordinal ranking — kết quả ổn định hơn weighted sum trực tiếp.
 
-### Stages 2–10: Group → Lookup → Filter → Score → Diversity → Project
+### Stages 2–9: Group → Lookup → Filter → Score → Project
 
-Toàn bộ logic sau $rankFusion được xử lý inline trong pipeline:
+Toàn bộ logic sau hybrid branch merge được xử lý inline trong pipeline:
 
-- **Stage 2 ($group):** Gom nhiều retrieval units về cùng `item_id`, lấy `max(fused_score)`, preserve `best_hype` và `best_proposition` cho explanation
+- **Stage 2 ($group):** Gom nhiều retrieval units về cùng `item_id`, tính RRF contribution, preserve `best_vector` và `best_bm25` cho explanation
 - **Stage 3 ($lookup):** Join item metadata từ `items` collection
 - **Stage 4 ($match):** Apply hard filters (price, stock, category exclusion)
-- **Stage 5–7 ($addFields):** Tính `recency_score` (7-day decay), `seller_confirmed_score`, `multi_channel_bonus` (+0.05 nếu match cả HyPE lẫn proposition), `metadata_score`, `final_score`, reliability signals
-- **Stage 8–9 ($sort + diversity cap):** Sort by `final_score`, cap 3 items/category, final limit 10
-- **Stage 10 ($project):** Output clean JSON với `explanation` object
+- **Stage 5–7 ($addFields):** Tính `fusion_score`, `multi_channel_bonus` (+0.05 nếu match cả HyPE lẫn proposition), `cold_start_boost`, `content_richness_bonus`, và final `score`
+- **Stage 8 ($sort + limit):** Sort by `score`, final `top_k`
+- **Stage 9 ($project):** Output clean JSON với `matched_intent`, `matched_fact`, `cold_start_note`, and debug fields
 
 ## 3.5. Cold-Start Real-Time vs Batch Processing
 
@@ -661,7 +687,7 @@ Toàn bộ logic sau $rankFusion được xử lý inline trong pipeline:
 |:---|:---|:---|:---|
 | Seller đăng sản phẩm mới (content-rich) | Near-realtime | ~12–16 giây | Proposition Chunking + HyPE Gen + Embed |
 | Seller đăng sản phẩm sparse (< 30 words) | Offline | ~30–60 giây | + Agentic Web Search Enrichment trước |
-| Buyer search | Real-time | P95 < 400ms | Query Transform + Encode + Aggregation + CRAG |
+| Buyer search | Real-time | P95 target < 400ms | Query transform + encode + MongoDB hybrid aggregation + explainable output |
 | Bulk indexing Amazon dataset | Batch | ~22–44 giây / 15K–30K HyPE vectors | bge-m3 batch encode 688 texts/sec |
 | Ablation evaluation | Offline | N/A | LLM-as-Judge trên 30–50 queries |
 
@@ -681,7 +707,7 @@ ColdStart Killer: sản phẩm xuất hiện top-K sau ~12–16 GIÂY (indexing 
 
 | Scale | Items | retrieval_units | Tổng storage | Fit Atlas tier? |
 |:---|:---|:---|:---|:---|
-| POC/Demo | 5,000 | ~37,500 docs | ~150MB | ✅ M0 Free (512MB) |
+| POC/Demo | 3,000 | ~30,000 docs | ~90MB | ✅ M0 Free (512MB) |
 | Small marketplace | 100,000 | ~750,000 docs | ~3GB | ✅ M10 ($57/mo) |
 | Medium marketplace | 1,000,000 | ~7,500,000 docs | ~30GB | ✅ M30+ |
 | Large marketplace | 10,000,000+ | ~75M+ docs | ~300GB+ | Atlas Dedicated |
@@ -695,12 +721,12 @@ ColdStart Killer: sản phẩm xuất hiện top-K sau ~12–16 GIÂY (indexing 
 | Rule-based query transform | ~1ms | No I/O |
 | Synonym expansion | ~0.1ms | Dict lookup |
 | bge-m3 encode (1 query) | ~20ms | GPU local; cached hot queries |
-| $vectorSearch (numCandidates=150) | ~40–80ms | Atlas M10, 5K items |
+| $vectorSearch (`numCandidates=400`) | To measure | Current 3K/M0-compatible demo setting |
 | $search BM25 | ~10–20ms | Atlas Search |
-| $rankFusion + $group + $lookup | ~30–50ms | Aggregation |
+| `$unionWith` manual RRF + `$group` + `$lookup` | ~30–80ms | Current M0-compatible aggregation path |
 | $match + $addFields scoring | ~10ms | Compute in C++ layer |
 | Network (Atlas → Backend) | ~20–40ms | Depends region |
-| CRAG evaluation (heuristic) | ~1ms | Pure computation |
+| CRAG evaluation (heuristic) | Future | Not in current core path |
 | **Total P50 estimate** | **~140ms** | ✅ |
 | **Total P95 estimate** | **~300ms** | ✅ (target < 400ms) |
 
@@ -713,9 +739,9 @@ ColdStart Killer: sản phẩm xuất hiện top-K sau ~12–16 GIÂY (indexing 
 ### Compute Efficiency — Indexing Time
 
 ```
-15,000–30,000 HyPE vectors (5,000 items × 3–6 queries) × 1/688 sec = ~22–44 giây
+9,000–18,000 HyPE vectors (3,000 items × 3–6 queries) × 1/688 sec = ~13–26 giây
 Proposition extraction + HyPE gen (LLM, Qwen3:8B): ~3–8 sec/item
-Total indexing for 5,000 items (with precomputed LLM): ~4–7 giờ offline
+Total indexing for 3,000 items (with precomputed LLM): ~2.5–4 giờ offline
   → Acceptable for hackathon (1 lần, không cần real-time LLM trong demo)
 ```
 
@@ -723,13 +749,13 @@ Total indexing for 5,000 items (with precomputed LLM): ~4–7 giờ offline
 
 ### Điểm mạnh kiến trúc
 
-**① LLM Cost được kiểm soát:** LLM chỉ chạy **offline** tại indexing time. Query path hoàn toàn không có LLM call (trừ fallback cho query > 18 words). Với 5,000 items × ~10 LLM calls/item = 50,000 LLM calls — có thể chạy trước 1 lần trên local GPU, không phát sinh chi phí API.
+**① LLM Cost được kiểm soát:** LLM chủ yếu chạy **offline** tại indexing time. Với 3,000 items × ~10 LLM calls/item = ~30,000 LLM calls — có thể chạy trước 1 lần trên local GPU, không phát sinh chi phí API. Query-time LLM chỉ nên dùng cho translation/enrichment fallback hoặc demo query processing, không phải core ranking step.
 
 **② MongoDB-native execution:** Toàn bộ retrieval + ranking + filtering + explanation trong 1 Aggregation Pipeline — không round-trip Python, không serialize/deserialize data lớn, tận dụng tối đa MongoDB C++ execution engine.
 
 **③ Modality separation:** HyPE (intent) và propositions (facts) xử lý 2 kiểu truy vấn khác nhau hoàn toàn — không bị dilution effect khi nhúng chung vào 1 vector. Dual-space không chỉ là "2 searches" mà là **2 fundamentally different information modalities**.
 
-**④ Graceful degradation:** `$rankFusion` → `$unionWith` fallback, LLM → rule-based fallback, CRAG → accept fallback. Hệ thống vẫn hoạt động ở mọi tier.
+**④ Graceful degradation:** Current demo path uses `$unionWith` manual RRF by default for Atlas M0/free-tier compatibility. `$rankFusion` remains an upgrade path for higher tiers; Tavily enrichment and CRAG-style reliability can be enabled later without changing the core retrieval schema.
 
 ### Giới hạn kỹ thuật được nhận diện
 
@@ -747,19 +773,19 @@ Total indexing for 5,000 items (with precomputed LLM): ~4–7 giờ offline
 
 | # | Vấn đề / Pain Point | Phân Tích Kỹ Thuật Chuyên Sâu | Giải Pháp Khắc Phục (Countermeasures) & Trạng Thái |
 |:---|:---|:---|:---|
-| **P1** | **LLM Hallucination trong Proposition & HyPE** | LLM có thể "sáng tác" tính năng không tồn tại — ví dụ: basic 5W speaker được gắn query "perfect for large outdoor wedding". Propositions sai dẫn đến retrieval sai và mất trust người dùng. | **✅ ĐÃ XỬ LÝ:** (1) Two-stage LLM pipeline: Model A extract facts strictly grounded, Model B chỉ generate HyPE từ facts của Model A. (2) `confidence` field per proposition (threshold 0.60). (3) `seller_confirmed` flag — unconfirmed propositions nhận weight thấp hơn. (4) Enrichment prompt cứng: "Only use information present in search results, do NOT fabricate". (5) CRAG reliability scoring detect và flag results có `enrichment_quality: "low"`. |
-| **P2** | **Latency vượt P95 < 400ms** | Nhiều nguồn latency cộng dồn: bge-m3 encode (~20ms), Atlas Vector Search (~40–80ms), BM25 search (~10–20ms), $group + $lookup (~30–50ms), network (~20–40ms). LLM slow path (Qwen3:8B) có thể thêm 500ms+. | **✅ ĐÃ XỬ LÝ:** (1) Rule-based fast path mặc định (~1ms, no LLM). LLM chỉ là fallback. (2) Encode 1 lần duy nhất (không re-encode). (3) Pre-filter denormalized fields trong $vectorSearch trước HNSW traversal. (4) numCandidates=150 (tunable). (5) Cache hot query embeddings. (6) Prewarm Atlas cluster trước demo. |
-| **P3** | **Vietnamese BM25 Token Mismatch** | `lucene.standard` tokenize theo space: "da dầu" → `["da", "dầu"]`. Token "dầu" match nhầm "dầu ăn", "dầu gội". Tương tự: "chống nắng" → `["chống", "nắng"]`. | **✅ ĐÃ XỬ LÝ (legacy/future):** `underthesea.word_tokenize()` join compound words bằng underscore: "da dầu" → "da_dầu" (1 token). `normalize_specs()` xử lý special chars: "PA++++" → "PA4plus". **CHÚ Ý:** MVP v3.3 dùng English canonical propositions nên vấn đề này không active trong main path; chỉ relevant nếu sau này index Vietnamese propositions. |
+| **P1** | **LLM Hallucination trong Proposition & HyPE** | LLM có thể "sáng tác" tính năng không tồn tại — ví dụ: basic 5W speaker được gắn query "perfect for large outdoor wedding". Propositions sai dẫn đến retrieval sai và mất trust người dùng. | **✅ ĐÃ GIẢM RỦI RO:** (1) Two-stage LLM pipeline: propositions are extracted first from `product_text_for_llm`, then HyPE uses product context + propositions. (2) `confidence` field per proposition (threshold 0.60). (3) `seller_confirmed` flag exists for future weighting. (4) Tavily enrichment prompt, when used, must be evidence-grounded. **🔄 NEXT:** full CRAG reliability flags. |
+| **P2** | **Latency vượt P95 < 400ms** | Nhiều nguồn latency cộng dồn: bge-m3 encode, Atlas Vector Search, BM25 search, `$group` + `$lookup`, network. Vietnamese translation via Qwen can add latency when the user query is Vietnamese. | **🔄 PARTIALLY ADDRESSED:** (1) Search aggregation itself has no LLM calls. (2) Encode 1 lần duy nhất. (3) Pre-filter denormalized fields in `$vectorSearch`. (4) `$unionWith` default works on free tier. **NEXT:** cache translations/query embeddings and measure P50/P95 on the demo cluster. |
+| **P3** | **Vietnamese BM25 Token Mismatch** | `lucene.standard` tokenize theo space: "da dầu" → `["da", "dầu"]`. Token "dầu" match nhầm "dầu ăn", "dầu gội". Tương tự: "chống nắng" → `["chống", "nắng"]`. | **✅ AVOIDED IN CURRENT PATH:** MVP uses English canonical propositions and English BM25 queries, so Vietnamese BM25 segmentation is not active. `underthesea` segmentation remains a future option only if Vietnamese propositions are indexed later. |
 | **P4** | **$rankFusion Compatibility Issue** | `$rankFusion` requires MongoDB 8.1+, Atlas M10+ ($57/mo). Atlas M0 (free tier) không support. Preview feature có thể thay đổi behavior. | **✅ ĐÃ XỬ LÝ:** `$unionWith` fallback pipeline hoàn chỉnh. Fallback quality is comparable for demo, but should be validated against $rankFusion. Thiết kế dual-mode: detect MongoDB version, auto-select implementation. Documentation rõ ràng cho cả hai mode. |
-| **P5** | **Agentic Web Enrichment Instability** | Live web search trong demo: (1) chậm (network latency), (2) nguồn không đồng nhất (dữ liệu thay đổi), (3) hallucination từ LLM synthesis, (4) có thể gây demo fail. | **✅ ĐÃ XỬ LÝ (strategy adjustment):** MVP 5,000 items (`combined_words >= 150`) không cần enrichment. Demo pre-compute enrichment offline cho 50–100 sản phẩm showcase, lưu với `source: "agentic_web_search"`, `seller_confirmed: false`. Live enrichment là **optional showcase**, không phải core path. |
-| **P6** | **Seller Spam / Metadata Noise** | Nhà bán hàng nhồi từ khóa không liên quan vào description để "hack" HyPE generation, tạo ra vector rác ô nhiễm semantic space. | **✅ ĐÃ XỬ LÝ một phần:** `content_richness` score, `proposition_quality` metric. `cold_start_boost` chỉ apply khi `fused_score >= 0.65` — spam product với propositions yếu không được boost. **🔄 FUTURE:** Thêm content quality gate, max retrieval_units per item, seller reputation signal. |
-| **P7** | **Diversity Collapse** | Top-10 results có thể đều là cùng một category (ví dụ: 10 toner da dầu). | **✅ ĐÃ XỬ LÝ:** Stage 9 trong Aggregation Pipeline — `$group by category_id`, cap `$slice: 3` items/category trước khi final sort. Đảm bảo top-10 trải đều đa danh mục. |
-| **P8** | **Cold-Start Boost gây Irrelevant Results** | Cold boost không có điều kiện → items mới nhưng không liên quan bị đẩy lên cao, gây friction với user. | **✅ ĐÃ XỬ LÝ:** `cold_start_boost` chỉ apply khi `fused_score >= 0.65` AND `is_cold_item = true`. Boost là safety net, không phải override mechanism. |
+| **P5** | **Agentic Web Enrichment Instability** | Live Tavily web search trong demo: (1) chậm (network latency), (2) nguồn không đồng nhất (dữ liệu thay đổi), (3) hallucination từ LLM synthesis, (4) có thể gây demo fail. | **✅ ĐÃ XỬ LÝ (strategy adjustment):** MVP 3,000 items đã được lọc content-rich nên không cần enrichment trong core insert path. Demo có thể pre-compute Tavily enrichment offline cho 50–100 sản phẩm showcase, lưu với `source: "tavily_web_search"`, `seller_confirmed: false`. Live enrichment là **optional showcase**, không phải core path. |
+| **P6** | **Seller Spam / Metadata Noise** | Nhà bán hàng nhồi từ khóa không liên quan vào description để "hack" HyPE generation, tạo ra vector rác ô nhiễm semantic space. | **🔄 PARTIALLY ADDRESSED:** `content_richness` contributes a small score bonus and generation is grounded in source text. **NEXT:** content quality gate, max retrieval_units per item, seller reputation signal, and gated cold-start boost threshold. |
+| **P7** | **Diversity Collapse** | Top-10 results có thể đều là cùng một category (ví dụ: 10 phone cases). | **🔄 NOT YET IMPLEMENTED:** Current pipeline sorts by score and returns `top_k`. Category diversity cap is planned for the next ranking iteration. |
+| **P8** | **Cold-Start Boost gây Irrelevant Results** | Cold boost không có điều kiện → items mới nhưng không liên quan bị đẩy lên cao, gây friction với user. | **🔄 PARTIALLY ADDRESSED:** boost is small (`0.03`) and comes after vector/BM25 relevance. **NEXT:** gate boost by minimum `fusion_score` / quality threshold. |
 | **P9** | **$vectorSearch Pipeline Placement** | MongoDB docs: `$vectorSearch` không được dùng trong `$facet` hoặc `$lookup`. Đặt sai position trong pipeline gây build failure. | **✅ ĐÃ XỬ LÝ:** `$vectorSearch` luôn ở stage đầu tiên của pipeline (hoặc trong sub-pipeline của `$rankFusion`). Không bao giờ nest trong `$facet`/`$lookup`. |
-| **P10** | **LLM at Query Time (latency bomb)** | Bất kỳ LLM call đồng bộ nào trong query path — dù model nhỏ — thêm 200–1000ms, phá vỡ latency budget. | **✅ ĐÃ XỬ LÝ:** LLM query-time hoàn toàn tắt mặc định. Fast path rule-based đủ cho >90% queries thực tế (price/negation/persona/occasion detection). LLM slow path là explicit fallback, chỉ trigger với complex multi-constraint queries. |
-| **P11** | **Ground Truth cho Evaluation** | Không có user interaction history → không có ground truth tự nhiên → metric dễ bị nghi ngờ. | **⚠️ PARTIALLY ADDRESSED:** Tạo 30–50 query test với manual relevance labels (2–3 người judge). LLM-as-Judge (RAGAS) chỉ là supplementary, không phải chính. Amazon Reviews 2023 review data dùng cho offline evaluation ground truth (`rating_number >= 4` = relevant), nhưng **không** đưa vào indexing pipeline. |
+| **P10** | **LLM at Query Time (latency bomb)** | Bất kỳ LLM call đồng bộ nào trong query path — dù model nhỏ — thêm 200–1000ms, phá vỡ latency budget. | **🔄 PARTIALLY ADDRESSED:** `run_search()` itself has no LLM calls, but `process_query()` currently uses Qwen translation for Vietnamese queries. **NEXT:** cache translations and add a rule/dictionary fast path for common Vietnamese shopping queries. |
+| **P11** | **Ground Truth cho Evaluation** | Không có user interaction history → không có ground truth tự nhiên → metric dễ bị nghi ngờ. | **🔄 NOT YET IMPLEMENTED:** Notebook 03/04 validate pipeline health and qualitative retrieval, but a labeled 30–50 query evaluation set is still a next step. |
 | **P12** | **HyPE Quá Generic** | LLM có thể generate HyPE quá chung: "product for daily use", "good for everyone" — không có discriminative value, gây match sai. | **✅ ĐÃ XỬ LÝ:** HyPE prompt cứng: "Prefer specific buyer intent over generic category terms", "Write like real users typing into an e-commerce search bar", "Avoid duplicate or near-duplicate queries". Required aspect structure đảm bảo coverage tối thiểu. |
-| **P13** | **best_hype Không Ổn Định Sau $rankFusion** | Sau `$rankFusion`, thứ tự documents trong output không đảm bảo "best per channel" khi dùng `$first`. | **⚠️ RISK — CẦN CHÚ Ý:** Dùng `$top: { output: ..., sortBy: { score: -1 } }` hoặc `$sortArray` trong `$group` để đảm bảo lấy đúng best match per channel. Test kỹ trên multi-unit items. |
+| **P13** | **best_hype Không Ổn Định Sau `$rankFusion`** | Sau `$rankFusion`, thứ tự documents trong output không đảm bảo "best per channel" khi dùng `$first`. | **✅ HANDLED IN DEFAULT PATH:** `$unionWith` mode computes per-channel ranks and uses `$sortArray` to select `best_vector` / `best_bm25`. `$rankFusion` remains optional and should be re-tested before production use. |
 | **P14** | **Pitch Positioning — Nhầm thành Semantic Search** | Nguy cơ giám khảo hiểu đây là "semantic search tốt hơn" thay vì "recommendation system". | **✅ ĐÃ XỬ LÝ (communication):** Pitch rõ ràng là "**pure item cold-start recommendation candidate generator** for discovery surfaces and conversational shopping queries". Demo surfaces: "New for this intent", "Gift ideas", "For office workers", "For oily skin" — không phải search bar đơn thuần. |
 
 ## 5.2. Upgrade Architecture Notes — Từ Phiên Bản Cũ Đến v3.3
@@ -770,11 +796,11 @@ Các điểm phản biện ở bản cũ đã được xử lý trong v3.3:
 |:---|:---|
 | Fixed bilingual 9 queries/item → vector storage inefficient | Dynamic English HyPE: 3–6 queries/item (simple product ít vector, complex product nhiều hơn) |
 | Vietnamese segmentation active trong main retrieval path → fragile | English canonical retrieval cho cả HyPE và BM25; Vietnamese segmentation chỉ là legacy/future option |
-| LLM query-time enrichment → latency | Query path hoàn toàn không LLM mặc định; fast path rule-based ~1ms |
+| LLM query-time enrichment → latency | Search aggregation has no LLM; Vietnamese query translation currently uses Qwen and should be cached/optimized |
 | text_segmented active BM25 field → Vietnamese dependency | text_search (English plain) là active BM25 field |
 | Qwen2:7B → think mode issues | Qwen3:8B, `think=False` top-level param (CRITICAL fix documented) |
 | Chưa có fallback cho $rankFusion | $unionWith workaround hoàn chỉnh; fallback quality comparable for demo, to be validated against $rankFusion |
-| CRAG layer gây latency | CRAG heuristic — không LLM evaluator, tính reliability trong Aggregation Pipeline, toàn bộ < 5ms thêm |
+| CRAG layer gây latency | CRAG is roadmap; current output exposes debug/matched channels for manual reliability inspection |
 
 ---
 
@@ -784,7 +810,7 @@ Các điểm phản biện ở bản cũ đã được xử lý trong v3.3:
 
 ### Tuần 1: Data & Indexing
 
-- [ ] **Verify `mvp_5000_items_diverse.csv`:** Join với raw Amazon metadata bằng `parent_asin` để lấy full `description`, `features`, `details`. CSV chỉ chứa word counts, không có full text.
+- [ ] **Verify `mvp_3000_items_diverse.csv`:** Join với raw Amazon metadata bằng `parent_asin` để lấy full `description`, `features`, `details`, and `product_text_for_llm`. CSV phải chứa đủ text để chạy Proposition + HyPE offline.
 - [ ] **Pre-compute Propositions + HyPE offline:** Chạy Qwen3:8B local trên 500–1,000 items trước. Lưu JSON. Demo không phụ thuộc live LLM.
 - [ ] **Tạo 50–100 "showcase items":** Chọn items đa dạng category (Beauty, Electronics, Cell Phones), đảm bảo propositions quality ≥ 0.70, seller_confirmed = false (để demo reliability flow).
 - [ ] **Snapshot test segmentation:** Nếu có Vietnamese propositions, test 20 phrases: "da dầu" → "da_dầu", "chống nắng" → "chống_nắng", "pin trâu" → "pin_trâu". Index và query phải dùng cùng `segment_vi()`.
@@ -861,7 +887,7 @@ Return JSON only: {relevance, intent_quality, fact_grounding, cold_start_quality
 | 5:40–6:50 | **Demo 3: Proposition match** | "SPF50 PA4plus không nhờn rít" → factPipeline dominates | Score breakdown: fact_contribution 70% |
 | 6:50–7:40 | **Demo 4: Complex query** | "quà sinh nhật bạn gái da dầu dưới 300k không sunscreen" | Query inspector panel, parsed JSON on screen |
 | 7:40–8:40 | **Ablation** | Title-only fail → HyPE intent → Full pipeline win | 3-column table A0 vs A2 vs A5 |
-| 8:40–9:20 | **MongoDB Architecture** | $rankFusion, Vector Search, Atlas Search, Aggregation | MongoDB Compass/Atlas UI showing pipeline stages |
+| 8:40–9:20 | **MongoDB Architecture** | `$unionWith` RRF fallback, Vector Search, Atlas Search, Aggregation, optional `$rankFusion` upgrade path | MongoDB Compass/Atlas UI showing pipeline stages |
 | 9:20–10:00 | **Metrics + Future** | P@5, Cold Relevance@10, latency, roadmap | Dashboard + roadmap slide |
 
 ## 6.4. Long-Term Roadmap
@@ -914,19 +940,20 @@ User cold-start (người dùng mới) + User profile vector (người dùng cũ
 
 | Technique | Vai trò | Phase | LLM? | Paper/Source |
 |:---|:---|:---|:---|:---|
-| Agentic Web Search Enrichment | Multi-query enrich + LLM synthesize cho sparse items | Indexing | ✅ (offline) | NirDiamant; Brave Search API |
+| Agentic Web Search Enrichment | Multi-query enrich + LLM synthesize cho sparse items | Indexing | ✅ (offline/optional) | NirDiamant; Tavily Search API |
 | Proposition Chunking → BM25 | Extract atomic English facts | Indexing | ✅ (offline) | Chen et al. arXiv:2312.06648 |
 | Dynamic English HyPE | Generate 3–6 buyer intent queries/item | Indexing | ✅ (offline) | Vake et al. SSRN 5139335 |
 | Contextual Chunk Headers | Disambiguate embeddings với category/brand metadata | Indexing | ❌ | Anthropic Contextual Retrieval |
 | English Canonical Query Transform | Parse multilingual query → English canonical | Query | Optional fallback | LangChain Multi-Query |
 | Synonym Expansion | Expand Vietnamese/English query coverage | Query | ❌ | Custom SYNONYM_MAP |
-| $rankFusion Hybrid Retrieval | Fuse HyPE vector + Proposition BM25 via RRF | Query | ❌ | MongoDB native operator (v8.1+) |
+| `$unionWith` RRF Hybrid Retrieval | Fuse HyPE vector + Proposition BM25 via manual RRF on Atlas free tier | Query | ❌ | MongoDB Aggregation |
+| Optional `$rankFusion` Hybrid Retrieval | Native RRF upgrade path for supported Atlas tiers | Query | ❌ | MongoDB native operator (v8.1+) |
 | Dynamic Fusion Weights | Adjust HyPE/fact weights theo query_type | Query | ❌ | Custom |
-| Aggregation Pipeline (10 stages) | Score + filter + rank + diversity + explanation | Query | ❌ | MongoDB |
-| CRAG (heuristic) | Evaluate result quality, trigger fallback | Query | ❌ | Yan et al. arXiv:2401.15884 |
+| Aggregation Pipeline | Score + filter + rank + explainable debug output | Query | ❌ | MongoDB |
+| CRAG (heuristic roadmap) | Future result quality evaluation and fallback trigger | Query | ❌ | Yan et al. arXiv:2401.15884 |
 | Reliability Scoring (4 signals) | Flag result confidence ✅⚠️🔴 | Query | ❌ | Custom adaptation |
 | Explainable Retrieval | matched_intent + matched_fact + cold_start_note | Query | ❌ | NirDiamant |
-| LLM-as-Judge / RAGAS | Offline evaluation faithfulness + relevance | Eval | ✅ (offline) | Es et al. arXiv:2309.15217 |
+| LLM-as-Judge / RAGAS | Offline evaluation faithfulness + relevance | Eval | 🔄 roadmap | Es et al. arXiv:2309.15217 |
 | BGE-M3 | 1024-dim multilingual dense embeddings | Indexing + Query | ❌ | Chen et al. arXiv:2402.03216 |
 | underthesea | Vietnamese word segmentation (legacy/future) | Indexing | ❌ | github.com/undertheseanlp |
 

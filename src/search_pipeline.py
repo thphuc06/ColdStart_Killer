@@ -128,9 +128,10 @@ def vector_search_filter(unit_type: str, hard_filters: dict[str, Any] | None) ->
 
 def atlas_search_compound(bm25_query_en: str, hard_filters: dict[str, Any] | None) -> dict[str, Any]:
     """Build the Atlas Search BM25 compound query from spec section 3.4."""
-    # hard_filters intentionally not applied inside $search.
-    # Only fixed language/in_stock filters are applied here; post-lookup $match
-    # handles user/item-level filtering consistently across Atlas tiers.
+    # hard_filters intentionally not applied inside $search. Exact string filters such as
+    # language/unit_type are applied with normal MongoDB $match after $search because the
+    # Atlas Search text index maps those fields as analyzed strings for search.
+    _ = hard_filters
     return {
         "should": [
             {
@@ -148,12 +149,13 @@ def atlas_search_compound(bm25_query_en: str, hard_filters: dict[str, Any] | Non
                 }
             },
         ],
-        "filter": [
-            {"equals": {"path": "language", "value": "en"}},
-            {"equals": {"path": "in_stock", "value": True}},
-        ],
         "minimumShouldMatch": 1,
     }
+
+
+def bm25_retrieval_unit_match_stage() -> dict[str, Any]:
+    """Filter BM25 candidates to English proposition units after Atlas Search scoring."""
+    return {"$match": {"unit_type": "proposition", "language": "en", "in_stock": True}}
 
 
 def item_match_stage(hard_filters: dict[str, Any] | None) -> dict[str, Any]:
@@ -228,6 +230,7 @@ def bm25_subpipeline(
                 "compound": atlas_search_compound(bm25_search_query_en, hard_filters),
             }
         },
+        bm25_retrieval_unit_match_stage(),
         {"$limit": channel_limit},
         {
             "$addFields": {
@@ -506,6 +509,7 @@ def build_rank_fusion_pipeline(fixture: dict[str, Any], top_k: int = DEFAULT_TOP
                 "compound": atlas_search_compound(fixture["bm25_search_query_en"], hard_filters),
             }
         },
+        bm25_retrieval_unit_match_stage(),
         {"$limit": BM25_CHANNEL_LIMIT},
     ]
     pipeline = [
