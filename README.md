@@ -1,6 +1,6 @@
 # ColdStart Killer
 
-ColdStart Killer is a MongoDB Hackathon project for bootstrapping retrieval for brand-new ecommerce products. The current phase builds a high-quality 3,000-item MVP dataset from Amazon Reviews 2023 metadata, inserts item and retrieval-unit documents into MongoDB, and provides a seller-side Streamlit insert simulation.
+ColdStart Killer is a MongoDB Hackathon project for bootstrapping retrieval for brand-new ecommerce products. The current phase builds a high-quality ~3,000-item MVP dataset from Amazon Reviews 2023 metadata, inserts item and retrieval-unit documents into MongoDB, and runs a full buyer search pipeline with query processing, hybrid MongoDB retrieval, RRF fusion, and explainable result output.
 
 ## Current Phase Scope
 
@@ -9,18 +9,18 @@ This phase includes:
 - Notebook dataset building from selected Amazon Reviews 2023 metadata.
 - Notebook-driven MongoDB insertion.
 - Seller product insertion UI.
+- Buyer query processing and CLI search.
+- Hybrid MongoDB retrieval with `$vectorSearch`, Atlas `$search`, and `$unionWith` RRF fallback.
+- Native `$rankFusion` pipeline support for explicit testing.
 - English propositions and English HyPE queries.
 - BAAI/bge-m3 embeddings for HyPE queries only.
 - Product images preserved for UI display.
+- Current shared demo snapshot: ~1,610 indexed `items` and ~16,332 `retrieval_units`.
 
 This phase does not include:
 
-- Full buyer query pipeline.
-- Hybrid search.
-- `$rankFusion`.
-- `$unionWith`.
 - Full evaluation or ablation.
-- Buyer search UI beyond status/count panels.
+- Production buyer search UI beyond notebooks and CLI.
 
 ## Notebook-First Demo Philosophy
 
@@ -28,10 +28,22 @@ The notebooks are the technical proof:
 
 - `notebooks/01_build_3k_mvp_dataset_from_amazon_reviews.ipynb` audits and builds the MVP dataset.
 - `notebooks/02_insert_3k_mvp_to_mongodb.ipynb` estimates and inserts documents into MongoDB in controlled increments.
+- `notebooks/03_buyer_search_pipeline_test.ipynb` verifies buyer search health against live MongoDB.
+- `notebooks/04_demo_buyer_search.ipynb` runs the end-to-end buyer search demo.
 
 The Streamlit app is the product simulation:
 
 - `apps/seller_insert_ui.py` lets a seller enter one new product, optionally enrich it with Brave Search, generate retrieval units, embed HyPE queries, and insert the result into MongoDB.
+
+## Project Structure
+
+- `src/query_processor.py` — query processing pipeline.
+- `src/search_pipeline.py` — hybrid MongoDB search.
+- `src/retrieval_output.py` — explainable result formatter.
+- `scripts/run_search.py` — CLI search runner.
+- `notebooks/03_buyer_search_pipeline_test.ipynb` — buyer search integration health notebook.
+- `notebooks/04_demo_buyer_search.ipynb` — buyer search demo notebook.
+- `TESTING.md` — official testing guide.
 
 ## Verified Implementation Notes
 
@@ -98,41 +110,40 @@ Create this Atlas Vector Search index manually on `retrieval_units`.
 
 ### Atlas Search Text Index
 
-Create this Atlas Search index manually on `retrieval_units`.
+Create this Atlas Search index manually on `retrieval_units` and name it `text_index`.
 
 ```json
 {
   "mappings": {
     "dynamic": false,
     "fields": {
-      "text_search": {
-        "type": "string",
-        "analyzer": "lucene.standard"
-      },
-      "item_title_en": {
-        "type": "string",
-        "analyzer": "lucene.standard"
-      },
-      "item_brand": {
-        "type": "string",
-        "analyzer": "lucene.standard"
-      },
-      "unit_type": { "type": "string" },
-      "proposition_type": { "type": "string" },
-      "confidence": { "type": "number" },
-      "language": { "type": "string" },
-      "category_id": { "type": "string" }
+      "text_search":    { "analyzer": "lucene.standard", "type": "string" },
+      "embedding_text": { "analyzer": "lucene.standard", "type": "string" },
+      "raw_text":       { "analyzer": "lucene.standard", "type": "string" },
+      "item_title_en":  { "analyzer": "lucene.standard", "type": "string" },
+      "item_brand":     { "analyzer": "lucene.standard", "type": "string" },
+      "unit_type":      { "type": "string" },
+      "language":       { "type": "string" },
+      "in_stock":       { "type": "boolean" },
+      "is_cold_item":   { "type": "boolean" },
+      "category_id":    { "type": "string" },
+      "confidence":     { "type": "number" },
+      "proposition_type": { "type": "string" }
     }
   }
 }
 ```
+
+⚠️ Quan trọng: `text_index` phải có đủ tất cả các fields trên để BM25 search hoạt động đúng.
 
 ## Run Order
 
 1. Build the MVP dataset in Notebook 01.
 2. Create the MongoDB Atlas Vector Search and Atlas Search indexes manually.
 3. Insert items and retrieval units in Notebook 02.
-4. Run the Streamlit seller insert UI.
+4. Run buyer search checks in Notebook 03 or `scripts/run_search.py`.
+5. Run Notebook 04 for the end-to-end buyer demo.
+6. Run the Streamlit seller insert UI when testing seller-side insertion.
 
 For the full operator walkthrough, use [`RUNBOOK.md`](RUNBOOK.md).
 
@@ -207,6 +218,7 @@ python scripts/index_mvp.py --limit 10 --write
 python scripts/test_llm_generation.py
 python scripts/test_embeddings.py
 python scripts/test_web_enrichment.py
+python scripts/run_search.py --help
 
 streamlit run apps/seller_insert_ui.py
 ```

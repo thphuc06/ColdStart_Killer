@@ -13,4 +13,5 @@ ollama
 numpy
 pytest
 ipykernel
+jupyterlab
 

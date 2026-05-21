@@ -6,11 +6,12 @@ from typing import Any
 from datasets import load_dataset
 from tqdm.auto import tqdm
 
+from .normalize_amazon import USD_TO_VND
+
 
 logger = logging.getLogger(__name__)
 
 SEED = 42
-USD_TO_VND = 25_000
 CELL_SAMPLE_N = 20_000
 REVIEW_SAMPLE_N = 50_000
 MVP_TARGET_N = 3_000

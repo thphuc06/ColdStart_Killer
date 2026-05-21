@@ -5,8 +5,6 @@ import logging
 import re
 from typing import Any
 
-from ollama import chat
-
 from .config import get_settings
 
 
@@ -14,6 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 def call_qwen(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
+    from ollama import chat
+
     settings = get_settings()
     response = chat(
         model=settings.ollama_model,

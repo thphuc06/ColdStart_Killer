@@ -47,8 +47,12 @@ pip install pymongo pydantic python-dotenv pytest requests numpy
 Tạo file `.env` ở repo root:
 
 ```bash
-MONGODB_URI="mongodb+srv://<username>:<password>@<cluster-url>/?retryWrites=true&w=majority"
+# ── Shared (cả 2 máy cần) ──────────────────────
+MONGODB_URI="mongodb+srv://<username>:<password>@<cluster>/?retryWrites=true&w=majority"
 MONGODB_DB_NAME="coldstart_killer"
+MONGODB_TIMEOUT_MS=10000
+
+# ── Teammate machine only (máy search không cần) ──
 OLLAMA_MODEL="qwen3:8b"
 BRAVE_API_KEY=""
 EMBEDDING_MODEL="BAAI/bge-m3"
@@ -57,7 +61,6 @@ EMBEDDING_STORAGE_FORMAT="list_float"
 DEFAULT_INDEX_LIMIT=50
 M0_SAFE_LIMIT=3000
 DEDICATED_FULL_LIMIT=5000
-MONGODB_TIMEOUT_MS=10000
 ```
 
 ⚠️ KHÔNG commit `.env` lên GitHub.
@@ -70,12 +73,46 @@ python scripts/smoke_test_connection.py --counts
 
 Expected output ví dụ:
 
-```bash
-MongoDB connection: OK
-Database: coldstart_killer
-items: 1610
-retrieval_units: 16332
+```json
+{
+  "ok": true,
+  "result": {
+    "ok": 1
+  },
+  "database": "coldstart_killer",
+  "counts": {
+    "ok": true,
+    "items": 1610,
+    "retrieval_units": 16332
+  }
+}
 ```
+
+Atlas Search `text_index` phải có mapping đầy đủ sau:
+
+```json
+{
+  "mappings": {
+    "dynamic": false,
+    "fields": {
+      "text_search":    { "analyzer": "lucene.standard", "type": "string" },
+      "embedding_text": { "analyzer": "lucene.standard", "type": "string" },
+      "raw_text":       { "analyzer": "lucene.standard", "type": "string" },
+      "item_title_en":  { "analyzer": "lucene.standard", "type": "string" },
+      "item_brand":     { "analyzer": "lucene.standard", "type": "string" },
+      "unit_type":      { "type": "string" },
+      "language":       { "type": "string" },
+      "in_stock":       { "type": "boolean" },
+      "is_cold_item":   { "type": "boolean" },
+      "category_id":    { "type": "string" },
+      "confidence":     { "type": "number" },
+      "proposition_type": { "type": "string" }
+    }
+  }
+}
+```
+
+⚠️ Quan trọng: `text_index` phải có đủ tất cả các fields trên để BM25 search hoạt động đúng.
 
 ---
 
@@ -107,6 +144,11 @@ tests/... PASSED
 ---
 
 ## 🏥 Test 2 — Integration Health Test (Notebook 03)
+
+> ⚠️ Yêu cầu: Chạy trên máy teammate  
+> Notebook này gọi `process_query()` để tạo query embedding
+> bằng BAAI/bge-m3. Máy search (RAM thấp, không có model)
+> không thể chạy notebook này.
 
 Notebook này verify full pipeline có healthy không trên live MongoDB. Test này cần máy teammate vì `query_processor` cần BAAI/bge-m3 để tạo `query_embedding`.
 
@@ -141,6 +183,10 @@ Notebook này verify full pipeline có healthy không trên live MongoDB. Test n
 
 ## 🎬 Test 3 — Demo End-to-End (Notebook 04)
 
+> ⚠️ Yêu cầu: Chạy trên máy teammate  
+> Notebook này cần BAAI/bge-m3 (embedding) và
+> Qwen3:8b via Ollama (Vietnamese translation).
+
 Notebook này chạy full demo từ user query thật → kết quả. Test này cần máy teammate vì có translation bằng Qwen3 và embedding bằng BAAI/bge-m3.
 
 ### Cách chạy
@@ -149,7 +195,7 @@ Notebook này chạy full demo từ user query thật → kết quả. Test này
 2. Vào Cell 3 — đổi QUERY:
 
 ```python
-QUERY = "tai nghe chống ồn dưới 500k"  # ← đổi query ở đây
+QUERY = "tai nghe không dây dưới 500k"  # ← đổi query ở đây
 TOP_K = 10
 ```
 
@@ -159,11 +205,11 @@ TOP_K = 10
 
 | Query | Ngôn ngữ | Filter | Mục đích test |
 |-------|----------|--------|---------------|
-| "tai nghe chống ồn dưới 500k" | Tiếng Việt | price_max | Vietnamese + price filter |
-| "moisturizing cream for dry skin" | English | none | English query, beauty category |
-| "phone case samsung galaxy s22 under 300k" | English | price_max | Price filter, electronics |
-| "wireless charger iphone 14" | English | none | Simple product search |
-| "váy đầm dự tiệc đẹp" | Tiếng Việt | none | Vietnamese fashion |
+| "tai nghe không dây dưới 500k" | Tiếng Việt | price_max: 500000 | Vietnamese + price filter, electronics |
+| "moisturizing cream for dry skin" | English | none | English beauty query |
+| "phone case samsung galaxy s22" | English | none | Cell phone accessory |
+| "sạc nhanh usb c iphone" | Tiếng Việt | none | Vietnamese electronics |
+| "wireless charger under 300k" | English | price_max: 300000 | English + price filter |
 
 ### Kết quả mong đợi cho từng section
 
@@ -198,29 +244,29 @@ Fixture format:
 
 ```json
 {
-  "original_query": "Raw user query for traceability",
-  "language_detected": "vi or en",
-  "english_query": "English query after translation if needed",
-  "hype_search_query_en": "Semantic HyPE-style query text",
-  "bm25_search_query_en": "Keyword-optimized BM25 query text",
+  "original_query": "tai nghe chống ồn dưới 500k",
+  "hype_search_query_en": "user looking for noise cancelling headphones under 500k vnd for everyday use",
+  "bm25_search_query_en": "noise cancelling headphones 500k",
   "hard_filters": {
     "in_stock": true,
-    "price_max": 500000,
-    "max_price_vnd": 500000,
-    "category_id": "all_electronics"
+    "price_max": 500000
   },
-  "query_embedding": [0.123, 0.456, 0.789]
+  "query_embedding": [-0.018, -0.006, "... 1024 floats total"]
 }
 ```
 
-Note: fixture phải có `query_embedding` được tạo bởi BAAI/bge-m3.
+Note:
+
+- `hard_filters` chỉ chứa: `in_stock`, `price_max`, `price_min`.
+- `category_id` KHÔNG phải filter; category được xử lý bằng embedding semantics.
+- `query_embedding` là float array 1024-dim được tạo bởi BAAI/bge-m3.
 
 ---
 
 ## ✅ Checklist trước khi Demo
 
 - [ ] MongoDB connected (smoke_test_connection PASS)
-- [ ] Data indexed (items >= 1000, retrieval_units >= 10000)
+- [ ] Data indexed (~1,610 items, ~16,332 retrieval_units)
 - [ ] Atlas vector_index status: READY
 - [ ] Atlas text_index status: READY
 - [ ] Ollama running (ollama serve)

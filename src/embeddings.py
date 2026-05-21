@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import logging
-import math
+import sys
+import warnings
 from functools import lru_cache
-
-import numpy as np
-import torch
-from sentence_transformers import SentenceTransformer
+from typing import TYPE_CHECKING
 
 from .config import get_settings
-from .validation import validate_embedding_vector
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
+
+if sys.version_info >= (3, 14):
+    warnings.warn(
+        "Python 3.14+ detected. torch/sentence-transformers may be unstable. "
+        "Consider using Python 3.10-3.12 for stability.",
+        RuntimeWarning,
+        stacklevel=2,
+    )
 
 
 logger = logging.getLogger(__name__)
@@ -17,6 +25,15 @@ logger = logging.getLogger(__name__)
 
 @lru_cache(maxsize=1)
 def load_embedding_model() -> SentenceTransformer:
+    try:
+        import torch
+        from sentence_transformers import SentenceTransformer
+    except Exception as exc:
+        raise RuntimeError(
+            "Could not import torch/sentence-transformers. "
+            "Use Python 3.10-3.12 for the most stable embedding environment."
+        ) from exc
+
     settings = get_settings()
     device = "cuda" if settings.use_cuda and torch.cuda.is_available() else "cpu"
     model = SentenceTransformer(settings.embedding_model, device=device)
@@ -31,6 +48,13 @@ def load_embedding_model() -> SentenceTransformer:
 def embed_texts(texts: list[str], batch_size: int = 32) -> list[list[float]]:
     if not texts:
         return []
+    try:
+        import numpy as np
+    except Exception as exc:
+        raise RuntimeError("Could not import numpy for embedding conversion.") from exc
+
+    from .validation import validate_embedding_vector
+
     model = load_embedding_model()
     embeddings = model.encode(
         texts,

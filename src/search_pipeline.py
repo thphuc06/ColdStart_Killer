@@ -2,48 +2,109 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pymongo.errors import OperationFailure
+from pymongo.errors import OperationFailure, PyMongoError
 
 from .mongodb import get_retrieval_units_collection
 from .retrieval_output import build_explainable_result
 
 
+# NOTE: Native $rankFusion mode is available but scoreDetails
+# format is not guaranteed stable by MongoDB Atlas docs.
+# unionWith mode is used as default for correct multi-channel
+# explainability and consistent behavior across Atlas tiers.
 VECTOR_INDEX_NAME = "vector_index"
 TEXT_INDEX_NAME = "text_index"
 RRF_K = 60
-DEFAULT_NUM_CANDIDATES = 150
-DEFAULT_CHANNEL_LIMIT = 50
+EMBEDDING_DIM: int = 1024
+VECTOR_NUM_CANDIDATES: int = 400
+VECTOR_CHANNEL_LIMIT: int = 20
+BM25_CHANNEL_LIMIT: int = 20
 DEFAULT_TOP_K = 10
 DEFAULT_WEIGHTS = {"vector": 0.60, "bm25": 0.40}
+
+# Scoring bonuses
+MULTI_CHANNEL_BONUS: float = 0.05
+COLD_START_BOOST: float = 0.03
+CONTENT_RICHNESS_WEIGHT: float = 0.02
+BM25_TITLE_BOOST: float = 1.5
+
+# Sentinel values
+MISSING_RANK_SENTINEL: int = 1_000_000
 
 PipelineMode = Literal["auto", "rankFusion", "unionWith"]
 
 
+def _as_list_filter(value: Any, field_name: str) -> list[Any]:
+    """Normalize scalar or list filter value to list, or an empty list."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    if isinstance(value, str):
+        return [value]
+    raise ValueError(f"{field_name} must be a string or list when provided")
+
+
+def _int_filter_value(value: Any, field_name: str) -> int:
+    """Coerce filter numeric value to int, or raise ValueError if invalid."""
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer VND amount") from exc
+
+
 def validate_query_fixture(fixture: dict[str, Any]) -> dict[str, Any]:
     """Validate the pre-computed query fixture required by spec section 3.3."""
+    if not isinstance(fixture, dict):
+        raise ValueError("query fixture must be a dictionary")
     required = ["bm25_search_query_en", "query_embedding"]
     # Optional: hype_search_query_en is provided by the teammate's query-transform step.
     # It is not used directly in aggregation because query_embedding already encodes the HyPE intent.
     missing = [field for field in required if field not in fixture]
     if missing:
         raise ValueError(f"Missing query fixture fields: {', '.join(missing)}")
+    bm25_query = fixture["bm25_search_query_en"]
+    if not isinstance(bm25_query, str) or not bm25_query.strip():
+        raise ValueError("bm25_search_query_en must be a non-empty string")
     embedding = fixture["query_embedding"]
     if not isinstance(embedding, list):
         raise ValueError("query_embedding must be a list of floats")
-    if len(embedding) != 1024:
-        raise ValueError(f"query_embedding must be 1024 dimensions, got {len(embedding)}")
+    if len(embedding) != EMBEDDING_DIM:
+        raise ValueError(f"query_embedding must be {EMBEDDING_DIM} dimensions, got {len(embedding)}")
+    import math
+
+    try:
+        finite_embedding = all(math.isfinite(float(value)) for value in embedding)
+    except (TypeError, ValueError):
+        finite_embedding = False
+    if not finite_embedding:
+        raise ValueError("query_embedding contains non-finite values (NaN or Inf).")
     return fixture
 
 
 def normalize_hard_filters(hard_filters: dict[str, Any] | None) -> dict[str, Any]:
     """Normalize filter aliases for spec fields: price_bucket, in_stock, is_cold_item, seller_confirmed."""
-    filters = dict(hard_filters or {})
+    if hard_filters is None:
+        filters: dict[str, Any] = {}
+    elif isinstance(hard_filters, dict):
+        filters = dict(hard_filters)
+    else:
+        raise ValueError("hard_filters must be a dictionary when provided")
     if "price_max" in filters and "max_price_vnd" not in filters:
         filters["max_price_vnd"] = filters["price_max"]
     if "price_min" in filters and "min_price_vnd" not in filters:
         filters["min_price_vnd"] = filters["price_min"]
+    price_min = filters.get("price_min", filters.get("min_price_vnd"))
+    price_max = filters.get("price_max", filters.get("max_price_vnd"))
+    if price_min is not None and price_max is not None:
+        price_min_int = _int_filter_value(price_min, "price_min")
+        price_max_int = _int_filter_value(price_max, "price_max")
+        if price_min_int > price_max_int:
+            raise ValueError(f"price_min ({price_min_int}) cannot exceed price_max ({price_max_int}).")
     if "price_bucket" in filters and not isinstance(filters["price_bucket"], list):
-        filters["price_bucket"] = [filters["price_bucket"]]
+        filters["price_bucket"] = _as_list_filter(filters["price_bucket"], "price_bucket")
     if "in_stock" not in filters:
         filters["in_stock"] = True
     return filters
@@ -57,23 +118,26 @@ def vector_search_filter(unit_type: str, hard_filters: dict[str, Any] | None) ->
         if field in filters and filters[field] is not None:
             output[field] = bool(filters[field])
     if filters.get("price_bucket"):
-        output["price_bucket"] = {"$in": list(filters["price_bucket"])}
+        output["price_bucket"] = {"$in": _as_list_filter(filters["price_bucket"], "price_bucket")}
     if filters.get("category_id"):
         output["category_id"] = filters["category_id"]
     if filters.get("exclude_categories"):
-        output["category_id"] = {"$nin": list(filters["exclude_categories"])}
+        output["category_id"] = {"$nin": _as_list_filter(filters["exclude_categories"], "exclude_categories")}
     return output
 
 
 def atlas_search_compound(bm25_query_en: str, hard_filters: dict[str, Any] | None) -> dict[str, Any]:
     """Build the Atlas Search BM25 compound query from spec section 3.4."""
+    # hard_filters intentionally not applied inside $search.
+    # Only fixed language/in_stock filters are applied here; post-lookup $match
+    # handles user/item-level filtering consistently across Atlas tiers.
     return {
         "should": [
             {
                 "text": {
                     "query": bm25_query_en,
                     "path": ["text_search", "embedding_text", "raw_text"],
-                    "score": {"boost": {"value": 1.5}},
+                    "score": {"boost": {"value": BM25_TITLE_BOOST}},
                 }
             },
             {
@@ -84,6 +148,11 @@ def atlas_search_compound(bm25_query_en: str, hard_filters: dict[str, Any] | Non
                 }
             },
         ],
+        "filter": [
+            {"equals": {"path": "language", "value": "en"}},
+            {"equals": {"path": "in_stock", "value": True}},
+        ],
+        "minimumShouldMatch": 1,
     }
 
 
@@ -98,23 +167,23 @@ def item_match_stage(hard_filters: dict[str, Any] | None) -> dict[str, Any]:
     if "seller_confirmed" in filters:
         clauses.append({"item.description_enriched.seller_confirmed": bool(filters["seller_confirmed"])})
     if filters.get("price_bucket"):
-        clauses.append({"item.price_bucket": {"$in": list(filters["price_bucket"])}})
+        clauses.append({"item.price_bucket": {"$in": _as_list_filter(filters["price_bucket"], "price_bucket")}})
     if filters.get("category_id"):
         clauses.append({"item.category_id": filters["category_id"]})
     if filters.get("exclude_categories"):
-        clauses.append({"item.category_id": {"$nin": list(filters["exclude_categories"])}})
+        clauses.append({"item.category_id": {"$nin": _as_list_filter(filters["exclude_categories"], "exclude_categories")}})
     if filters.get("max_price_vnd") is not None:
-        clauses.append({"item.price_vnd": {"$lte": int(filters["max_price_vnd"])}})
+        clauses.append({"item.price_vnd": {"$lte": _int_filter_value(filters["max_price_vnd"], "max_price_vnd")}})
     if filters.get("min_price_vnd") is not None:
-        clauses.append({"item.price_vnd": {"$gte": int(filters["min_price_vnd"])}})
+        clauses.append({"item.price_vnd": {"$gte": _int_filter_value(filters["min_price_vnd"], "min_price_vnd")}})
     return {"$match": {"$and": clauses}} if clauses else {"$match": {}}
 
 
 def vector_subpipeline(
     query_embedding: list[float],
     hard_filters: dict[str, Any] | None,
-    num_candidates: int = DEFAULT_NUM_CANDIDATES,
-    channel_limit: int = DEFAULT_CHANNEL_LIMIT,
+    num_candidates: int = VECTOR_NUM_CANDIDATES,
+    channel_limit: int = VECTOR_CHANNEL_LIMIT,
 ) -> list[dict[str, Any]]:
     """Spec section 3.4 Step 1: $vectorSearch over HyPE retrieval units."""
     return [
@@ -149,7 +218,7 @@ def vector_subpipeline(
 def bm25_subpipeline(
     bm25_search_query_en: str,
     hard_filters: dict[str, Any] | None,
-    channel_limit: int = DEFAULT_CHANNEL_LIMIT,
+    channel_limit: int = BM25_CHANNEL_LIMIT,
 ) -> list[dict[str, Any]]:
     """Spec section 3.4 Step 2: Atlas Search BM25 over proposition retrieval units."""
     return [
@@ -179,6 +248,7 @@ def bm25_subpipeline(
 
 
 def common_projection_stage() -> dict[str, Any]:
+    """Build the $project stage common to all retrieval branches."""
     return {
         "$project": {
             "_id": 1,
@@ -206,16 +276,48 @@ def common_projection_stage() -> dict[str, Any]:
 
 def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[dict[str, Any]]:
     """Spec section 3.4 Steps 5-6: lookup items, group by item_id, score, sort, top-K."""
-    high_rank = 1_000_000
+    top_k = _validate_top_k(top_k)
+    high_rank = MISSING_RANK_SENTINEL
     return [
         {
             "$group": {
                 "_id": "$item_id",
-                "fusion_score": {"$max": "$fusion_score"},
-                "rank_vector": {"$min": {"$ifNull": ["$rank_vector", high_rank]}},
-                "rank_bm25": {"$min": {"$ifNull": ["$rank_bm25", high_rank]}},
-                "raw_vector_score": {"$max": {"$ifNull": ["$raw_vector_score", 0]}},
-                "raw_bm25_score": {"$max": {"$ifNull": ["$raw_bm25_score", 0]}},
+                "rank_vector": {
+                    "$min": {
+                        "$cond": [
+                            {"$eq": ["$channel", "vector"]},
+                            {"$ifNull": ["$rank_vector", high_rank]},
+                            high_rank,
+                        ]
+                    }
+                },
+                "rank_bm25": {
+                    "$min": {
+                        "$cond": [
+                            {"$eq": ["$channel", "bm25"]},
+                            {"$ifNull": ["$rank_bm25", high_rank]},
+                            high_rank,
+                        ]
+                    }
+                },
+                "raw_vector_score": {
+                    "$max": {
+                        "$cond": [
+                            {"$eq": ["$channel", "vector"]},
+                            {"$ifNull": ["$raw_vector_score", 0]},
+                            0,
+                        ]
+                    }
+                },
+                "raw_bm25_score": {
+                    "$max": {
+                        "$cond": [
+                            {"$eq": ["$channel", "bm25"]},
+                            {"$ifNull": ["$raw_bm25_score", 0]},
+                            0,
+                        ]
+                    }
+                },
                 "matched_channels": {"$addToSet": "$channel"},
                 "matches": {
                     "$push": {
@@ -236,8 +338,30 @@ def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[
         },
         {
             "$addFields": {
-                "rank_vector": {"$cond": [{"$eq": ["$rank_vector", high_rank]}, None, "$rank_vector"]},
-                "rank_bm25": {"$cond": [{"$eq": ["$rank_bm25", high_rank]}, None, "$rank_bm25"]},
+                "vector_contribution": {
+                    "$cond": [
+                        {"$lt": ["$rank_vector", high_rank]},
+                        {
+                            "$divide": [
+                                DEFAULT_WEIGHTS["vector"],
+                                {"$add": [RRF_K, "$rank_vector"]},
+                            ]
+                        },
+                        0,
+                    ]
+                },
+                "bm25_contribution": {
+                    "$cond": [
+                        {"$lt": ["$rank_bm25", high_rank]},
+                        {
+                            "$divide": [
+                                DEFAULT_WEIGHTS["bm25"],
+                                {"$add": [RRF_K, "$rank_bm25"]},
+                            ]
+                        },
+                        0,
+                    ]
+                },
                 "best_vector": {
                     "$first": {
                         "$sortArray": {
@@ -248,7 +372,7 @@ def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[
                                     "cond": {"$eq": ["$$m.channel", "vector"]},
                                 }
                             },
-                            "sortBy": {"fusion_score": -1},
+                            "sortBy": {"rank_vector": 1, "fusion_score": -1},
                         }
                     }
                 },
@@ -262,10 +386,17 @@ def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[
                                     "cond": {"$eq": ["$$m.channel", "bm25"]},
                                 }
                             },
-                            "sortBy": {"fusion_score": -1},
+                            "sortBy": {"rank_bm25": 1, "fusion_score": -1},
                         }
                     }
                 },
+            }
+        },
+        {
+            "$addFields": {
+                "fusion_score": {"$add": ["$vector_contribution", "$bm25_contribution"]},
+                "rank_vector": {"$cond": [{"$eq": ["$rank_vector", high_rank]}, None, "$rank_vector"]},
+                "rank_bm25": {"$cond": [{"$eq": ["$rank_bm25", high_rank]}, None, "$rank_bm25"]},
             }
         },
         {
@@ -281,14 +412,17 @@ def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[
         {
             "$addFields": {
                 "multi_channel_bonus": {
-                    "$cond": [{"$gt": [{"$size": "$matched_channels"}, 1]}, 0.05, 0]
+                    "$cond": [{"$gt": [{"$size": "$matched_channels"}, 1]}, MULTI_CHANNEL_BONUS, 0]
                 },
                 "cold_start_boost": {
                     "$cond": [
                         {"$eq": ["$item.cold_start.is_cold_item", True]},
-                        0.03,
+                        COLD_START_BOOST,
                         0,
                     ]
+                },
+                "content_richness_bonus": {
+                    "$multiply": [{"$ifNull": ["$item.content_richness", 0]}, CONTENT_RICHNESS_WEIGHT]
                 },
             }
         },
@@ -299,7 +433,7 @@ def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[
                         "$fusion_score",
                         "$multi_channel_bonus",
                         "$cold_start_boost",
-                        {"$multiply": [{"$ifNull": ["$item.content_richness", 0]}, 0.02]},
+                        "$content_richness_bonus",
                     ]
                 },
                 "matched_intent": "$best_vector.matched_intent",
@@ -331,8 +465,11 @@ def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[
                     "raw_vector_score": "$raw_vector_score",
                     "raw_bm25_score": "$raw_bm25_score",
                     "matched_channels": "$matched_channels",
+                    "vector_contribution": "$vector_contribution",
+                    "bm25_contribution": "$bm25_contribution",
                     "multi_channel_bonus": "$multi_channel_bonus",
                     "cold_start_boost": "$cold_start_boost",
+                    "content_richness_bonus": "$content_richness_bonus",
                     "best_vector": "$best_vector",
                     "best_bm25": "$best_bm25",
                 },
@@ -342,7 +479,11 @@ def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[
 
 
 def build_rank_fusion_pipeline(fixture: dict[str, Any], top_k: int = DEFAULT_TOP_K) -> list[dict[str, Any]]:
-    """Spec line ~496: build the native $rankFusion hybrid pipeline."""
+    """Spec line ~496: build the native $rankFusion hybrid pipeline.
+
+    Note: multi_channel_bonus and matched_channels may be incomplete in this mode
+    due to Atlas scoreDetails format limitations.
+    """
     validate_query_fixture(fixture)
     hard_filters = normalize_hard_filters(fixture.get("hard_filters"))
     vector_pipeline = [
@@ -351,12 +492,12 @@ def build_rank_fusion_pipeline(fixture: dict[str, Any], top_k: int = DEFAULT_TOP
                 "index": VECTOR_INDEX_NAME,
                 "path": "embedding",
                 "queryVector": fixture["query_embedding"],
-                "numCandidates": DEFAULT_NUM_CANDIDATES,
-                "limit": DEFAULT_CHANNEL_LIMIT,
+                "numCandidates": VECTOR_NUM_CANDIDATES,
+                "limit": VECTOR_CHANNEL_LIMIT,
                 "filter": vector_search_filter("hype_question", hard_filters),
             }
         },
-        {"$limit": DEFAULT_CHANNEL_LIMIT},
+        {"$limit": VECTOR_CHANNEL_LIMIT},
     ]
     bm25_pipeline = [
         {
@@ -365,7 +506,7 @@ def build_rank_fusion_pipeline(fixture: dict[str, Any], top_k: int = DEFAULT_TOP
                 "compound": atlas_search_compound(fixture["bm25_search_query_en"], hard_filters),
             }
         },
-        {"$limit": DEFAULT_CHANNEL_LIMIT},
+        {"$limit": BM25_CHANNEL_LIMIT},
     ]
     pipeline = [
         {
@@ -514,37 +655,70 @@ def build_search_pipeline(
     mode: PipelineMode = "rankFusion",
 ) -> list[dict[str, Any]]:
     """Build either the $rankFusion pipeline or the $unionWith RRF fallback."""
+    if mode not in ("auto", "rankFusion", "unionWith"):
+        raise ValueError("mode must be one of: auto, rankFusion, unionWith")
     if mode == "unionWith":
         return build_union_with_pipeline(fixture, top_k=top_k)
     return build_rank_fusion_pipeline(fixture, top_k=top_k)
 
 
-def is_rank_fusion_unavailable(exc: OperationFailure) -> bool:
-    if getattr(exc, "code", None) == 9191103 or (exc.details or {}).get("code") == 9191103:
-        return True
-    message = str(exc).lower()
-    return "$rankfusion" in message or "rankfusion" in message or "unrecognized pipeline stage" in message
+def is_rank_fusion_unavailable() -> bool:
+    """Always returns True because $unionWith is the stable default.
+
+    $rankFusion scoreDetails format is not guaranteed by Atlas docs.
+    """
+    return True
+
+
+def _validate_top_k(top_k: int) -> int:
+    """Validate top_k is a positive integer."""
+    if not isinstance(top_k, int) or top_k <= 0:
+        raise ValueError("top_k must be a positive integer")
+    return top_k
+
+
+def _aggregate_to_list(collection: Any, pipeline: list[dict[str, Any]], label: str) -> list[dict[str, Any]]:
+    """Run aggregation pipeline and return results as a list."""
+    try:
+        return list(collection.aggregate(pipeline))
+    except PyMongoError as exc:
+        raise RuntimeError(f"MongoDB aggregation failed during {label}: {exc}") from exc
 
 
 def run_search(
     fixture: dict[str, Any],
     top_k: int = DEFAULT_TOP_K,
-    mode: PipelineMode = "auto",
+    mode: PipelineMode = "unionWith",
     collection: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Run buyer search using pre-computed query inputs; no LLM or embedding calls are made."""
     validate_query_fixture(fixture)
+    _validate_top_k(top_k)
+    if mode not in ("auto", "rankFusion", "unionWith"):
+        raise ValueError("mode must be one of: auto, rankFusion, unionWith")
     retrieval_units = collection or get_retrieval_units_collection()
+    if not hasattr(retrieval_units, "aggregate"):
+        raise ValueError("collection must provide an aggregate(pipeline) method")
 
     if mode == "unionWith":
-        raw_results = list(retrieval_units.aggregate(build_union_with_pipeline(fixture, top_k=top_k)))
+        raw_results = _aggregate_to_list(
+            retrieval_units,
+            build_union_with_pipeline(fixture, top_k=top_k),
+            "unionWith search",
+        )
         return [build_explainable_result(result) for result in raw_results]
 
     try:
         raw_results = list(retrieval_units.aggregate(build_rank_fusion_pipeline(fixture, top_k=top_k)))
     except OperationFailure as exc:
-        if mode != "auto" or not is_rank_fusion_unavailable(exc):
-            raise
-        raw_results = list(retrieval_units.aggregate(build_union_with_pipeline(fixture, top_k=top_k)))
+        if mode != "auto" or not is_rank_fusion_unavailable():
+            raise RuntimeError(f"MongoDB rankFusion aggregation failed: {exc}") from exc
+        raw_results = _aggregate_to_list(
+            retrieval_units,
+            build_union_with_pipeline(fixture, top_k=top_k),
+            "unionWith fallback search",
+        )
+    except PyMongoError as exc:
+        raise RuntimeError(f"MongoDB rankFusion aggregation failed: {exc}") from exc
 
     return [build_explainable_result(result) for result in raw_results]

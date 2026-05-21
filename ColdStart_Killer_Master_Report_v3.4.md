@@ -1,3 +1,106 @@
+# 📋 Implementation Status Report
+**Last updated:** May 2026  
+**Based on:** Actual codebase as implemented
+
+> ⚠️ Note: The original spec below (v3.3) represents the 
+> initial target architecture. This section documents what 
+> was actually built and any deviations from the original plan.
+
+---
+
+## ✅ Implemented (matches spec)
+
+| Component | Spec | Actual | Notes |
+|-----------|------|--------|-------|
+| MongoDB collections (items, retrieval_units) | Two collections: `items` and `retrieval_units` | Implemented | Match |
+| Retrieval schema (HyPE + Proposition units) | HyPE vector units and Proposition BM25 units | Implemented | Match |
+| Proposition generation (Qwen3:8B, 3-8 facts) | Qwen3:8B generates 3-8 atomic facts | Implemented | Match |
+| HyPE generation (Qwen3:8B, 3-6 queries) | Qwen3:8B generates 3-6 buyer-intent queries | Implemented | Match |
+| Embedding model (BAAI/bge-m3, 1024-dim, normalized) | BAAI/bge-m3 1024-dimensional normalized embeddings | Implemented | Match |
+| Hybrid retrieval ($rankFusion + $unionWith fallback) | Native `$rankFusion` plus `$unionWith` fallback | Implemented | Match |
+| RRF scoring (k=60) | Reciprocal Rank Fusion with k=60 | Implemented | Match |
+| Vector search (numCandidates=150, limit=50) | `$vectorSearch` with `numCandidates=150`, `limit=50` | Implemented | Match |
+
+---
+
+## 🔄 Implemented with differences
+
+| Component | Spec Said | Actually Built | Reason |
+|-----------|-----------|----------------|--------|
+| Dataset | 5,000 items / 4 categories | 3,000 source / 2 categories (All Beauty + Cell Phones) | Scope adjusted for hackathon timeline |
+| Indexed items | ~37,500 units projected | ~1,610 items / ~16,332 retrieval units actual | Matches reduced dataset scope |
+| Atlas index names | `retrieval_units_vector_idx` / `retrieval_units_text_idx` | `vector_index` / `text_index` | Simplified naming during Atlas setup |
+| BM25 target | Proposition-only | Proposition + `hype_question` units | Improved recall for demo queries |
+| Fusion weights | Dynamic by query type | Fixed 0.60 vector / 0.40 BM25 | Query type detection not implemented |
+| Cold-start boost | Gated by `fused_score >= 0.65` | Unconditional 0.03 boost | Simplified for demo |
+| Contextual headers | Full semantic prefix | Category + brand + `price_bucket` prefix | Sufficient for embedding quality |
+| Web enrichment | 4 parallel Brave queries | Up to 3 sequential queries | Rate limit safety |
+| Item schema | Includes `proposition_quality`, `key_facts[]` | Simplified `DescriptionEnriched` without `key_facts[]` | Not required for retrieval quality |
+
+---
+
+## ❌ Not yet implemented
+
+| Component | Spec Said | Status | Priority |
+|-----------|-----------|--------|----------|
+| CRAG reliability layer | `accept` / `corrected` / `fallback_broad` | Not built | Medium |
+| Query negation detection | `exclude_categories` from query | Not built | Medium |
+| Dynamic fusion weights | By `query_type` | Not built | Low |
+| Diversity cap | 3 items/category | Not built | Low |
+| Recency/seller/metadata scoring | Additional score signals | Not built | Low |
+| Evaluation framework | 30-50 queries, ablation A0-A6 | Not built | High |
+| Buyer UI | Query inspector + result cards | Not built | High |
+| Electronics + Fashion categories | 4-category dataset | Not built | Low |
+
+---
+
+## 🆕 Built but not in original spec
+
+| Component | Description |
+|-----------|-------------|
+| `src/query_processor.py` | Real user query processing: language detect, translate VI→EN, price/category filter extraction, HyPE/BM25 text generation, BGE-M3 embedding |
+| `scripts/run_search.py` | CLI for fixture-based search testing |
+| `notebooks/03_buyer_search_pipeline_test.ipynb` | Integration health test notebook |
+| `notebooks/04_demo_buyer_search.ipynb` | End-to-end demo notebook for video recording |
+| `TESTING.md` | Complete testing guide |
+| `.gitignore` | Repository hygiene |
+| Python 3.14 crash safety | Lazy imports in `embeddings.py` |
+| Unit tests | `tests/test_pipeline.py` + existing suite |
+
+---
+
+## 📊 Current Data Snapshot
+
+| Metric | Value |
+|--------|-------|
+| Source dataset | ~3,000 items |
+| Indexed items | ~1,610 |
+| Retrieval units | ~16,332 |
+| HyPE units (with embedding) | ~7,576 |
+| Proposition units | ~8,756 |
+| Categories | All Beauty, Cell Phones & Accessories |
+| Embedding model | BAAI/bge-m3 (1024-dim) |
+| LLM | Qwen3:8B via Ollama |
+| Atlas indexes | `vector_index`, `text_index` |
+
+---
+
+## 🖥️ Machine Setup (Actual)
+
+| Responsibility | Teammate Machine | Search Machine |
+|---------------|-----------------|----------------|
+| Dataset loading | ✅ | ❌ |
+| LLM generation (propositions/HyPE) | ✅ | ❌ |
+| BGE-M3 embedding | ✅ | ❌ |
+| MongoDB indexing | ✅ | ❌ |
+| Seller insert UI | ✅ | ❌ |
+| Query processing + embedding | ✅ | ❌ |
+| Hybrid search pipeline | ✅ | ✅ |
+| MongoDB aggregation | ✅ | ✅ |
+| Demo notebooks | ✅ | ❌ (RAM limit) |
+
+---
+
 # ColdStart Killer — Project Master Report (Final)
 
 **Project:** MongoDB Hackathon — Item Cold-Start Recommendation Engine

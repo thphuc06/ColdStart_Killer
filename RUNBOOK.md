@@ -8,19 +8,24 @@ This phase does:
 
 - Pull selected Amazon Reviews 2023 product metadata.
 - Normalize and audit metadata.
-- Build a rich, category-diverse 3,000-item MVP dataset.
+- Build a two-source ~3,000-item MVP dataset from All Beauty and Cell Phones and Accessories.
 - Generate English propositions and English HyPE queries.
 - Embed HyPE queries only with BAAI/bge-m3.
 - Insert `items` and `retrieval_units` into MongoDB.
+- Process buyer queries into search-ready fixtures.
+- Run hybrid buyer search with MongoDB aggregation and `unionWith` RRF fallback.
+- Test buyer search through CLI and notebooks.
 - Test one seller product insert through Streamlit.
+
+Current shared MongoDB demo snapshot:
+
+- Dataset source size: ~3,000 items from All Beauty and Cell Phones and Accessories.
+- Indexed `items`: ~1,610.
+- Indexed `retrieval_units`: ~16,332.
 
 This phase does not do:
 
 - Buyer search UI.
-- Query transformation.
-- Hybrid search.
-- `$rankFusion`.
-- `$unionWith`.
 - Evaluation or ablation.
 
 ## Phase 0: Setup
@@ -100,34 +105,31 @@ Create the Atlas Vector Search index manually on `retrieval_units`:
 }
 ```
 
-Create the Atlas Search text index manually on `retrieval_units`:
+Create the Atlas Search text index manually on `retrieval_units` and name it `text_index`:
 
 ```json
 {
   "mappings": {
     "dynamic": false,
     "fields": {
-      "text_search": {
-        "type": "string",
-        "analyzer": "lucene.standard"
-      },
-      "item_title_en": {
-        "type": "string",
-        "analyzer": "lucene.standard"
-      },
-      "item_brand": {
-        "type": "string",
-        "analyzer": "lucene.standard"
-      },
-      "unit_type": { "type": "string" },
-      "proposition_type": { "type": "string" },
-      "confidence": { "type": "number" },
-      "language": { "type": "string" },
-      "category_id": { "type": "string" }
+      "text_search":    { "analyzer": "lucene.standard", "type": "string" },
+      "embedding_text": { "analyzer": "lucene.standard", "type": "string" },
+      "raw_text":       { "analyzer": "lucene.standard", "type": "string" },
+      "item_title_en":  { "analyzer": "lucene.standard", "type": "string" },
+      "item_brand":     { "analyzer": "lucene.standard", "type": "string" },
+      "unit_type":      { "type": "string" },
+      "language":       { "type": "string" },
+      "in_stock":       { "type": "boolean" },
+      "is_cold_item":   { "type": "boolean" },
+      "category_id":    { "type": "string" },
+      "confidence":     { "type": "number" },
+      "proposition_type": { "type": "string" }
     }
   }
 }
 ```
+
+⚠️ Quan trọng: `text_index` phải có đủ tất cả các fields trên để BM25 search hoạt động đúng.
 
 Then smoke-test connection:
 
@@ -162,7 +164,7 @@ What it does:
 - Builds `product_text_for_llm`.
 - Scores richness.
 - Builds a highest-quality control dataset.
-- Builds a category-diverse 3,000-item dataset.
+- Builds a ~3,000-item dataset from All Beauty and Cell Phones and Accessories.
 
 Script alternative:
 
@@ -283,7 +285,39 @@ Expected counts after 10-item write:
 - HyPE units have `embedding`
 - Proposition units have `text_search` and no `embedding`
 
-## Phase 5: Test Seller Insert UI
+## Phase 5: Buyer Search Pipeline
+
+Quick CLI check:
+
+```bash
+python scripts/run_search.py --help
+```
+
+Notebook health test:
+
+```bash
+python -m jupyterlab
+```
+
+Then open:
+
+```text
+notebooks/03_buyer_search_pipeline_test.ipynb
+```
+
+End-to-end demo:
+
+```text
+notebooks/04_demo_buyer_search.ipynb
+```
+
+Expected behavior:
+
+- Notebook 03 reports collection health, pipeline results, hybrid channel status, and field contract status.
+- Notebook 04 processes a raw query, embeds the HyPE intent with BAAI/bge-m3, runs MongoDB hybrid search, and displays explainable results.
+- `scripts/run_search.py` runs from a precomputed fixture and defaults to stable `unionWith` mode.
+
+## Phase 6: Test Seller Insert UI
 
 Start the UI:
 
@@ -329,7 +363,7 @@ Expected behavior:
 - Re-inserting the same seller product replaces old retrieval units.
 - If `BRAVE_API_KEY` is missing, enrichment is skipped gracefully and insertion can continue.
 
-## Phase 6: Optional Cleanup
+## Phase 7: Optional Cleanup
 
 To clear demo data:
 
@@ -377,4 +411,3 @@ Streamlit reruns often:
 - This is normal.
 - MongoDB status is cached briefly.
 - LLM, embeddings, enrichment, and inserts only happen on explicit button clicks.
-
