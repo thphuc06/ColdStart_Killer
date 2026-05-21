@@ -20,6 +20,7 @@
 | Hybrid retrieval (`$unionWith` default + optional `$rankFusion`) | Native `$rankFusion` plus `$unionWith` fallback | `$unionWith` is the stable default; `$rankFusion` builder is retained for higher Atlas tiers | Free-tier compatible |
 | RRF scoring (k=60) | Reciprocal Rank Fusion with k=60 | Implemented | Match |
 | Vector search (`numCandidates=400`, channel `limit=20`) | `$vectorSearch` over HyPE units | Implemented | Current tuned setting |
+| Evaluation framework | 30-50 queries, ablation A0-A6 | Implemented | 50 queries evaluation with ablation, automated diagnostics (Layer 1), IR metrics computation (Layer 2), and claim verification (Layer 3) |
 
 ---
 
@@ -48,7 +49,6 @@
 | Dynamic fusion weights | By `query_type` | Not built | Low |
 | Diversity cap | 3 items/category | Not built | Low |
 | Recency/seller/metadata scoring | Additional score signals | Not built | Low |
-| Evaluation framework | 30-50 queries, ablation A0-A6 | Not built | High |
 | Buyer UI | Query inspector + result cards | Not built | High |
 | Electronics + Fashion categories | 4-category dataset | Not built | Low |
 
@@ -66,6 +66,14 @@
 | `.gitignore` | Repository hygiene |
 | Python 3.14 crash safety | Lazy imports in `embeddings.py` |
 | Unit tests | `tests/test_pipeline.py` + existing suite |
+| Evaluation runner script | `scripts/run_evaluation.py` runs the 3-layer evaluation pipeline and computes metrics |
+| Evaluation diagnostics script | `scripts/run_eval_diagnostics.py` runs diagnostic probes (Layer 1) |
+| Judgment import utility | `scripts/import_eval_judgments.py` imports labeled judgments from CSV to JSON |
+| Evaluation pool builder | `scripts/build_eval_pool.py` builds the evaluation pool for human labeling |
+| Evaluation summary utility | `scripts/summarize_evaluation.py` generates quick statistics and summaries |
+| Evaluation notebook | `notebooks/05_evaluation_retrieval_quality.ipynb` for running and visualizing the evaluation |
+| Evaluation README | `evaluation/README.md` documents structure, labeling rules, and metrics |
+| Evaluation test suite | Multiple test files under `tests/` covering dataset, diagnostics, metrics, and variants |
 
 ---
 

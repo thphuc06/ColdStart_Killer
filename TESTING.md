@@ -137,8 +137,16 @@ tests/... PASSED
 | tests/test_validation.py | data validation | ❌ |
 | tests/test_normalize_amazon.py | normalization | ❌ |
 | tests/test_mvp_selection.py | dataset selection | ❌ |
+| tests/test_evaluation_dataset.py | evaluation contracts + data loading | ❌ |
+| tests/test_evaluation_metrics.py | IR metrics (NDCG, MRR, etc.) | ❌ |
+| tests/test_evaluation_diagnostics.py | diagnostic probe runners | ❌ |
+| tests/test_evaluation_guardrails.py | import safety, read-only, constant mutation | ❌ |
+| tests/test_evaluation_runner.py | evaluation runner + reporting | ❌ |
+| tests/test_evaluation_variants.py | variant runners + failure handling | ❌ |
+| tests/test_import_eval_judgments.py | human judgment import script | ❌ |
 | tests/test_indexing.py | indexing | ✅ requires Ollama |
 | tests/test_llm_propositions.py | LLM propositions | ✅ requires Ollama |
+| tests/test_llm_client.py | LLM client | ✅ requires ollama package |
 
 ---
 
@@ -273,18 +281,69 @@ Note:
 - [ ] BGE-M3 downloaded
 - [ ] Notebook 03 all PASS
 - [ ] Notebook 04 runs end-to-end with sample query
+- [ ] Notebook 05 evaluation runs (at least smoke test mode)
+- [ ] `python -m pytest tests/test_evaluation_*.py -v` all pass
 
 ---
 
 ## 🗂️ Cấu trúc repo liên quan đến testing
 
 ```bash
-tests/                                  # Unit tests cho validation, normalization, indexing, buyer pipeline
+tests/                                  # Unit tests cho validation, normalization, indexing, buyer pipeline, evaluation
 notebooks/                              # Integration test và demo notebooks
 scripts/smoke_test_connection.py        # Kiểm tra MongoDB connection và collection counts
 scripts/run_search.py                   # CLI search bằng precomputed fixture
-src/query_processor.py                  # Raw query → search-ready fixture
+scripts/run_evaluation.py               # Full evaluation CLI (hỗ trợ --use-fake-results)
+scripts/run_eval_diagnostics.py         # Layer 1 diagnostic probes
+scripts/build_eval_pool.py              # Tạo judgment pool cho manual labeling
+scripts/import_eval_judgments.py        # Import human judgments từ CSV sang JSON
+src/query_processor.py                  # Raw query → search-ready fixture (dùng Qwen3:8b + BGE-M3)
 src/search_pipeline.py                  # MongoDB hybrid search aggregation
 src/retrieval_output.py                 # Explainable output formatting
+src/evaluation/                         # Evaluation framework package
+evaluation/                             # Evaluation data (queries, probes, judgments)
 .env.example                            # Template environment variables
 ```
+
+---
+
+## 📈 Test 5 — Evaluation Framework
+
+Evaluation framework test không cần MongoDB, Ollama, hay BGE-M3.
+
+### Unit tests (66 tests)
+
+```bash
+python -m pytest tests/test_evaluation_dataset.py tests/test_evaluation_metrics.py tests/test_evaluation_diagnostics.py tests/test_evaluation_guardrails.py tests/test_evaluation_runner.py tests/test_evaluation_variants.py tests/test_import_eval_judgments.py -v
+```
+
+### Smoke test — Full pipeline không cần external services
+
+```bash
+python scripts/run_evaluation.py \
+  --queries evaluation/queries/retrieval_queries_seed.json \
+  --judgments evaluation/judgments/retrieval_judgments_seed.json \
+  --out .runtime/evaluation/smoke \
+  --use-fake-results
+```
+
+Expected output:
+
+```
+Evaluation completed in 0.1s
+  Results: 750
+  Failures: 0
+Artifacts written: config, failures, latency, manifest, metrics_by_query, ...
+```
+
+### Layer 1 Diagnostics — Kiểm tra query processor
+
+```bash
+python scripts/run_eval_diagnostics.py \
+  --probes evaluation/queries/diagnostic_probes.json \
+  --out .runtime/evaluation/diagnostics
+```
+
+### Evaluation Notebook
+
+Mở `notebooks/05_evaluation_retrieval_quality.ipynb`, set `USE_FAKE_RESULTS = True`, Run All Cells.

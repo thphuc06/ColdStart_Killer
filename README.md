@@ -1,6 +1,6 @@
 # ColdStart Killer
 
-ColdStart Killer is a MongoDB Hackathon project for bootstrapping retrieval for brand-new ecommerce products. The current phase builds a high-quality 3,000-item MVP dataset from Amazon Reviews 2023 metadata, inserts item and retrieval-unit documents into MongoDB, and runs buyer search checks through notebooks/scripts.
+ColdStart Killer is a MongoDB Hackathon project for bootstrapping retrieval for brand-new ecommerce products. The system builds a 3,000-item MVP dataset from Amazon Reviews 2023 metadata, generates HyPE queries and propositions via Qwen3:8b (Ollama), embeds with BAAI/bge-m3, and runs hybrid retrieval (vector + BM25) through MongoDB Atlas. An evaluation framework measures retrieval quality across 5 search variants.
 
 ## Current Phase Scope
 
@@ -14,10 +14,10 @@ This phase includes:
 - English propositions and English HyPE queries.
 - BAAI/bge-m3 embeddings for HyPE queries only.
 - Product images preserved for result display.
+- **Retrieval evaluation** with 5 variants, 50 queries, 20 diagnostic probes, and IR metrics (NDCG, Recall, MRR, Precision, HitRate, cold-start quality).
 
 This phase does not include:
 
-- Full evaluation or ablation.
 - Buyer or seller-facing UI.
 
 ## Notebook-First Demo Philosophy
@@ -28,16 +28,24 @@ The notebooks are the technical proof:
 - `notebooks/02_insert_3k_mvp_to_mongodb.ipynb` estimates and inserts documents into MongoDB in controlled increments.
 - `notebooks/03_buyer_search_pipeline_test.ipynb` verifies buyer search health against live MongoDB.
 - `notebooks/04_demo_buyer_search.ipynb` runs the end-to-end buyer search demo.
+- `notebooks/05_evaluation_retrieval_quality.ipynb` runs the 3-layer evaluation: diagnostics → IR metrics → demo readiness claims.
 
 ## Project Structure
 
-- `src/query_processor.py` — query processing pipeline.
+- `src/query_processor.py` — query processing pipeline (language detection, translation via Qwen3:8b, price filter extraction, HyPE query generation, BGE-M3 embedding).
 - `src/search_pipeline.py` — hybrid MongoDB search.
 - `src/retrieval_output.py` — explainable result formatter.
+- `src/evaluation/` — evaluation framework (contracts, dataset loading, diagnostics, metrics, variants, runner, reporting).
 - `scripts/run_search.py` — CLI search runner.
-- `notebooks/03_buyer_search_pipeline_test.ipynb` — buyer search integration health notebook.
-- `notebooks/04_demo_buyer_search.ipynb` — buyer search demo notebook.
+- `scripts/run_evaluation.py` — full evaluation CLI (supports `--use-fake-results` for smoke testing).
+- `scripts/run_eval_diagnostics.py` — Layer 1 diagnostic probes CLI.
+- `scripts/build_eval_pool.py` — judgment pool builder for manual labeling.
+- `scripts/import_eval_judgments.py` — imports human judgments from labeled CSV to JSON format.
+- `scripts/summarize_evaluation.py` — re-summarize an existing evaluation run.
+- `evaluation/` — evaluation data (queries, probes, judgments).
+- `notebooks/05_evaluation_retrieval_quality.ipynb` — evaluation notebook.
 - `TESTING.md` — testing guide.
+- `EVALUATION_PHASE_PLAN.md` — evaluation phase design document.
 
 ## Verified Implementation Notes
 
@@ -66,6 +74,8 @@ Required environment variables:
 - `EMBEDDING_STORAGE_FORMAT`
 
 Default embedding storage is `list_float` for simplicity in this MVP. The code is organized so a later `bindata_float32` option can be added without changing the retrieval-unit schema contract.
+
+LLM: Qwen3:8b running locally via Ollama. Used for Vietnamese→English translation, HyPE query generation, and proposition extraction.
 
 ## MongoDB Atlas Manual Steps
 
@@ -211,6 +221,21 @@ python scripts/index_mvp.py --limit 10 --write
 python scripts/test_llm_generation.py
 python scripts/test_embeddings.py
 python scripts/run_search.py --help
+
+# Evaluation (no MongoDB required)
+python scripts/run_eval_diagnostics.py --probes evaluation/queries/diagnostic_probes.json --out .runtime/evaluation/diagnostics
+
+# Build evaluation judgment pool (requires MongoDB + Ollama + BGE-M3)
+python scripts/build_eval_pool.py --queries evaluation/queries/retrieval_queries_seed.json --out .runtime/evaluation/pool_seed --top-k 20
+
+# Import labeled CSV pool back to JSON format
+python scripts/import_eval_judgments.py --csv .runtime/evaluation/pool_seed/judgment_pool.csv --out evaluation/judgments/retrieval_judgments_seed.json
+
+# Evaluation smoke test (no MongoDB/Ollama/BGE-M3 required)
+python scripts/run_evaluation.py --queries evaluation/queries/retrieval_queries_seed.json --judgments evaluation/judgments/retrieval_judgments_seed.json --out .runtime/evaluation/smoke --use-fake-results
+
+# Full evaluation (requires MongoDB + Ollama + BGE-M3)
+python scripts/run_evaluation.py --queries evaluation/queries/retrieval_queries_seed.json --judgments evaluation/judgments/retrieval_judgments_seed.json --out .runtime/evaluation/eval_seed
 ```
 
 macOS/Linux activation:
