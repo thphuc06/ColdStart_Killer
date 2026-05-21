@@ -6,12 +6,9 @@ python-dotenv
 sentence-transformers
 torch
 pydantic
-streamlit
-requests
 tqdm
 ollama
 numpy
 pytest
 ipykernel
-jupyterlab
 

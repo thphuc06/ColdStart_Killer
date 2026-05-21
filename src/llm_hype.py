@@ -92,7 +92,11 @@ def generate_hype_queries_llm(item: dict, propositions: list[dict]) -> list[dict
             queries.append(_fallback_for_aspect(aspect, item))
             present.add(aspect)
 
-    required = [query for query in queries if query["aspect"] in REQUIRED_ASPECTS]
+    required = []
+    for aspect in REQUIRED_ASPECTS:
+        match = next((query for query in queries if query["aspect"] == aspect), None)
+        if match:
+            required.append(match)
     optional = [query for query in queries if query["aspect"] not in REQUIRED_ASPECTS]
     return (required + optional)[:6]
 

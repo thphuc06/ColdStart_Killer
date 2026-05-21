@@ -14,7 +14,7 @@ Người nên đọc: teammate phụ trách indexing/seller flow, người phụ
 | Ollama + Qwen3:8b | ✅ | ❌ |
 | BAAI/bge-m3 model | ✅ | ❌ |
 | Python 3.10+ | ✅ | ✅ |
-| pip install -r requirements.txt | ✅ | ⚠️ chỉ cần pymongo pydantic python-dotenv pytest requests numpy |
+| pip install -r requirements.txt | ✅ | ⚠️ chỉ cần pymongo pydantic python-dotenv pytest numpy |
 
 ---
 
@@ -39,7 +39,7 @@ git clone <repo-url>
 cd ColdStart_Killer
 python -m venv .venv
 .venv\Scripts\activate
-pip install pymongo pydantic python-dotenv pytest requests numpy
+pip install pymongo pydantic python-dotenv pytest numpy
 ```
 
 ### Bước 2 — Tạo file .env
@@ -54,7 +54,6 @@ MONGODB_TIMEOUT_MS=10000
 
 # ── Teammate machine only (máy search không cần) ──
 OLLAMA_MODEL="qwen3:8b"
-BRAVE_API_KEY=""
 EMBEDDING_MODEL="BAAI/bge-m3"
 USE_CUDA=true
 EMBEDDING_STORAGE_FORMAT="list_float"

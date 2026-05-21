@@ -1,0 +1,32 @@
+%%{init: {"theme": "base", "themeVariables": {"fontFamily": "Inter, Segoe UI, Arial", "background": "transparent", "primaryColor": "#ffffff", "primaryTextColor": "#0f172a", "primaryBorderColor": "#cbd5e1", "lineColor": "#64748b", "tertiaryColor": "#f8fafc"}, "flowchart": {"curve": "basis", "htmlLabels": true, "nodeSpacing": 42, "rankSpacing": 52}}}%%
+flowchart LR
+    A["<b>MVP CSV</b><br/>mvp_3000_items_diverse.csv<br/>metadata + product_text_for_llm"]:::input
+    B["<b>Load + Validate</b><br/>read dataframe<br/>required columns"]:::process
+    C{"<b>Each product row</b><br/>offline indexing loop"}:::decision
+
+    A --> B --> C
+
+    C --> D["<b>Build item document</b><br/>metadata, source text,<br/>price, images, cold-start flags"]:::item
+    D --> E[("<b>items</b><br/>1 doc / product")]:::db
+
+    C --> F["<b>Extract propositions</b><br/>Qwen reads product_text_for_llm<br/>grounded atomic facts"]:::prop
+    F --> G["<b>Build proposition units</b><br/>raw_text + text_search<br/>no embedding"]:::prop
+    G --> H[("<b>retrieval_units</b><br/>unit_type = proposition<br/>Atlas Search / BM25")]:::db
+
+    C --> I["<b>Generate HyPE queries</b><br/>Qwen uses product context<br/>+ propositions"]:::hype
+    I --> J["<b>Build HyPE units</b><br/>header + query<br/>BGE-M3 1024-d vector"]:::hype
+    J --> K[("<b>retrieval_units</b><br/>unit_type = hype_question<br/>Vector Search")]:::db
+
+    H --> L["<b>Replace old units</b><br/>same item_id"]:::merge
+    K --> L
+    L --> M[("<b>MongoDB Atlas</b><br/>ready for retrieval tests")]:::ready
+
+    classDef input fill:#ecfeff,stroke:#0891b2,stroke-width:2px,color:#0f172a;
+    classDef process fill:#ffffff,stroke:#cbd5e1,stroke-width:2px,color:#0f172a;
+    classDef decision fill:#fef9c3,stroke:#ca8a04,stroke-width:2px,color:#0f172a;
+    classDef item fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#0f172a;
+    classDef prop fill:#fff7ed,stroke:#ea580c,stroke-width:2px,color:#0f172a;
+    classDef hype fill:#eef2ff,stroke:#4f46e5,stroke-width:2px,color:#0f172a;
+    classDef db fill:#f5f3ff,stroke:#7c3aed,stroke-width:2px,color:#0f172a;
+    classDef merge fill:#f8fafc,stroke:#64748b,stroke-width:2px,color:#0f172a;
+    classDef ready fill:#dcfce7,stroke:#15803d,stroke-width:3px,color:#0f172a;

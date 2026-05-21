@@ -23,6 +23,9 @@ class DescriptionEnriched(BaseModel):
     source: str = "amazon_metadata"
     enrichment_quality: str = "high"
     seller_confirmed: bool = False
+    key_facts: list[dict[str, Any]] = Field(default_factory=list)
+    source_urls: list[str] = Field(default_factory=list)
+    enrichment_note: str = ""
 
 
 class SourceText(BaseModel):

@@ -207,18 +207,49 @@ def _warn_for_limit(limit: int) -> None:
         )
 
 
-def index_items_from_dataframe(df, limit: int = DEFAULT_LIMIT, dry_run: bool = True, sleep_seconds: float = 0.5) -> dict:
+def first_uninserted_index_from_mongodb(df, id_column: str = "parent_asin") -> int:
+    if id_column not in df.columns:
+        raise ValueError(f"Cannot resume because {id_column!r} is missing from dataframe")
+    csv_ids = [clean_string(value) for value in df[id_column].tolist()]
+    csv_ids = [value for value in csv_ids if value]
+    if not csv_ids:
+        return 0
+
+    existing_ids = {
+        clean_string(doc["_id"])
+        for doc in get_items_collection().find({"_id": {"$in": csv_ids}}, {"_id": 1})
+    }
+    for idx, item_id in enumerate(csv_ids):
+        if item_id not in existing_ids:
+            return idx
+    return len(csv_ids)
+
+
+def index_items_from_dataframe(
+    df,
+    limit: int = DEFAULT_LIMIT,
+    dry_run: bool = True,
+    sleep_seconds: float = 0.5,
+    start_index: int = 0,
+    resume: bool = False,
+) -> dict:
     start = time.time()
+    if resume:
+        start_index = first_uninserted_index_from_mongodb(df)
+    else:
+        start_index = max(int(start_index or 0), 0)
     if limit is None:
-        limit = len(df)
+        limit = len(df) - start_index
+    limit = max(int(limit), 0)
     _warn_for_limit(int(limit))
-    work_df = df.head(limit)
+    end_index = min(start_index + limit, len(df))
+    work_df = df.iloc[start_index:end_index]
 
     item_docs: list[dict] = []
     retrieval_units: list[dict] = []
     failed_items: list[dict] = []
 
-    for idx, (_, row) in enumerate(work_df.iterrows(), start=1):
+    for idx, (row_index, row) in enumerate(work_df.iterrows(), start=1):
         try:
             item = build_item_doc_from_mvp_row(row)
             propositions = extract_propositions_llm(item)
@@ -233,14 +264,17 @@ def index_items_from_dataframe(df, limit: int = DEFAULT_LIMIT, dry_run: bool = T
             if sleep_seconds:
                 time.sleep(sleep_seconds)
         except Exception as exc:
-            failed_items.append({"row_index": int(idx - 1), "error": str(exc)})
-            logger.exception("Failed to prepare item at row %s", idx - 1)
+            failed_items.append({"row_index": int(row_index), "error": str(exc)})
+            logger.exception("Failed to prepare item at row %s", row_index)
 
     item_ids = [doc["_id"] for doc in item_docs]
     if not dry_run and item_docs:
         items_collection = get_items_collection()
         retrieval_collection = get_retrieval_units_collection()
-        item_ops = [UpdateOne({"_id": doc["_id"]}, {"$set": doc}, upsert=True) for doc in item_docs]
+        item_ops = [
+            UpdateOne({"_id": doc["_id"]}, {"$set": {key: value for key, value in doc.items() if key != "_id"}}, upsert=True)
+            for doc in item_docs
+        ]
         if item_ops:
             items_collection.bulk_write(item_ops, ordered=False)
         if item_ids:
@@ -253,6 +287,10 @@ def index_items_from_dataframe(df, limit: int = DEFAULT_LIMIT, dry_run: bool = T
     estimated = estimate_indexing_size(work_df)
     return {
         "dry_run": dry_run,
+        "resume": resume,
+        "start_index": start_index,
+        "end_index_exclusive": end_index,
+        "requested_limit": limit,
         "item_count": len(item_docs),
         "hype_units": hype_count,
         "proposition_units": prop_count,

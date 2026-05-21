@@ -5,6 +5,8 @@ import logging
 import re
 from typing import Any
 
+from ollama import chat
+
 from .config import get_settings
 
 
@@ -12,8 +14,6 @@ logger = logging.getLogger(__name__)
 
 
 def call_qwen(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
-    from ollama import chat
-
     settings = get_settings()
     response = chat(
         model=settings.ollama_model,
@@ -65,12 +65,46 @@ def _balanced_json_block(text: str, opener: str, closer: str) -> str | None:
     return None
 
 
+def _valid_object_blocks(text: str) -> list[dict]:
+    objects = []
+    idx = 0
+    while idx < len(text):
+        start = text.find("{", idx)
+        if start == -1:
+            break
+        block = _balanced_json_block(text[start:], "{", "}")
+        if not block:
+            idx = start + 1
+            continue
+        try:
+            objects.append(json.loads(block))
+        except json.JSONDecodeError:
+            pass
+        idx = start + len(block)
+    return objects
+
+
 def extract_json_from_text(text: str) -> dict | list | None:
     cleaned = _strip_markdown_fences(text)
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
+
+    list_start = cleaned.find("[")
+    object_start = cleaned.find("{")
+    if list_start != -1 and (object_start == -1 or list_start < object_start):
+        list_block = _balanced_json_block(cleaned[list_start:], "[", "]")
+        if list_block:
+            try:
+                return json.loads(list_block)
+            except json.JSONDecodeError:
+                objects = _valid_object_blocks(list_block)
+                if objects:
+                    return objects
+        objects = _valid_object_blocks(cleaned[list_start:])
+        if objects:
+            return objects
 
     starts = [(cleaned.find("{"), "{", "}"), (cleaned.find("["), "[", "]")]
     candidates = [
@@ -84,6 +118,10 @@ def extract_json_from_text(text: str) -> dict | list | None:
             return json.loads(candidate)
         except json.JSONDecodeError:
             continue
+
+    objects = _valid_object_blocks(cleaned)
+    if objects:
+        return objects
 
     logger.warning("Could not extract valid JSON from LLM output")
     return None

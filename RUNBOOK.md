@@ -8,20 +8,13 @@ This phase does:
 
 - Pull selected Amazon Reviews 2023 product metadata.
 - Normalize and audit metadata.
-- Build a two-source ~3,000-item MVP dataset from All Beauty and Cell Phones and Accessories.
+- Build a rich, category-diverse 3,000-item MVP dataset.
 - Generate English propositions and English HyPE queries.
 - Embed HyPE queries only with BAAI/bge-m3.
 - Insert `items` and `retrieval_units` into MongoDB.
 - Process buyer queries into search-ready fixtures.
 - Run hybrid buyer search with MongoDB aggregation and `unionWith` RRF fallback.
 - Test buyer search through CLI and notebooks.
-- Test one seller product insert through Streamlit.
-
-Current shared MongoDB demo snapshot:
-
-- Dataset source size: ~3,000 items from All Beauty and Cell Phones and Accessories.
-- Indexed `items`: ~1,610.
-- Indexed `retrieval_units`: ~16,332.
 
 This phase does not do:
 
@@ -58,7 +51,6 @@ Fill in:
 - `OLLAMA_MODEL=qwen3:8b`
 - `EMBEDDING_MODEL=BAAI/bge-m3`
 - `USE_CUDA=true` if your machine has CUDA
-- `BRAVE_API_KEY` only if you want seller-side web enrichment
 
 Expected result:
 
@@ -82,6 +74,8 @@ Collections:
 items
 retrieval_units
 ```
+
+If Atlas does not let you create search indexes until data exists, run the Notebook 02 dry-run and small write first, then come back to this phase and create the indexes. Inserts do not require these indexes, but retrieval tests do.
 
 Create the Atlas Vector Search index manually on `retrieval_units`:
 
@@ -112,24 +106,25 @@ Create the Atlas Search text index manually on `retrieval_units` and name it `te
   "mappings": {
     "dynamic": false,
     "fields": {
-      "text_search":    { "analyzer": "lucene.standard", "type": "string" },
+      "text_search": { "analyzer": "lucene.standard", "type": "string" },
       "embedding_text": { "analyzer": "lucene.standard", "type": "string" },
-      "raw_text":       { "analyzer": "lucene.standard", "type": "string" },
-      "item_title_en":  { "analyzer": "lucene.standard", "type": "string" },
-      "item_brand":     { "analyzer": "lucene.standard", "type": "string" },
-      "unit_type":      { "type": "string" },
-      "language":       { "type": "string" },
-      "in_stock":       { "type": "boolean" },
-      "is_cold_item":   { "type": "boolean" },
-      "category_id":    { "type": "string" },
-      "confidence":     { "type": "number" },
-      "proposition_type": { "type": "string" }
+      "raw_text": { "analyzer": "lucene.standard", "type": "string" },
+      "item_title_en": { "analyzer": "lucene.standard", "type": "string" },
+      "item_brand": { "analyzer": "lucene.standard", "type": "string" },
+      "unit_type": { "type": "string" },
+      "language": { "type": "string" },
+      "in_stock": { "type": "boolean" },
+      "is_cold_item": { "type": "boolean" },
+      "category_id": { "type": "string" },
+      "confidence": { "type": "number" },
+      "proposition_type": { "type": "string" },
+      "aspect": { "type": "string" }
     }
   }
 }
 ```
 
-⚠️ Quan trọng: `text_index` phải có đủ tất cả các fields trên để BM25 search hoạt động đúng.
+`text_index` must include the fields used by proposition BM25 search and buyer-search explain/debug output.
 
 Then smoke-test connection:
 
@@ -164,7 +159,7 @@ What it does:
 - Builds `product_text_for_llm`.
 - Scores richness.
 - Builds a highest-quality control dataset.
-- Builds a ~3,000-item dataset from All Beauty and Cell Phones and Accessories.
+- Builds a category-diverse 3,000-item dataset.
 
 Script alternative:
 
@@ -253,6 +248,7 @@ What it does:
 - Inserts 10 items.
 - Inserts 50 items.
 - Leaves 500, 1000, and 3000 inserts as optional cells.
+- Supports `resume=True` so repeated batches continue from the first CSV row that is not already present in MongoDB.
 
 Script dry-run:
 
@@ -269,6 +265,12 @@ Small write test:
 
 ```bash
 python scripts/index_mvp.py --limit 10 --write
+```
+
+Resume from the next missing CSV row after an interrupted or partial insert:
+
+```bash
+python scripts/index_mvp.py --limit 500 --write --resume
 ```
 
 Expected MongoDB document behavior:
@@ -296,7 +298,7 @@ python scripts/run_search.py --help
 Notebook health test:
 
 ```bash
-python -m jupyterlab
+jupyter lab
 ```
 
 Then open:
@@ -317,53 +319,7 @@ Expected behavior:
 - Notebook 04 processes a raw query, embeds the HyPE intent with BAAI/bge-m3, runs MongoDB hybrid search, and displays explainable results.
 - `scripts/run_search.py` runs from a precomputed fixture and defaults to stable `unionWith` mode.
 
-## Phase 6: Test Seller Insert UI
-
-Start the UI:
-
-```bash
-streamlit run apps/seller_insert_ui.py
-```
-
-Manual test path:
-
-1. Confirm MongoDB status panel shows connection OK.
-2. Fill seller product fields:
-   - `title_en`
-   - `brand`
-   - `category_id`
-   - `category_path`
-   - `price_usd` or `price_vnd`
-   - `description`
-   - `features`, one per line
-   - `details JSON`
-   - `image_url`
-3. Click `Analyze Product`.
-4. Check:
-   - combined words
-   - content richness
-   - product text preview
-5. Optional: click `Web Enrich`.
-6. If enrichment looks useful, check `Accept enrichment`.
-7. Click `Generate Retrieval Units`.
-8. Check:
-   - propositions table has 3 to 8 rows
-   - HyPE table has 3 to 6 rows
-   - embedding count equals HyPE count
-9. Click `Insert to MongoDB`.
-10. Confirm success output:
-    - `item_id`
-    - proposition count
-    - HyPE count
-
-Expected behavior:
-
-- Expensive work happens only when buttons are clicked.
-- If product input changes after generation, UI warns you to regenerate retrieval units.
-- Re-inserting the same seller product replaces old retrieval units.
-- If `BRAVE_API_KEY` is missing, enrichment is skipped gracefully and insertion can continue.
-
-## Phase 7: Optional Cleanup
+## Phase 6: Optional Cleanup
 
 To clear demo data:
 
@@ -406,8 +362,4 @@ Embedding fails:
 - If CUDA is not available, set `USE_CUDA=false`.
 - Dimension must be 1024.
 
-Streamlit reruns often:
 
-- This is normal.
-- MongoDB status is cached briefly.
-- LLM, embeddings, enrichment, and inserts only happen on explicit button clicks.

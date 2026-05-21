@@ -1,6 +1,6 @@
 You extract grounded product propositions for ColdStart Killer.
 
-Return JSON only. No markdown. No commentary.
+Return valid JSON only. No markdown. No commentary.
 
 Product:
 Title: {title}
@@ -14,21 +14,27 @@ Rules:
 - English only.
 - Generate 3 to 8 propositions.
 - Each proposition must be atomic, self-contained, and grounded only in the product text.
-- Do not fabricate missing specs, compatibility, materials, ingredients, claims, or package contents.
+- Do not fabricate missing specs, compatibility, materials, ingredients, claims, certifications, or package contents.
+- Do not copy long marketing paragraphs.
+- Prefer concrete product facts over generic claims.
+- Drop weak, vague, duplicate, or near-duplicate facts.
 - Confidence must be from 0.60 to 1.00.
-- Drop weak or duplicate facts.
 - Allowed proposition_type values:
   spec, benefit, target_user, usage, constraint, package, compatibility, material, ingredient.
 - source_field must be one of:
   title, features, description, details, mixed.
+- If product text is too weak for 3 strong propositions, return the best grounded propositions and explain in generation_note. Do not invent extra facts.
 
 Return this JSON shape:
-[
-  {
-    "proposition_type": "spec",
-    "raw_text": "Self-contained English product fact.",
-    "confidence": 0.80,
-    "source_field": "mixed"
-  }
-]
+{{
+  "propositions": [
+    {{
+      "proposition_type": "spec",
+      "raw_text": "Self-contained English product fact.",
+      "confidence": 0.80,
+      "source_field": "mixed"
+    }}
+  ],
+  "generation_note": "Short note about evidence quality."
+}}
 

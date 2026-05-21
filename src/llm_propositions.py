@@ -48,7 +48,10 @@ def _source_text_value(item: dict[str, Any], key: str) -> str:
 def _section_from_product_text(product_text: str, section_name: str) -> str:
     pattern = rf"{re.escape(section_name)}:\s*(.*?)(?:\n\n[A-Z][A-Za-z ]+:\s*|\Z)"
     match = re.search(pattern, product_text, flags=re.DOTALL)
-    return clean_string(match.group(1)) if match else ""
+    if not match:
+        return ""
+    lines = [clean_string(line) for line in match.group(1).splitlines()]
+    return "\n".join(line for line in lines if line)
 
 
 def _sentence_candidates(text: str, source_field: str, proposition_type: str) -> list[dict]:
@@ -76,7 +79,10 @@ def _fallback_propositions(item: dict[str, Any]) -> list[dict]:
         product_text, "Description"
     )
     details_text = _source_text_value(item, "details_text") or _section_from_product_text(product_text, "Details")
-    features = listify_text(features_text or item.get("features"))
+    if features_text:
+        features = [clean_string(line) for line in features_text.splitlines() if clean_string(line)]
+    else:
+        features = listify_text(item.get("features"))
     facts = []
     if title:
         facts.append({"proposition_type": "spec", "raw_text": f"The product is {title}.", "source_field": "title"})

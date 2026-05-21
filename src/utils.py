@@ -4,6 +4,7 @@ import ast
 import hashlib
 import json
 import logging
+import warnings
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,10 +44,14 @@ def parse_jsonish(value: Any, default: Any = None) -> Any:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    try:
-        return ast.literal_eval(text)
-    except (ValueError, SyntaxError):
+    if text[0] not in {"[", "{", "(", "'", '"'}:
         return default
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        try:
+            return ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return default
 
 
 def stable_hash(text: str, length: int = 10) -> str:

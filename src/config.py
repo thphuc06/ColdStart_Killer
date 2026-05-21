@@ -39,7 +39,6 @@ class Settings:
     mongodb_uri: str
     mongodb_db_name: str
     ollama_model: str
-    brave_api_key: str
     embedding_model: str
     use_cuda: bool
     embedding_storage_format: str
@@ -55,7 +54,6 @@ def get_settings() -> Settings:
         mongodb_uri=os.getenv("MONGODB_URI", ""),
         mongodb_db_name=os.getenv("MONGODB_DB_NAME", "coldstart_killer"),
         ollama_model=os.getenv("OLLAMA_MODEL", "qwen3:8b"),
-        brave_api_key=os.getenv("BRAVE_API_KEY", ""),
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
         use_cuda=env_bool("USE_CUDA", True),
         embedding_storage_format=os.getenv("EMBEDDING_STORAGE_FORMAT", "list_float"),

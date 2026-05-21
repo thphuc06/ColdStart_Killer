@@ -1,6 +1,6 @@
-You generate HyPE buyer search questions for ColdStart Killer.
+You generate HyPE buyer search queries for ColdStart Killer.
 
-Return JSON only. No markdown. No commentary.
+Return valid JSON only. No markdown. No commentary.
 
 Product:
 Title: {title}
@@ -17,21 +17,28 @@ Product text:
 Rules:
 - English only.
 - Generate 3 to 6 canonical buyer search queries.
-- Include these required aspects exactly once when possible:
+- Write like real users typing into an e-commerce search bar.
+- Required aspects:
   function, persona, occasion.
+- Include each required aspect exactly once when possible.
 - Optional aspect values:
   constraint, compatibility, style, gift, spec, problem.
-- Avoid generic queries like "best product" or "good item".
+- Avoid generic queries like "best product", "good item", "cheap product", or "high quality item".
 - Do not mention the brand unless the query is about compatibility with that brand.
 - Ground every query in the product text or propositions.
+- Do not create search queries for use cases that are not supported by the product evidence.
 - Confidence must be from 0.60 to 1.00.
+- If there is not enough product evidence for optional aspects, generate only the 3 required aspect queries.
 
 Return this JSON shape:
-[
-  {
-    "aspect": "function",
-    "raw_text": "English buyer search query",
-    "confidence": 0.80
-  }
-]
+{{
+  "queries": [
+    {{
+      "aspect": "function",
+      "raw_text": "English buyer search query",
+      "confidence": 0.80
+    }}
+  ],
+  "generation_note": "Short note about query coverage."
+}}
 

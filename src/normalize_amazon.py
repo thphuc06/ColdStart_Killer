@@ -5,6 +5,7 @@ import json
 import math
 import re
 import unicodedata
+import warnings
 from typing import Any
 
 
@@ -38,10 +39,14 @@ def _parse_sequence_string(value: str) -> Any:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    try:
-        return ast.literal_eval(text)
-    except (ValueError, SyntaxError):
+    if text[0] not in {"[", "{", "(", "'", '"'}:
         return value
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        try:
+            return ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            return value
 
 
 def listify_text(value: Any) -> list[str]:

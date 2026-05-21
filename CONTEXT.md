@@ -10,13 +10,10 @@ This phase builds:
 
 - A notebook-generated 3,000-item MVP dataset from Amazon Reviews 2023 metadata.
 - MongoDB insertion code for `items` and `retrieval_units`.
-- A seller-side Streamlit UI for inserting one product through the same indexing pipeline.
+- Buyer query processing and hybrid retrieval checks through notebooks/scripts.
 
 This phase explicitly does not build:
 
-- Full query pipeline yet.
-- Hybrid search yet.
-- `$rankFusion` or `$unionWith`.
 - Retrieval evaluation yet.
 - Buyer search UI.
 
@@ -53,7 +50,7 @@ Collections:
 - `items`: one document per product.
 - `retrieval_units`: semantic units for later retrieval.
 
-`items._id` is the product id, usually `parent_asin` for Amazon data and a deterministic seller id for UI-inserted products.
+`items._id` is the product id, usually `parent_asin` for Amazon data.
 
 `retrieval_units` includes:
 
@@ -112,15 +109,13 @@ Atlas Search:
 - Collection: `retrieval_units`
 - Text field: `text_search`
 - Analyzer: `lucene.standard`
-- Also map: `item_title_en`, `item_brand`, `unit_type`, `proposition_type`, `confidence`, `language`, `category_id`
+- Also map: `embedding_text`, `raw_text`, `item_title_en`, `item_brand`, `unit_type`, `proposition_type`, `confidence`, `language`, `category_id`, `in_stock`, `is_cold_item`, `aspect`
 
 ## Known Limitations
 
 - Embeddings are stored as normal Python float lists for MVP simplicity.
 - `bindata_float32` is not implemented yet.
 - Bulk LLM generation is sequential and intentionally conservative.
-- Brave enrichment is seller-UI only and fails open.
-- No buyer retrieval query path exists in this phase.
 - No full evaluation or ablation exists in this phase.
 
 ## Commands to run later
@@ -140,11 +135,10 @@ jupyter lab
 python scripts/build_3k_mvp_dataset.py
 python scripts/index_mvp.py --limit 50 --dry-run
 python scripts/index_mvp.py --limit 10 --write
+python scripts/index_mvp.py --limit 500 --write --resume
 python scripts/test_llm_generation.py
 python scripts/test_embeddings.py
-python scripts/test_web_enrichment.py
-
-streamlit run apps/seller_insert_ui.py
+python scripts/run_search.py --help
 ```
 
 macOS/Linux activation:
@@ -155,10 +149,7 @@ source .venv/bin/activate
 
 ## Next Phase Suggestion
 
-Build the buyer query pipeline and retrieval evaluation after this phase is verified end to end:
+Build retrieval evaluation and demo polish after this phase is verified end to end:
 
-- Query transformation.
-- Vector search over HyPE units.
-- Text search over proposition units.
-- Hybrid or fusion experiments.
 - Retrieval evaluation and ablation.
+- Buyer-facing UI polish if needed.
