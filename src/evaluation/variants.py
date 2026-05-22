@@ -248,26 +248,39 @@ def run_hybrid_no_cold_boost(
     top_k: int,
     collection: Any | None = None,
 ) -> list[EvaluationResult]:
-    """Run hybrid_no_cold_boost variant — same as hybrid_union but zero out cold boost.
+    """Run hybrid without cold boost — ablation disables boost BEFORE sort/rank.
 
-    Does NOT mutate global COLD_START_BOOST. Instead, subtracts the cold_start_boost
-    from the final score post-hoc.
+    Builds a custom pipeline with include_cold_boost=False so MongoDB
+    sorts and limits WITHOUT cold_start_boost influence. This is the
+    correct ablation approach — the old approach of subtracting boost
+    after ranking was incorrect because the ranking order had already
+    been influenced by the boost.
+
+    Does NOT mutate global COLD_START_BOOST.
     """
-    from src.search_pipeline import run_search
+    from src.search_pipeline import build_union_with_pipeline_parametrized
+    from src.retrieval_output import build_explainable_result
 
-    results = run_search(fixture, top_k=top_k, mode="unionWith", collection=collection)
-    adjusted: list[EvaluationResult] = []
-    for i, r in enumerate(results):
-        debug = r.get("debug", {})
-        cold_boost = float(debug.get("cold_start_boost", 0.0))
-        adjusted_score = float(r.get("score", 0.0)) - cold_boost
-        r_copy = dict(r)
-        r_copy["score"] = adjusted_score
-        r_copy.setdefault("debug", {})["cold_start_boost_removed"] = cold_boost
-        adjusted.append(
-            _result_to_evaluation_result(r_copy, query_id, "hybrid_no_cold_boost", i + 1)
-        )
-    return adjusted
+    # Build pipeline WITHOUT cold boost — boost is disabled BEFORE sort
+    pipeline = build_union_with_pipeline_parametrized(
+        fixture,
+        top_k=top_k,
+        include_cold_boost=False,
+        include_content_bonus=True,
+        include_multi_channel_bonus=True,
+    )
+
+    coll = collection
+    if coll is None:
+        from src.mongodb import get_retrieval_units_collection
+        coll = get_retrieval_units_collection()
+
+    raw = list(coll.aggregate(pipeline))
+    results = [build_explainable_result(r) for r in raw]
+    return [
+        _result_to_evaluation_result(r, query_id, "hybrid_no_cold_boost", i + 1)
+        for i, r in enumerate(results)
+    ]
 
 
 # Dispatcher

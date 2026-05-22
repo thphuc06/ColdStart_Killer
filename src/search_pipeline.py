@@ -277,10 +277,29 @@ def common_projection_stage() -> dict[str, Any]:
     }
 
 
-def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[dict[str, Any]]:
-    """Spec section 3.4 Steps 5-6: lookup items, group by item_id, score, sort, top-K."""
+def post_fusion_stages(
+    hard_filters: dict[str, Any] | None,
+    top_k: int,
+    *,
+    include_cold_boost: bool = True,
+    include_content_bonus: bool = True,
+    include_multi_channel_bonus: bool = True,
+) -> list[dict[str, Any]]:
+    """Spec section 3.4 Steps 5-6: lookup items, group by item_id, score, sort, top-K.
+
+    Scoring flags default to True so all existing callers get the same behavior.
+    Evaluation ablations pass explicit False to disable specific scoring components
+    BEFORE the MongoDB sort/limit, ensuring correct ablation ranking.
+    """
     top_k = _validate_top_k(top_k)
     high_rank = MISSING_RANK_SENTINEL
+    scoring_components = ["$fusion_score"]
+    if include_multi_channel_bonus:
+        scoring_components.append("$multi_channel_bonus")
+    if include_cold_boost:
+        scoring_components.append("$cold_start_boost")
+    if include_content_bonus:
+        scoring_components.append("$content_richness_bonus")
     return [
         {
             "$group": {
@@ -416,28 +435,23 @@ def post_fusion_stages(hard_filters: dict[str, Any] | None, top_k: int) -> list[
             "$addFields": {
                 "multi_channel_bonus": {
                     "$cond": [{"$gt": [{"$size": "$matched_channels"}, 1]}, MULTI_CHANNEL_BONUS, 0]
-                },
+                } if include_multi_channel_bonus else 0,
                 "cold_start_boost": {
                     "$cond": [
                         {"$eq": ["$item.cold_start.is_cold_item", True]},
                         COLD_START_BOOST,
                         0,
                     ]
-                },
+                } if include_cold_boost else 0,
                 "content_richness_bonus": {
                     "$multiply": [{"$ifNull": ["$item.content_richness", 0]}, CONTENT_RICHNESS_WEIGHT]
-                },
+                } if include_content_bonus else 0,
             }
         },
         {
             "$addFields": {
                 "score": {
-                    "$add": [
-                        "$fusion_score",
-                        "$multi_channel_bonus",
-                        "$cold_start_boost",
-                        "$content_richness_bonus",
-                    ]
+                    "$add": scoring_components
                 },
                 "matched_intent": "$best_vector.matched_intent",
                 "matched_fact": "$best_bm25.matched_fact",
@@ -652,6 +666,61 @@ def build_union_with_pipeline(fixture: dict[str, Any], top_k: int = DEFAULT_TOP_
     pipeline.extend(post_fusion_stages(hard_filters, top_k))
     return pipeline
 
+
+def build_union_with_pipeline_parametrized(
+    fixture: dict[str, Any],
+    top_k: int = DEFAULT_TOP_K,
+    *,
+    include_cold_boost: bool = True,
+    include_content_bonus: bool = True,
+    include_multi_channel_bonus: bool = True,
+) -> list[dict[str, Any]]:
+    """Build unionWith pipeline with configurable scoring components.
+
+    This is used by evaluation ablations. Production code should use
+    build_union_with_pipeline() which always includes all bonuses.
+    """
+    validate_query_fixture(fixture)
+    hard_filters = normalize_hard_filters(fixture.get("hard_filters"))
+    pipeline = vector_subpipeline(fixture["query_embedding"], hard_filters)
+    pipeline.extend(
+        [
+            {
+                "$addFields": {
+                    "fusion_score": {
+                        "$divide": [DEFAULT_WEIGHTS["vector"], {"$add": [RRF_K, "$rank_vector"]}]
+                    }
+                }
+            },
+            common_projection_stage(),
+            {
+                "$unionWith": {
+                    "coll": "retrieval_units",
+                    "pipeline": bm25_subpipeline(fixture["bm25_search_query_en"], hard_filters)
+                    + [
+                        {
+                            "$addFields": {
+                                "fusion_score": {
+                                    "$divide": [
+                                        DEFAULT_WEIGHTS["bm25"],
+                                        {"$add": [RRF_K, "$rank_bm25"]},
+                                    ]
+                                }
+                            }
+                        },
+                        common_projection_stage(),
+                    ],
+                }
+            },
+        ]
+    )
+    pipeline.extend(post_fusion_stages(
+        hard_filters, top_k,
+        include_cold_boost=include_cold_boost,
+        include_content_bonus=include_content_bonus,
+        include_multi_channel_bonus=include_multi_channel_bonus,
+    ))
+    return pipeline
 
 def build_search_pipeline(
     fixture: dict[str, Any],

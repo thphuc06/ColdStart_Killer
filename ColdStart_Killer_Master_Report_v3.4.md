@@ -20,7 +20,7 @@
 | Hybrid retrieval (`$unionWith` default + optional `$rankFusion`) | Native `$rankFusion` plus `$unionWith` fallback | `$unionWith` is the stable default; `$rankFusion` builder is retained for higher Atlas tiers | Free-tier compatible |
 | RRF scoring (k=60) | Reciprocal Rank Fusion with k=60 | Implemented | Match |
 | Vector search (`numCandidates=400`, channel `limit=20`) | `$vectorSearch` over HyPE units | Implemented | Current tuned setting |
-| Evaluation framework | 30-50 queries, ablation A0-A6 | Implemented | 50 queries evaluation with ablation, automated diagnostics (Layer 1), IR metrics computation (Layer 2), and claim verification (Layer 3) |
+| Evaluation framework | 30-50 queries, ablation A0-A6 | Implemented and populated | 50 retrieval queries, 20 diagnostic probes, 2,119 relevance judgments, 5 retrieval variants, automated diagnostics (Layer 1), IR metrics computation (Layer 2), claim verification (Layer 3), coverage/confidence gates, and hackathon impact reporting. Latest live run produced 2,425 results with 0 failures. |
 
 ---
 
@@ -68,12 +68,15 @@
 | Unit tests | `tests/test_pipeline.py` + existing suite |
 | Evaluation runner script | `scripts/run_evaluation.py` runs the 3-layer evaluation pipeline and computes metrics |
 | Evaluation diagnostics script | `scripts/run_eval_diagnostics.py` runs diagnostic probes (Layer 1) |
-| Judgment import utility | `scripts/import_eval_judgments.py` imports labeled judgments from CSV to JSON |
+| Judgment import utility | `scripts/import_eval_judgments.py` imports labeled CSV judgments to JSON |
 | Evaluation pool builder | `scripts/build_eval_pool.py` builds the evaluation pool for human labeling |
 | Evaluation summary utility | `scripts/summarize_evaluation.py` generates quick statistics and summaries |
+| Evaluation hackathon report | `src/evaluation/hackathon_report.py` writes `hackathon_impact_report.md` with business impact, baseline deltas, qualitative examples, Vietnamese/price-filter notes, and caveats |
+| Explanation coverage check | `src/evaluation/explanation_check.py` measures `matched_intent`, `matched_fact`, and combined explanation coverage in retrieval results |
 | Evaluation notebook | `notebooks/05_evaluation_retrieval_quality.ipynb` for running and visualizing the evaluation |
 | Evaluation README | `evaluation/README.md` documents structure, labeling rules, and metrics |
-| Evaluation test suite | Multiple test files under `tests/` covering dataset, diagnostics, metrics, and variants |
+| Evaluation tracking docs | `PLAN_EVALUATION.md` and `task.md` track completed evaluation-plan work and remaining caveats |
+| Evaluation test suite | Multiple test files under `tests/` covering dataset, diagnostics, metrics, reporting, hackathon output, import validation, and variants |
 
 ---
 
@@ -90,6 +93,64 @@
 | Embedding model | BAAI/bge-m3 (1024-dim) |
 | LLM | Qwen3:8B via Ollama |
 | Atlas indexes | `vector_index`, `text_index` |
+
+---
+
+## 📈 Current Evaluation Snapshot (May 2026)
+
+Latest live evaluation command:
+
+```bash
+python scripts/run_evaluation.py \
+  --queries evaluation/queries/retrieval_queries_seed.json \
+  --judgments evaluation/judgments/retrieval_judgments_seed.json \
+  --out .runtime/evaluation/plan_review_live
+```
+
+| Field | Current value |
+|-------|---------------|
+| Retrieval queries | 50 |
+| Diagnostic probes | 20 |
+| Relevance judgments | 2,119 |
+| Judged queries | 50 |
+| Seed queries with relevance >= 2 | 43 |
+| Positive judged queries in latest live report | 37 |
+| Live retrieval results | 2,425 |
+| Evaluation failures | 0 |
+| Report status | `sufficient` |
+| MongoDB source | Live |
+| Fixture source | Fresh |
+| Search P95 latency | 116.5ms |
+| Total P95 latency | 1173.0ms |
+| Cold/warm distribution | 300 cold items, 0 warm items, 0 unknown |
+
+Main live Layer-2 metrics:
+
+| Variant | NDCG@10 | Recall@10 | MRR@10 | Precision@5 | HitRate@10 | ColdRelevantRate@10 |
+|---------|--------:|----------:|-------:|------------:|-----------:|--------------------:|
+| `title_only` | 0.5537 | 0.3154 | 0.4992 | 0.312 | 0.74 | 0.3020 |
+| `vector_only` | 0.7195 | 0.4005 | 0.5537 | 0.428 | 0.74 | 0.3727 |
+| `bm25_only` | 0.6042 | 0.3303 | 0.5546 | 0.340 | 0.76 | 0.3363 |
+| `hybrid_union` | 0.7735 | 0.4478 | 0.6817 | 0.480 | 0.78 | 0.3920 |
+| `hybrid_no_cold_boost` | 0.7735 | 0.4478 | 0.6817 | 0.480 | 0.78 | 0.3920 |
+
+Current claim status:
+
+| Claim | Status | Evidence / caveat |
+|-------|--------|-------------------|
+| Hybrid beats title baseline | Supported | Hybrid beats title-only on NDCG@10, Recall@10, and MRR@10. |
+| Hybrid beats single-channel baselines | Supported | Hybrid NDCG@10 beats both vector-only and BM25-only. |
+| Cold-start exposure quality | Supported | ColdRelevantRate@10 is positive, but the dataset is cold-dominant, so this is not cold-vs-warm lift. |
+| Cold-start window was measured | Needs more evidence | `indexed_at` and `first_seen_in_top_k_at` are not available in the current source data. |
+| Vietnamese robustness | Supported | Hybrid Vietnamese NDCG@10 = 0.856 vs title-only = 0.4913. |
+| Live end-to-end latency | Supported as measured | 250 live samples exist. Search P95 is 116.5ms; total P95 is 1173.0ms, so the full path is not yet under the 400ms demo target. |
+
+Evaluation caveats:
+
+- Current relevance labels are AI-assisted conservative judgments. They pass the local evidence gates, but a human audit is recommended before publication-grade claims.
+- Latest live results are cold-dominant (`warm_items = 0`), so report wording should use **Cold-start exposure quality** instead of claiming cold-vs-warm lift.
+- `hybrid_no_cold_boost` is now a true pipeline-level ablation: cold boost is disabled before sorting/ranking, not subtracted after final ranking.
+- Search latency is already below the 400ms target, but total latency needs query-processing optimization and/or caching before it should be pitched as sub-400ms end-to-end.
 
 ---
 
@@ -113,7 +174,7 @@
 
 **Project:** MongoDB Hackathon — Item Cold-Start Recommendation Engine
 **Stack:** MongoDB Atlas Vector Search + Atlas Search + Aggregation Pipeline + RAG-style retrieval + CRAG-inspired reliability roadmap
-**Version:** v3.3 (Canonical Technical Baseline)
+**Version:** v3.4 report update (canonical technical baseline remains v3.3)
 **Embedder:** BAAI/bge-m3 (1024-dim, fp16, local GPU — RTX 5060 8GB)
 **LLM:** Qwen3:8B via Ollama (local, `think=False` top-level param)
 **Dataset:** Amazon Reviews 2023 — `mvp_3000_items_diverse.csv` (3,000-item, 20-category diverse MVP slice, English canonical retrieval)
@@ -160,10 +221,10 @@ Phiên bản hiện tại trả về `matched_intent`, `matched_fact`, `matched_
 
 | Đối tượng | Giá trị cụ thể |
 |:---|:---|
-| **Nhà bán hàng mới** | Sản phẩm xuất hiện trong top-K recommendation chỉ sau **~12–16 giây** kể từ lúc đăng, thay vì phải chờ 5–7 ngày tích lũy tương tác |
+| **Nhà bán hàng mới** | Kiến trúc cho phép sản phẩm zero-interaction có semantic access points ngay sau khi indexing hoàn tất. `cold_start_window_seconds` chưa được đo trong latest live evaluation vì source data thiếu `indexed_at` và `first_seen_in_top_k_at`. |
 | **Người mua** | Nhận gợi ý chính xác hơn cho truy vấn phức tạp (gift/occasion/persona/spec), kèm giải thích rõ ràng "Tại sao sản phẩm này?" |
 | **Nền tảng e-commerce** | Tăng tính đa dạng danh mục (long-tail discovery), giảm head-item monopoly, giữ chân nhà bán hàng mới |
-| **Kỹ thuật** | Kiến trúc production-grade, Target P95 latency < 400ms (phải đo thực tế trên Atlas tier dùng cho demo), tất cả logic trong MongoDB Pipeline — không overhead Python, dễ scale |
+| **Kỹ thuật** | Retrieval/ranking path chạy trong MongoDB Aggregation Pipeline. Latest live run đo search P95 = 116.5ms, total P95 = 1173.0ms; query processing/embedding/translation cần cache hoặc fast path trước khi pitch end-to-end dưới 400ms. |
 
 ---
 
@@ -388,7 +449,7 @@ Query-time:
 | **Fusion Retrieval (`$unionWith` RRF default, `$rankFusion` optional)** | Manual RRF on M0/free tier; native `$rankFusion` as upgrade path | Dual-space: HyPE intent (dense) × Proposition facts (BM25) — 2 modalities khác nhau căn bản, không phải 2 searches trên cùng document |
 | **CRAG-inspired reliability** | Yan et al. (2024), arXiv:2401.15884 | Roadmap: current implementation exposes matched channels and debug fields; full heuristic accept/correct/fallback layer is not yet in the core path |
 | **Explainable Retrieval** | NirDiamant/RAG_Techniques | Explanation từ metadata retrieval units, không cần LLM; tính trong $project stage |
-| **RAGAS / LLM-as-Judge Evaluation** | Es et al. (2023), arXiv:2309.15217 | Roadmap for offline evaluation; current notebooks validate pipeline health and qualitative search behavior |
+| **RAGAS / LLM-as-Judge Evaluation** | Es et al. (2023), arXiv:2309.15217 | Roadmap for optional audit; current evaluation uses deterministic IR metrics over relevance judgments |
 
 ---
 
@@ -693,16 +754,17 @@ Toàn bộ logic sau hybrid branch merge được xử lý inline trong pipeline
 
 | Scenario | Processing Mode | Latency | Pipeline |
 |:---|:---|:---|:---|
-| Seller đăng sản phẩm mới (content-rich) | Near-realtime | ~12–16 giây | Proposition Chunking + HyPE Gen + Embed |
+| Seller đăng sản phẩm mới (content-rich) | Near-realtime target | ~12–16 giây design estimate; not measured in latest eval | Proposition Chunking + HyPE Gen + Embed |
 | Seller đăng sản phẩm sparse (< 30 words) | Offline | ~30–60 giây | + Agentic Web Search Enrichment trước |
 | Buyer search | Real-time | P95 target < 400ms | Query transform + encode + MongoDB hybrid aggregation + explainable output |
 | Bulk indexing Amazon dataset | Batch | ~22–44 giây / 15K–30K HyPE vectors | bge-m3 batch encode 688 texts/sec |
-| Ablation evaluation | Offline | N/A | LLM-as-Judge trên 30–50 queries |
+| Ablation evaluation | Offline | N/A | Deterministic IR metrics over 50 retrieval queries and 2,119 relevance judgments; LLM-as-Judge is roadmap/supplementary only |
 
 **Cold-Start Window (flagship metric):**
 ```
 Traditional CF: sản phẩm mới phải chờ 5–7 NGÀY tích lũy tương tác
-ColdStart Killer: sản phẩm xuất hiện top-K sau ~12–16 GIÂY (indexing latency)
+ColdStart Killer target: sản phẩm có thể được surfaced ngay sau khi indexing hoàn tất
+Current measured status: cold_start_window_seconds = needs_more_evidence vì thiếu indexed_at / first_seen_in_top_k_at
 ```
 
 ---
@@ -735,8 +797,10 @@ ColdStart Killer: sản phẩm xuất hiện top-K sau ~12–16 GIÂY (indexing 
 | $match + $addFields scoring | ~10ms | Compute in C++ layer |
 | Network (Atlas → Backend) | ~20–40ms | Depends region |
 | CRAG evaluation (heuristic) | Future | Not in current core path |
-| **Total P50 estimate** | **~140ms** | ✅ |
-| **Total P95 estimate** | **~300ms** | ✅ (target < 400ms) |
+| **Design total P50 estimate** | **~140ms** | Retrieval-path estimate, before latest live timing |
+| **Design total P95 estimate** | **~300ms** | Retrieval-path target, before latest live timing |
+| **Latest measured search P50 / P95** | **83.6ms / 116.5ms** | Live MongoDB + fresh fixtures, 250 samples |
+| **Latest measured total P50 / P95** | **1140.1ms / 1173.0ms** | Full reported path is not yet under 400ms |
 
 **Optimization levers nếu vượt budget:**
 - Cache `bge-m3` embeddings cho hot queries (Redis/in-memory LRU)
@@ -782,7 +846,7 @@ Total indexing for 3,000 items (with precomputed LLM): ~2.5–4 giờ offline
 | # | Vấn đề / Pain Point | Phân Tích Kỹ Thuật Chuyên Sâu | Giải Pháp Khắc Phục (Countermeasures) & Trạng Thái |
 |:---|:---|:---|:---|
 | **P1** | **LLM Hallucination trong Proposition & HyPE** | LLM có thể "sáng tác" tính năng không tồn tại — ví dụ: basic 5W speaker được gắn query "perfect for large outdoor wedding". Propositions sai dẫn đến retrieval sai và mất trust người dùng. | **✅ ĐÃ GIẢM RỦI RO:** (1) Two-stage LLM pipeline: propositions are extracted first from `product_text_for_llm`, then HyPE uses product context + propositions. (2) `confidence` field per proposition (threshold 0.60). (3) `seller_confirmed` flag exists for future weighting. (4) Tavily enrichment prompt, when used, must be evidence-grounded. **🔄 NEXT:** full CRAG reliability flags. |
-| **P2** | **Latency vượt P95 < 400ms** | Nhiều nguồn latency cộng dồn: bge-m3 encode, Atlas Vector Search, BM25 search, `$group` + `$lookup`, network. Vietnamese translation via Qwen can add latency when the user query is Vietnamese. | **🔄 PARTIALLY ADDRESSED:** (1) Search aggregation itself has no LLM calls. (2) Encode 1 lần duy nhất. (3) Pre-filter denormalized fields in `$vectorSearch`. (4) `$unionWith` default works on free tier. **NEXT:** cache translations/query embeddings and measure P50/P95 on the demo cluster. |
+| **P2** | **Latency vượt P95 < 400ms** | Nhiều nguồn latency cộng dồn: bge-m3 encode, Atlas Vector Search, BM25 search, `$group` + `$lookup`, network. Vietnamese translation via Qwen can add latency when the user query is Vietnamese. | **🔄 PARTIALLY ADDRESSED:** Latest live run measured search P95 = 116.5ms, but total P95 = 1173.0ms. Search aggregation itself has no LLM calls, encodes once, pre-filters in `$vectorSearch`, and uses `$unionWith` on free tier. **NEXT:** cache translations/query embeddings and add a Vietnamese fast path before pitching sub-400ms end-to-end. |
 | **P3** | **Vietnamese BM25 Token Mismatch** | `lucene.standard` tokenize theo space: "da dầu" → `["da", "dầu"]`. Token "dầu" match nhầm "dầu ăn", "dầu gội". Tương tự: "chống nắng" → `["chống", "nắng"]`. | **✅ AVOIDED IN CURRENT PATH:** MVP uses English canonical propositions and English BM25 queries, so Vietnamese BM25 segmentation is not active. `underthesea` segmentation remains a future option only if Vietnamese propositions are indexed later. |
 | **P4** | **$rankFusion Compatibility Issue** | `$rankFusion` requires MongoDB 8.1+, Atlas M10+ ($57/mo). Atlas M0 (free tier) không support. Preview feature có thể thay đổi behavior. | **✅ ĐÃ XỬ LÝ:** `$unionWith` fallback pipeline hoàn chỉnh. Fallback quality is comparable for demo, but should be validated against $rankFusion. Thiết kế dual-mode: detect MongoDB version, auto-select implementation. Documentation rõ ràng cho cả hai mode. |
 | **P5** | **Agentic Web Enrichment Instability** | Live Tavily web search trong demo: (1) chậm (network latency), (2) nguồn không đồng nhất (dữ liệu thay đổi), (3) hallucination từ LLM synthesis, (4) có thể gây demo fail. | **✅ ĐÃ XỬ LÝ (strategy adjustment):** MVP 3,000 items đã được lọc content-rich nên không cần enrichment trong core insert path. Demo có thể pre-compute Tavily enrichment offline cho 50–100 sản phẩm showcase, lưu với `source: "tavily_web_search"`, `seller_confirmed: false`. Live enrichment là **optional showcase**, không phải core path. |
@@ -791,7 +855,7 @@ Total indexing for 3,000 items (with precomputed LLM): ~2.5–4 giờ offline
 | **P8** | **Cold-Start Boost gây Irrelevant Results** | Cold boost không có điều kiện → items mới nhưng không liên quan bị đẩy lên cao, gây friction với user. | **🔄 PARTIALLY ADDRESSED:** boost is small (`0.03`) and comes after vector/BM25 relevance. **NEXT:** gate boost by minimum `fusion_score` / quality threshold. |
 | **P9** | **$vectorSearch Pipeline Placement** | MongoDB docs: `$vectorSearch` không được dùng trong `$facet` hoặc `$lookup`. Đặt sai position trong pipeline gây build failure. | **✅ ĐÃ XỬ LÝ:** `$vectorSearch` luôn ở stage đầu tiên của pipeline (hoặc trong sub-pipeline của `$rankFusion`). Không bao giờ nest trong `$facet`/`$lookup`. |
 | **P10** | **LLM at Query Time (latency bomb)** | Bất kỳ LLM call đồng bộ nào trong query path — dù model nhỏ — thêm 200–1000ms, phá vỡ latency budget. | **🔄 PARTIALLY ADDRESSED:** `run_search()` itself has no LLM calls, but `process_query()` currently uses Qwen translation for Vietnamese queries. **NEXT:** cache translations and add a rule/dictionary fast path for common Vietnamese shopping queries. |
-| **P11** | **Ground Truth cho Evaluation** | Không có user interaction history → không có ground truth tự nhiên → metric dễ bị nghi ngờ. | **🔄 NOT YET IMPLEMENTED:** Notebook 03/04 validate pipeline health and qualitative retrieval, but a labeled 30–50 query evaluation set is still a next step. |
+| **P11** | **Ground Truth cho Evaluation** | Không có user interaction history → không có ground truth tự nhiên → metric dễ bị nghi ngờ. | **✅ ADDRESSED FOR CURRENT SEED:** Evaluation now has 50 retrieval queries and 2,119 relevance judgments, plus coverage gates and per-variant metrics. **CAVEAT:** labels are AI-assisted conservative judgments; human audit is still recommended before publication-grade claims. |
 | **P12** | **HyPE Quá Generic** | LLM có thể generate HyPE quá chung: "product for daily use", "good for everyone" — không có discriminative value, gây match sai. | **✅ ĐÃ XỬ LÝ:** HyPE prompt cứng: "Prefer specific buyer intent over generic category terms", "Write like real users typing into an e-commerce search bar", "Avoid duplicate or near-duplicate queries". Required aspect structure đảm bảo coverage tối thiểu. |
 | **P13** | **best_hype Không Ổn Định Sau `$rankFusion`** | Sau `$rankFusion`, thứ tự documents trong output không đảm bảo "best per channel" khi dùng `$first`. | **✅ HANDLED IN DEFAULT PATH:** `$unionWith` mode computes per-channel ranks and uses `$sortArray` to select `best_vector` / `best_bm25`. `$rankFusion` remains optional and should be re-tested before production use. |
 | **P14** | **Pitch Positioning — Nhầm thành Semantic Search** | Nguy cơ giám khảo hiểu đây là "semantic search tốt hơn" thay vì "recommendation system". | **✅ ĐÃ XỬ LÝ (communication):** Pitch rõ ràng là "**pure item cold-start recommendation candidate generator** for discovery surfaces and conversational shopping queries". Demo surfaces: "New for this intent", "Gift ideas", "For office workers", "For oily skin" — không phải search bar đơn thuần. |
@@ -833,43 +897,65 @@ Các điểm phản biện ở bản cũ đã được xử lý trong v3.3:
 ### Tuần 2: Query & Evaluation
 
 - [ ] **Implement và test 10 negation cases:** "không mua kem chống nắng", "không mua điện thoại Samsung", v.v. Unit test parser.
-- [ ] **Tạo evaluation set:** 30–50 queries với manual relevance labels. Chạy ablation A0/A2/A4/A5/A6. Ghi lại P@5, Cold Relevance@10, latency p95.
+- [x] **Tạo evaluation seed:** 50 retrieval queries với 2,119 relevance labels. Đã chạy 5 variants (`title_only`, `vector_only`, `bm25_only`, `hybrid_union`, `hybrid_no_cold_boost`) và ghi NDCG@10, Recall@10, MRR@10, Precision@5, HitRate@10, ColdRelevantRate@10, coverage/confidence, failure dashboard, latency, slice analysis. Labels hiện là AI-assisted; human audit vẫn là bước cần làm nếu muốn gọi đây là manual ground truth.
 - [ ] **Calibrate thresholds:** RRF score threshold cho cold_start_boost, CRAG accept/corrected/fallback boundary. Trên actual data, không hardcode từ theory.
 - [ ] **Implement `indexed_at` + `first_seen_in_top_k_at`:** Để đo `cold_start_window_seconds` — flagship demo metric.
 
 ### Tuần 2–3: Demo & Polish
 
 - [ ] **Build demo UI với 3 panels:** Query inspector (parsed JSON + channels), result cards với reliability flag, ablation comparison table.
-- [ ] **Chuẩn bị Demo Scenario 1 (Cold-start flagship):** Seller onboard sản phẩm mới, buyer search ngay → item xuất hiện top-3 sau ~12s. Ghi `cold_start_window_seconds`.
+- [ ] **Chuẩn bị Demo Scenario 1 (Cold-start flagship):** Seller onboard sản phẩm mới, buyer search ngay, rồi ghi `cold_start_window_seconds` bằng `indexed_at` và `first_seen_in_top_k_at`. Không pitch số ~12s nếu chưa có timestamp thật.
 - [ ] **Chuẩn bị Demo Scenario 5 (Ablation side-by-side):** Title-only vs HyPE-only vs Full. Bảng so sánh trực quan.
 - [ ] **Video structure 10 phút:** Xem Section 6.3.
 
 ## 6.2. Evaluation Framework Hoàn Chỉnh
 
-### Core Metrics (trình bày trong video)
+### Current Metrics (measured in latest live run)
 
-| Metric | Định nghĩa | Target |
-|:---|:---|:---|
-| **P@5** | Relevant items / 5 trong top-5 | A5 ≥ 0.73 |
-| **Cold Relevance@10** | Relevant cold items / 10 trong top-10 | A5 ≥ 0.48 |
-| **Cold-start Window (sec)** | `first_appear_time - submit_time` | < 20 giây |
-| **P95 Latency** | 95th percentile query response time | Target < 400ms. Actual latency must be measured on Atlas tier used for demo. |
+| Metric | Định nghĩa | Current measured value | Interpretation |
+|:---|:---|:---|:---|
+| **Precision@5** | Relevant items / 5 trong top-5 | `hybrid_union` = 0.480 | Hybrid hiện tốt hơn `title_only` = 0.312, `vector_only` = 0.428, `bm25_only` = 0.340. |
+| **ColdRelevantRate@10** | Relevant cold items / 10 trong top-10 | `hybrid_union` = 0.392 | Dùng làm **Cold-start exposure quality** vì latest live dataset có 300 cold items và 0 warm items. |
+| **NDCG@10** | Ranking quality có xét graded relevance | `hybrid_union` = 0.7735 | Main ranking metric; hybrid beats title/vector/BM25 baselines. |
+| **Recall@10** | Fraction of known relevant items found in top-10 | `hybrid_union` = 0.4478 | Hybrid improves recall versus all single baselines. |
+| **MRR@10** | Reciprocal rank của relevant result đầu tiên | `hybrid_union` = 0.6817 | Hybrid improves first-good-result position versus baselines. |
+| **Cold-start Window (sec)** | `first_appear_time - submit_time` | Not available | Requires `indexed_at` and `first_seen_in_top_k_at`; current claim status is `needs_more_evidence`. |
+| **P95 search latency** | MongoDB search latency | 116.5ms | Search path is below 400ms in the latest live run. |
+| **P95 total latency** | Total reported query/evaluation latency | 1173.0ms | Full path is not yet below 400ms; caching/optimization remains demo hardening work. |
 
-### Ablation Study Results (Expected / Target — To Be Validated on Actual Data)
+### Ablation Study Results (measured live run: `.runtime/evaluation/plan_review_live`)
 
-> ⚠️ **Lưu ý:** Các số liệu dưới đây là **expected / target** dựa trên thiết kế kiến trúc và tài liệu tham khảo kỹ thuật — **chưa phải kết quả đo thực tế**. Cần chạy ablation trên eval set 30–50 queries thực để xác nhận.
+| Variant | NDCG@10 | Recall@10 | MRR@10 | Precision@5 | HitRate@10 | ColdRelevantRate@10 | Notes |
+|:---|---:|---:|---:|---:|---:|---:|:---|
+| `title_only` | 0.5537 | 0.3154 | 0.4992 | 0.312 | 0.74 | 0.3020 | Title baseline |
+| `vector_only` | 0.7195 | 0.4005 | 0.5537 | 0.428 | 0.74 | 0.3727 | HyPE/vector-only intent matching |
+| `bm25_only` | 0.6042 | 0.3303 | 0.5546 | 0.340 | 0.76 | 0.3363 | Proposition BM25-only fact matching; 1 empty-result query |
+| **`hybrid_union`** | **0.7735** | **0.4478** | **0.6817** | **0.480** | **0.78** | **0.3920** | Current default hybrid pipeline |
+| `hybrid_no_cold_boost` | 0.7735 | 0.4478 | 0.6817 | 0.480 | 0.78 | 0.3920 | Pipeline-level no-boost ablation; equal in latest cold-dominant run |
 
-| Variant | P@5 | Cold Coverage@10 | Cold Relevance@10 | Notes |
-|:---|:---|:---|:---|:---|
-| A0 — Title only | 0.40 | 0.08 | 0.04 | Baseline (expected) |
-| A2 — HyPE only | 0.60 | 0.40 | 0.32 | Intent match (expected) |
-| A4 — Proposition BM25 only | 0.52 | 0.35 | 0.28 | Fact match (expected) |
-| **A5 — HyPE + Proposition** | **0.73** | **0.52** | **0.48** | **Our approach (expected)** |
-| A6 — Full + query transform | 0.76 | 0.54 | 0.50 | Best system (expected) |
+Measured ablation deltas:
 
-**Cold Coverage không dùng làm metric chính** — dễ misleading: nhiều cold items nhưng không relevant. Dùng **Cold Relevance@10** thay thế.
+| Comparison | Δ NDCG@10 | Δ MRR@10 | Δ ColdRelevantRate@10 | Interpretation |
+|:---|---:|---:|---:|:---|
+| Hybrid vs title-only | +0.2198 | +0.1825 | +0.0900 | Clear improvement |
+| Hybrid vs vector-only | +0.0540 | +0.1280 | +0.0193 | Clear improvement |
+| Hybrid vs BM25-only | +0.1693 | +0.1271 | +0.0557 | Clear improvement |
+| Hybrid vs no cold boost | 0.0000 | 0.0000 | 0.0000 | No measured difference in latest run |
 
-### LLM-as-Judge (offline supplementary)
+**Cold Coverage không dùng làm metric chính** — dễ misleading: nhiều cold items nhưng không relevant. Dùng **ColdRelevantRate@10 / Cold-start exposure quality** thay thế.
+
+Generated evaluation artifacts:
+
+- `.runtime/evaluation/plan_review_live/metrics_summary.md`
+- `.runtime/evaluation/plan_review_live/hackathon_impact_report.md`
+- `.runtime/evaluation/plan_review_live/layer2_metrics_summary.json`
+- `.runtime/evaluation/plan_review_live/layer2_metrics_by_query.csv`
+- `.runtime/evaluation/plan_review_live/layer2_raw_results.json`
+- `.runtime/evaluation/plan_review_live/config.json`
+
+### LLM-as-Judge (roadmap supplementary, not current metric)
+
+Latest evaluation does **not** use LLM-as-Judge as a primary metric. Current claims use deterministic IR metrics over relevance judgments. The prompt below is only an optional future audit tool.
 
 ```python
 JUDGE_PROMPT = """
@@ -880,7 +966,7 @@ Rate 1-5:
 4. Cold-start recommendation quality
 Return JSON only: {relevance, intent_quality, fact_grounding, cold_start_quality, reason}
 """
-# Dùng cho 30–50 query samples. Không làm metric chính vì judge bias.
+# Optional future audit for 30–50 query samples. Không làm metric chính vì judge bias.
 ```
 
 ## 6.3. Demo Video Structure (10 phút)
@@ -890,7 +976,7 @@ Return JSON only: {relevance, intent_quality, fact_grounding, cold_start_quality
 | 0:00–0:45 | **Problem** | Item cold-start loop, CF failure, 5–7 ngày chờ | Diagram: sản phẩm mới trapped 0 interactions |
 | 0:45–1:20 | **Innovation** | HyPE vs HyDE paradigm flip, Dual-Space architecture | Side-by-side: raw description vs HyPE queries |
 | 1:20–2:40 | **Seller Onboarding** | normalize → propositions → HyPE → embed → index | Backend logs streaming, timer ticking |
-| 2:40–4:20 | **Demo 1: Cold-start flagship** | Seller submit → Buyer search → Item top-3 sau 12s | cold_start_window_seconds = 12.4 |
+| 2:40–4:20 | **Demo 1: Cold-start flagship** | Seller submit → Buyer search → item appears after indexing if timestamp data is available | Show `cold_start_window_seconds` only after it is measured |
 | 4:20–5:40 | **Demo 2: Multi-aspect** | Cùng 1 item, 3 queries → function/persona/occasion | Same item matched via 3 different aspects |
 | 5:40–6:50 | **Demo 3: Proposition match** | "SPF50 PA4plus không nhờn rít" → factPipeline dominates | Score breakdown: fact_contribution 70% |
 | 6:50–7:40 | **Demo 4: Complex query** | "quà sinh nhật bạn gái da dầu dưới 300k không sunscreen" | Query inspector panel, parsed JSON on screen |
@@ -967,7 +1053,7 @@ User cold-start (người dùng mới) + User profile vector (người dùng cũ
 
 ## 7.2. One-Line Pitch
 
-> **"ColdStart Killer là kiến trúc Dual-Space Multi-Aspect retrieval biến mỗi sản phẩm mới thành một tập semantic access points theo buyer intent và product facts, để SKU zero-interaction xuất hiện trong top recommendation sau ~12 giây — và giải thích được lý do — trước khi có bất kỳ collaborative signal nào, toàn bộ được xử lý bởi MongoDB Aggregation Pipeline."**
+> **"ColdStart Killer là kiến trúc Dual-Space Multi-Aspect retrieval biến mỗi sản phẩm mới thành một tập semantic access points theo buyer intent và product facts, để SKU zero-interaction có thể được surfaced ngay sau khi indexing hoàn tất — và giải thích được lý do — trước khi có bất kỳ collaborative signal nào; retrieval/ranking được xử lý bởi MongoDB Aggregation Pipeline."**
 
 ## 7.3. References
 

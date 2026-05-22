@@ -68,6 +68,15 @@ def compute_query_metrics(
     metrics["cold_item_count"] = len(cold_items)
     metrics["unknown_cold_status_count"] = len(unknown_cold)
 
+    # Per-query judgment coverage
+    metrics["query_judgment_coverage_rate"] = round(
+        judged_count / len(ranked_results), 4
+    ) if ranked_results else None
+    metrics["is_fully_judged"] = (unjudged_count == 0) if ranked_results else False
+    metrics["has_positive_judgment"] = any(
+        judgments.get(r.item_id, 0) >= relevance_threshold for r in ranked_results
+    )
+
     # All known relevance values for ideal ranking
     all_relevances = sorted(judgments.values(), reverse=True)
 
@@ -165,6 +174,33 @@ def aggregate_metrics(
     for key, group_rows in groups.items():
         summary: dict[str, object] = dict(zip(group_by, key))
         summary["query_count"] = len(group_rows)
+        judged_query_count = sum(1 for r in group_rows if r.get("has_judgments") is True)
+        positive_judged_query_count = sum(1 for r in group_rows if r.get("has_positive_judgment") is True)
+        result_count = sum(
+            int(r.get("result_count", 0))
+            for r in group_rows
+            if isinstance(r.get("result_count", 0), int)
+        )
+        judged_result_count = sum(
+            int(r.get("judged_result_count", 0))
+            for r in group_rows
+            if isinstance(r.get("judged_result_count", 0), int)
+        )
+
+        summary["judged_query_count"] = judged_query_count
+        summary["positive_judged_query_count"] = positive_judged_query_count
+        summary["query_judgment_coverage_rate"] = round(
+            judged_query_count / len(group_rows), 4
+        ) if group_rows else 0
+        summary["result_judgment_coverage_rate"] = round(
+            judged_result_count / result_count, 4
+        ) if result_count else 0
+        if judged_query_count >= 30:
+            summary["metric_confidence"] = "high"
+        elif judged_query_count >= 15:
+            summary["metric_confidence"] = "medium"
+        else:
+            summary["metric_confidence"] = "low"
 
         # Find all numeric keys
         all_keys: set[str] = set()
@@ -172,7 +208,14 @@ def aggregate_metrics(
             all_keys.update(r.keys())
         numeric_keys = set()
         for k in all_keys:
-            if k in group_by or k in ("query_id", "variant", "has_judgments"):
+            if k in group_by or k in (
+                "query_id",
+                "variant",
+                "has_judgments",
+                "has_positive_judgment",
+                "query_judgment_coverage_rate",
+                "result_judgment_coverage_rate",
+            ):
                 continue
             for r in group_rows:
                 v = r.get(k)

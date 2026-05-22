@@ -33,6 +33,7 @@ sys.path.insert(0, str(ROOT))
 
 from src.evaluation.contracts import RunConfig, validate_run_config
 from src.evaluation.dataset import load_eval_queries, load_relevance_judgments
+from src.evaluation.hackathon_report import generate_hackathon_report
 from src.evaluation.reporting import write_evaluation_outputs
 from src.evaluation.runner import run_evaluation
 from src.evaluation.variants import EVALUATION_VARIANTS
@@ -66,6 +67,11 @@ def main() -> int:
     parser.add_argument("--use-fake-results", action="store_true", help="Use fake results for smoke testing")
     parser.add_argument("--use-cached-fixtures", action="store_true", default=False, help="Use cached fixtures")
     parser.add_argument("--allow-stale-fixtures", action="store_true", default=False, help="Allow stale fixture cache")
+    parser.add_argument(
+        "--generate-hackathon-report",
+        action="store_true",
+        help="Write hackathon_report.md alongside the standard evaluation artifacts",
+    )
 
     args = parser.parse_args()
 
@@ -110,9 +116,10 @@ def main() -> int:
         use_cached_fixtures=args.use_cached_fixtures,
         created_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
         git_commit=_git_commit(),
-        plan_version="1.0",
-        code_version="1.0",
-        python_version=platform.python_version(),
+        mongodb_live=None if not args.use_fake_results else False,
+        plan_version="v2.0",
+        code_version="2.0.0",
+        python_version=sys.version,
         platform=platform.platform(),
     )
 
@@ -141,6 +148,9 @@ def main() -> int:
 
     # Write outputs
     paths = write_evaluation_outputs(run_data, args.out)
+    hackathon_path = Path(args.out) / "hackathon_impact_report.md"
+    hackathon_path.write_text(generate_hackathon_report(run_data), encoding="utf-8")
+    paths["hackathon_impact_report"] = str(hackathon_path)
 
     # Print summary
     n_failures = len(run_data.get("failures", []))

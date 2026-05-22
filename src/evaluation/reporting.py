@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .contracts import ClaimStatus
+from .explanation_check import check_explanation_quality
 
 
 def decide_claim_status(
@@ -23,7 +24,13 @@ def decide_claim_status(
     config: dict[str, Any],
     failures: list[dict[str, Any]],
 ) -> list[ClaimStatus]:
-    """Generate deterministic claim statuses from metrics and gates."""
+    """Generate deterministic claim statuses from metrics and gates.
+
+    Rules:
+    - needs_more_evidence: when data is insufficient (missing judgments, null metrics, missing variants)
+    - unsupported: ONLY when judgment gates pass AND metrics are non-None AND comparison genuinely fails
+    - supported: ONLY when judgment gates pass AND metrics are non-None AND comparison genuinely passes
+    """
     claims: list[ClaimStatus] = []
 
     # Helper: find variant summary
@@ -42,6 +49,14 @@ def decide_claim_status(
     # Check if variants are available
     failed_variants = {f.get("variant") for f in failures if f.get("error_type") == "variant_unavailable"}
 
+    # Judgment coverage gates
+    judged_query_count = config.get("judged_query_count", 0)
+    positive_judged_query_count = config.get("positive_judged_query_count", 0)
+    judgment_gates_pass = (
+        judged_query_count >= 30 and
+        positive_judged_query_count >= 20
+    )
+
     # Claim 1: Hybrid beats title baseline
     if "title_only" in failed_variants or title is None:
         claims.append(ClaimStatus(
@@ -49,24 +64,51 @@ def decide_claim_status(
             status="needs_more_evidence",
             blocker="title_only variant is unavailable",
         ))
+    elif not judgment_gates_pass:
+        claims.append(ClaimStatus(
+            claim="Hybrid beats title baseline",
+            status="needs_more_evidence",
+            blocker=f"Insufficient judgments: judged={judged_query_count}, positive={positive_judged_query_count}",
+        ))
     elif hybrid and title:
         hybrid_ndcg = hybrid.get("ndcg_at_10")
+        hybrid_recall = hybrid.get("recall_at_10")
+        hybrid_mrr = hybrid.get("mrr_at_10")
         title_ndcg = title.get("ndcg_at_10")
-        if hybrid_ndcg is not None and title_ndcg is not None and hybrid_ndcg > title_ndcg:
+        title_recall = title.get("recall_at_10")
+        title_mrr = title.get("mrr_at_10")
+        all_metrics = [hybrid_ndcg, hybrid_recall, hybrid_mrr, title_ndcg, title_recall, title_mrr]
+        if any(m is None for m in all_metrics):
+            claims.append(ClaimStatus(
+                claim="Hybrid beats title baseline",
+                status="needs_more_evidence",
+                blocker="Some comparison metrics are null",
+            ))
+        elif hybrid_ndcg > title_ndcg and hybrid_recall > title_recall and hybrid_mrr > title_mrr:
             claims.append(ClaimStatus(
                 claim="Hybrid beats title baseline",
                 status="supported",
-                evidence=f"hybrid NDCG@10={hybrid_ndcg} > title NDCG@10={title_ndcg}",
+                evidence=f"hybrid NDCG@10={hybrid_ndcg} > title={title_ndcg}, "
+                         f"Recall@10={hybrid_recall} > {title_recall}, "
+                         f"MRR@10={hybrid_mrr} > {title_mrr}",
             ))
         else:
             claims.append(ClaimStatus(
                 claim="Hybrid beats title baseline",
                 status="unsupported",
-                evidence=f"hybrid NDCG@10={hybrid_ndcg}, title NDCG@10={title_ndcg}",
+                evidence=f"hybrid NDCG@10={hybrid_ndcg}, title={title_ndcg}; "
+                         f"Recall@10: {hybrid_recall} vs {title_recall}; "
+                         f"MRR@10: {hybrid_mrr} vs {title_mrr}",
             ))
 
     # Claim 2: Hybrid beats single-channel baselines
-    if hybrid and vector and bm25:
+    if not judgment_gates_pass:
+        claims.append(ClaimStatus(
+            claim="Hybrid beats single-channel baselines",
+            status="needs_more_evidence",
+            blocker=f"Insufficient judgments: judged={judged_query_count}, positive={positive_judged_query_count}",
+        ))
+    elif hybrid and vector and bm25:
         h_n = hybrid.get("ndcg_at_10")
         v_n = vector.get("ndcg_at_10")
         b_n = bm25.get("ndcg_at_10")
@@ -97,23 +139,35 @@ def decide_claim_status(
         ))
 
     # Claim 3: Cold-start retrieval is useful
-    if hybrid:
+    dataset_cold_dominant = config.get("dataset_is_cold_dominant", False)
+    if not judgment_gates_pass:
+        claims.append(ClaimStatus(
+            claim="Cold-start exposure quality" if dataset_cold_dominant else "Cold-start retrieval is useful",
+            status="needs_more_evidence",
+            blocker=f"Insufficient judgments: judged={judged_query_count}, positive={positive_judged_query_count}",
+        ))
+    elif hybrid:
         cold_rate = hybrid.get("cold_relevant_rate_at_10")
+        claim_name = "Cold-start exposure quality" if dataset_cold_dominant else "Cold-start retrieval is useful"
         if cold_rate is not None and cold_rate > 0:
+            evidence_suffix = (
+                ", but dataset is cold-dominant — cannot prove cold vs warm lift"
+                if dataset_cold_dominant else ""
+            )
             claims.append(ClaimStatus(
-                claim="Cold-start retrieval is useful",
+                claim=claim_name,
                 status="supported",
-                evidence=f"ColdRelevantRate@10={cold_rate}",
+                evidence=f"ColdRelevantRate@10={cold_rate}{evidence_suffix}",
             ))
         elif cold_rate == 0:
             claims.append(ClaimStatus(
-                claim="Cold-start retrieval is useful",
+                claim=claim_name,
                 status="unsupported",
                 evidence="ColdRelevantRate@10=0",
             ))
         else:
             claims.append(ClaimStatus(
-                claim="Cold-start retrieval is useful",
+                claim=claim_name,
                 status="needs_more_evidence",
                 blocker="ColdRelevantRate@10 is null (no cold items in judged results)",
             ))
@@ -126,26 +180,63 @@ def decide_claim_status(
     ))
 
     # Claim 5: Vietnamese robustness
-    claims.append(ClaimStatus(
-        claim="Vietnamese robustness",
-        status="needs_more_evidence",
-        blocker="Requires Vietnamese slice analysis with sufficient judged queries",
-    ))
+    vi_judged = config.get("vietnamese_judged_query_count", 0)
+    vi_hybrid_ndcg = config.get("vietnamese_hybrid_ndcg_at_10")
+    vi_title_ndcg = config.get("vietnamese_title_ndcg_at_10")
+    if not judgment_gates_pass or vi_judged < 5:
+        claims.append(ClaimStatus(
+            claim="Vietnamese robustness",
+            status="needs_more_evidence",
+            blocker=f"Vietnamese slice has only {vi_judged} judged queries (need >= 5) "
+                    f"or overall judgment gates not met",
+        ))
+    elif not isinstance(vi_hybrid_ndcg, (int, float)) or not isinstance(vi_title_ndcg, (int, float)):
+        claims.append(ClaimStatus(
+            claim="Vietnamese robustness",
+            status="needs_more_evidence",
+            blocker="Vietnamese slice NDCG@10 metrics are null",
+        ))
+    elif vi_hybrid_ndcg > vi_title_ndcg:
+        claims.append(ClaimStatus(
+            claim="Vietnamese robustness",
+            status="supported",
+            evidence=f"hybrid Vietnamese NDCG@10={vi_hybrid_ndcg} > title={vi_title_ndcg}",
+        ))
+    else:
+        claims.append(ClaimStatus(
+            claim="Vietnamese robustness",
+            status="unsupported",
+            evidence=f"hybrid Vietnamese NDCG@10={vi_hybrid_ndcg}, title={vi_title_ndcg}",
+        ))
 
     # Claim 6: Live end-to-end latency
     use_cached = config.get("use_cached_fixtures", True)
     mongodb_live = config.get("mongodb_live")
+    model_download = config.get("model_download_observed", False)
+    latency_sample_count = config.get("latency_sample_count", 0)
     if use_cached or not mongodb_live:
         claims.append(ClaimStatus(
             claim="Live end-to-end latency",
             status="needs_more_evidence",
             blocker="Cached fixtures used or MongoDB not live" if use_cached else "MongoDB not confirmed live",
         ))
+    elif model_download:
+        claims.append(ClaimStatus(
+            claim="Live end-to-end latency",
+            status="needs_more_evidence",
+            blocker="Model download observed — latency is cold runtime, not normal serving",
+        ))
+    elif latency_sample_count < 20:
+        claims.append(ClaimStatus(
+            claim="Live end-to-end latency",
+            status="needs_more_evidence",
+            blocker=f"Latency sample count {latency_sample_count} < 20",
+        ))
     else:
         claims.append(ClaimStatus(
             claim="Live end-to-end latency",
             status="supported",
-            evidence="Live MongoDB with fresh fixtures",
+            evidence=f"Live MongoDB with fresh fixtures, {latency_sample_count} samples",
         ))
 
     return claims
@@ -180,6 +271,8 @@ def generate_metrics_summary_md(
     variant_summaries = run_data.get("variant_summaries", [])
     failures = run_data.get("failures", [])
     latency = run_data.get("latency", [])
+    coverage_stats = run_data.get("coverage_stats", config)
+    cold_warm_ratio = run_data.get("cold_warm_ratio", config.get("cold_warm_ratio", {}))
 
     lines: list[str] = []
     lines.append("# Evaluation Report")
@@ -189,7 +282,59 @@ def generate_metrics_summary_md(
     lines.append(f"**K values:** {config.get('k_values', [])}")
     lines.append(f"**Relevance threshold:** {config.get('relevance_threshold', 2)}")
     lines.append(f"**Git commit:** {config.get('git_commit', 'N/A')}")
+    lines.append(f"**Python version:** {config.get('python_version', 'N/A')}")
+    lines.append(f"**Platform:** {config.get('platform', 'N/A')}")
     lines.append("")
+
+    # Report status banner
+    report_status = coverage_stats.get("report_status", config.get("report_status", "unknown"))
+    if report_status == "insufficient_judgments":
+        lines.append("> ⚠️ **PRELIMINARY RESULTS**: Insufficient relevance judgments "
+                     f"(judged={coverage_stats.get('judged_query_count', 0)}, need ≥30). "
+                     "All metrics below are directional only.")
+        lines.append("")
+    elif report_status == "insufficient_positive_judgments":
+        lines.append("> ⚠️ **PRELIMINARY RESULTS**: Insufficient positive judgments "
+                     f"(positive={coverage_stats.get('positive_judged_query_count', 0)}, need ≥20). "
+                     "Retrieval quality claims cannot be made.")
+        lines.append("")
+
+    # Judgment Coverage
+    lines.append("## Judgment Coverage")
+    lines.append("")
+    jqc = coverage_stats.get("judged_query_count", 0)
+    pjqc = coverage_stats.get("positive_judged_query_count", 0)
+    tqc = coverage_stats.get("total_query_count", 0)
+    qjcr = coverage_stats.get("query_judgment_coverage_rate", 0)
+    rjcr = coverage_stats.get("result_judgment_coverage_rate", 0)
+    lines.append("| Metric | Value | Gate | Status |")
+    lines.append("|--------|-------|------|--------|")
+    lines.append(f"| Total queries | {tqc} | — | — |")
+    lines.append(f"| Judged queries | {jqc} | ≥ 30 | {'✅' if jqc >= 30 else '❌'} |")
+    lines.append(f"| Positive judged queries | {pjqc} | ≥ 20 | {'✅' if pjqc >= 20 else '❌'} |")
+    lines.append(f"| Query coverage rate | {qjcr:.1%} | ≥ 50% | {'✅' if qjcr >= 0.5 else '❌'} |")
+    lines.append(f"| Result coverage rate | {rjcr:.1%} | — | — |")
+    lines.append(f"| Report status | **{report_status}** | — | — |")
+    lines.append("")
+
+    # Cold/Warm Distribution
+    if cold_warm_ratio:
+        lines.append("## Cold/Warm Distribution")
+        lines.append("")
+        cold_items = cold_warm_ratio.get("cold_items", 0)
+        warm_items = cold_warm_ratio.get("warm_items", 0)
+        unknown_items = cold_warm_ratio.get("unknown_items", 0)
+        cold_pct = cold_warm_ratio.get("cold_percentage", 0)
+        is_cold_dominant = cold_warm_ratio.get("dataset_is_cold_dominant", False)
+        lines.append(f"- **Cold items:** {cold_items}")
+        lines.append(f"- **Warm items:** {warm_items}")
+        lines.append(f"- **Unknown status:** {unknown_items}")
+        lines.append(f"- **Cold percentage:** {cold_pct}%")
+        if is_cold_dominant:
+            lines.append("")
+            lines.append("> ⚠️ **Dataset is cold-dominant** — Cold-start metrics measure exposure quality, "
+                         "not cold vs warm lift. Insufficient warm items for comparison.")
+        lines.append("")
 
     # Variant Availability
     lines.append("## Variant Availability")
@@ -205,20 +350,40 @@ def generate_metrics_summary_md(
     # Main Variant Comparison
     lines.append("## Variant Comparison")
     lines.append("")
-    headers = "| variant | query_count | NDCG@10 | Recall@10 | MRR@10 | Precision@5 | HitRate@10 | ColdRelevantRate@10 |"
+    headers = "| variant | query_count | metric_confidence | NDCG@10 | Recall@10 | MRR@10 | Precision@5 | HitRate@10 | ColdRelevantRate@10 | empty_results | failures |"
     lines.append(headers)
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|")
     for vs in variant_summaries:
         v = vs.get("variant", "")
         qc = vs.get("query_count", 0)
+        metric_confidence = vs.get("metric_confidence")
+        if not metric_confidence:
+            judged_for_variant = vs.get("judged_query_count", jqc)
+            if isinstance(judged_for_variant, int) and judged_for_variant >= 30:
+                metric_confidence = "high"
+            elif isinstance(judged_for_variant, int) and judged_for_variant >= 15:
+                metric_confidence = "medium"
+            else:
+                metric_confidence = "low"
         ndcg = vs.get("ndcg_at_10", "N/A")
         recall = vs.get("recall_at_10", "N/A")
         mrr = vs.get("mrr_at_10", "N/A")
         prec = vs.get("precision_at_5", "N/A")
         hr = vs.get("hit_rate_at_10", "N/A")
         cold = vs.get("cold_relevant_rate_at_10", "N/A")
-        lines.append(f"| {v} | {qc} | {ndcg} | {recall} | {mrr} | {prec} | {hr} | {cold} |")
+        # Count empty results and failures per variant
+        empty_count = sum(1 for l in latency if l.get("variant") == v and l.get("result_status") == "ok_empty")
+        fail_count = sum(1 for f in failures if f.get("variant") == v)
+        lines.append(f"| {v} | {qc} | {metric_confidence} | {ndcg} | {recall} | {mrr} | {prec} | {hr} | {cold} | {empty_count} | {fail_count} |")
     lines.append("")
+
+    # Ablation Impact Table
+    _add_ablation_impact(lines, variant_summaries)
+
+    # Slice Analysis
+    slice_summaries = run_data.get("slice_summaries", [])
+    if slice_summaries:
+        _add_slice_analysis(lines, slice_summaries, jqc)
 
     # Claim Status
     claims = decide_claim_status(variant_summaries, config, failures)
@@ -227,22 +392,12 @@ def generate_metrics_summary_md(
     lines.append("| claim | status | evidence | blocker |")
     lines.append("|---|---|---|---|")
     for c in claims:
-        lines.append(f"| {c.claim} | {c.status} | {c.evidence} | {c.blocker} |")
+        status_emoji = {"supported": "✅", "unsupported": "❌", "needs_more_evidence": "⚠️"}.get(c.status, "")
+        lines.append(f"| {c.claim} | {status_emoji} {c.status} | {c.evidence} | {c.blocker} |")
     lines.append("")
 
-    # Failure Summary
-    if failures:
-        lines.append("## Failure Summary")
-        lines.append("")
-        error_types: dict[str, int] = {}
-        for f in failures:
-            et = f.get("error_type", "unknown")
-            error_types[et] = error_types.get(et, 0) + 1
-        lines.append("| error_type | count |")
-        lines.append("|---|---|")
-        for et, cnt in sorted(error_types.items()):
-            lines.append(f"| {et} | {cnt} |")
-        lines.append("")
+    # Failure Dashboard
+    _add_failure_dashboard(lines, failures)
 
     # Latency Summary
     if latency:
@@ -266,6 +421,8 @@ def generate_metrics_summary_md(
                 lines.append(f"- **P95 total latency:** {t_p95:.1f}ms")
             confidence = "high" if len(search_latencies) >= 50 else ("medium" if len(search_latencies) >= 20 else "low")
             lines.append(f"- **Latency confidence:** {confidence}")
+            if confidence == "low":
+                lines.append("  - ⚠️ P95 latency is directional only (sample < 20)")
             lines.append("")
 
     # Automatic Recommendations
@@ -278,6 +435,9 @@ def generate_metrics_summary_md(
         lines.append("- No automatic recommendations at this time.")
     lines.append("")
 
+    # Explanation Coverage
+    _add_explanation_coverage(lines, run_data.get("results", []))
+
     # Commands Run / Not Run
     lines.append("## Commands")
     lines.append("")
@@ -288,12 +448,12 @@ def generate_metrics_summary_md(
 
     lines.append("### Commands Run")
     lines.append("")
-    lines.append(f"```bash")
+    lines.append("```bash")
     lines.append(f"python scripts/run_evaluation.py \\")
     lines.append(f"  --queries {queries_path} \\")
     lines.append(f"  --judgments {judgments_path} \\")
     lines.append(f"  --out {out_dir}")
-    lines.append(f"```")
+    lines.append("```")
     lines.append("")
 
     lines.append("### Commands Not Run")
@@ -308,6 +468,204 @@ def generate_metrics_summary_md(
     lines.append("")
 
     return "\n".join(lines)
+
+
+def _add_ablation_impact(lines: list[str], variant_summaries: list[dict[str, object]]) -> None:
+    """Add ablation impact comparison table."""
+
+    def _get(name: str) -> dict[str, object] | None:
+        return next((s for s in variant_summaries if s.get("variant") == name), None)
+
+    hybrid = _get("hybrid_union")
+    title = _get("title_only")
+    vector = _get("vector_only")
+    bm25 = _get("bm25_only")
+    no_cold = _get("hybrid_no_cold_boost")
+
+    comparisons = []
+    if hybrid and title:
+        comparisons.append(("hybrid vs title_only", hybrid, title))
+    if hybrid and vector:
+        comparisons.append(("hybrid vs vector_only", hybrid, vector))
+    if hybrid and bm25:
+        comparisons.append(("hybrid vs bm25_only", hybrid, bm25))
+    if hybrid and no_cold:
+        comparisons.append(("hybrid vs no_cold_boost", hybrid, no_cold))
+
+    if not comparisons:
+        return
+
+    lines.append("## Ablation Impact")
+    lines.append("")
+    lines.append("| comparison | delta_NDCG@10 | delta_MRR@10 | delta_ColdRelevantRate@10 | interpretation |")
+    lines.append("|---|---|---|---|---|")
+    for label, a, b in comparisons:
+        def _delta(key: str) -> str:
+            av = a.get(key)
+            bv = b.get(key)
+            if av is not None and bv is not None and isinstance(av, (int, float)) and isinstance(bv, (int, float)):
+                d = round(av - bv, 4)
+                sign = "+" if d > 0 else ""
+                return f"{sign}{d}"
+            return "N/A"
+
+        d_ndcg = _delta("ndcg_at_10")
+        d_mrr = _delta("mrr_at_10")
+        d_cold = _delta("cold_relevant_rate_at_10")
+        interp = "—"
+        if d_ndcg != "N/A":
+            val = float(d_ndcg)
+            if val > 0.05:
+                interp = "Clear improvement ✅"
+            elif val > 0:
+                interp = "Slight improvement"
+            elif val > -0.05:
+                interp = "Negligible difference"
+            else:
+                interp = "Regression ❌"
+        lines.append(f"| {label} | {d_ndcg} | {d_mrr} | {d_cold} | {interp} |")
+    lines.append("")
+
+
+def _add_slice_analysis(lines: list[str], slice_summaries: list[dict[str, object]], judged_count: int) -> None:
+    """Add slice analysis with language and intent sub-tables."""
+    lines.append("## Slice Analysis")
+    lines.append("")
+
+    # Group by slice
+    slices_by_name: dict[str, list[dict[str, object]]] = {}
+    for s in slice_summaries:
+        slice_name = str(s.get("slice", ""))
+        if slice_name:
+            slices_by_name.setdefault(slice_name, []).append(s)
+
+    language_slices = ["english", "vietnamese", "vietnamese_no_diacritic"]
+    intent_slices = ["price_filter", "compatibility", "gift", "persona", "occasion", "problem", "constraint"]
+
+    # Language slices
+    lang_entries = {k: v for k, v in slices_by_name.items() if k in language_slices}
+    if lang_entries:
+        lines.append("### Language Slices")
+        lines.append("")
+        lines.append("| Slice | Queries | Judged | Confidence | Hybrid NDCG@10 | Title NDCG@10 | Delta |")
+        lines.append("|-------|---------|--------|------------|----------------|---------------|-------|")
+        for sl in language_slices:
+            if sl not in lang_entries:
+                continue
+            entries = lang_entries[sl]
+            hybrid_entry = next((e for e in entries if e.get("variant") == "hybrid_union"), None)
+            title_entry = next((e for e in entries if e.get("variant") == "title_only"), None)
+            if hybrid_entry:
+                qc = hybrid_entry.get("query_count", 0)
+                judged = hybrid_entry.get("judged_query_count", 0)
+                conf = "high" if judged >= 15 else ("medium" if judged >= 5 else "low")
+                h_ndcg = hybrid_entry.get("ndcg_at_10", "N/A")
+                t_ndcg = title_entry.get("ndcg_at_10", "N/A") if title_entry else "N/A"
+                delta = "N/A"
+                if isinstance(h_ndcg, (int, float)) and isinstance(t_ndcg, (int, float)):
+                    d = round(h_ndcg - t_ndcg, 4)
+                    delta = f"+{d}" if d > 0 else str(d)
+                conf_mark = "⚠️" if conf == "low" else ""
+                lines.append(f"| {sl} | {qc} | {judged} | {conf} {conf_mark} | {h_ndcg} | {t_ndcg} | {delta} |")
+        lines.append("")
+
+    # Intent slices
+    intent_entries = {k: v for k, v in slices_by_name.items() if k in intent_slices}
+    if intent_entries:
+        lines.append("### Intent Slices")
+        lines.append("")
+        lines.append("| Slice | Queries | Judged | Confidence | Hybrid NDCG@10 | Best Variant |")
+        lines.append("|-------|---------|--------|------------|----------------|--------------|")
+        for sl in intent_slices:
+            if sl not in intent_entries:
+                continue
+            entries = intent_entries[sl]
+            hybrid_entry = next((e for e in entries if e.get("variant") == "hybrid_union"), None)
+            if hybrid_entry:
+                qc = hybrid_entry.get("query_count", 0)
+                judged = hybrid_entry.get("judged_query_count", 0)
+                conf = "high" if judged >= 15 else ("medium" if judged >= 5 else "low")
+                h_ndcg = hybrid_entry.get("ndcg_at_10", "N/A")
+                # Find best variant for this slice
+                best_var = "N/A"
+                best_ndcg = -1.0
+                for e in entries:
+                    v_ndcg = e.get("ndcg_at_10")
+                    if v_ndcg is not None and isinstance(v_ndcg, (int, float)) and v_ndcg > best_ndcg:
+                        best_ndcg = v_ndcg
+                        best_var = str(e.get("variant", ""))
+                conf_mark = "⚠️" if conf == "low" else ""
+                lines.append(f"| {sl} | {qc} | {judged} | {conf} {conf_mark} | {h_ndcg} | {best_var} |")
+        lines.append("")
+
+
+def _add_failure_dashboard(lines: list[str], failures: list[dict[str, Any]]) -> None:
+    """Generate detailed failure dashboard."""
+    if not failures:
+        lines.append("## Failure Dashboard")
+        lines.append("")
+        lines.append("✅ No failures recorded.")
+        lines.append("")
+        return
+
+    lines.append("## Failure Dashboard")
+    lines.append("")
+
+    # Failure matrix: group by (variant, error_type)
+    failure_matrix: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for f in failures:
+        variant = f.get("variant", "unknown")
+        error_type = f.get("error_type", "unknown")
+        key = (variant, error_type)
+        failure_matrix.setdefault(key, []).append(f)
+
+    lines.append("| Variant | Error Type | Count | Affected Queries | Next File | Next Function |")
+    lines.append("|---------|-----------|-------|------------------|-----------|---------------|")
+
+    for (variant, error_type), fails in sorted(failure_matrix.items()):
+        affected = ", ".join(sorted(set(f.get("query_id", "?") for f in fails if f.get("query_id"))))[:60]
+        next_file = fails[0].get("next_file_to_inspect", "—")
+        next_func = fails[0].get("next_function_to_inspect", "—")
+        lines.append(f"| {variant} | {error_type} | {len(fails)} | {affected} | {next_file} | {next_func} |")
+    lines.append("")
+
+    # Top failure details
+    if len(failures) > 0:
+        lines.append("### Top Failure Details")
+        lines.append("")
+        for f in failures[:10]:
+            lines.append(f"- **{f.get('variant', '?')}/{f.get('query_id', '?')}**: "
+                         f"`{f.get('error_type', '?')}` — {f.get('error', 'unknown error')}")
+            details = f.get("details") or {}
+            if isinstance(details, dict):
+                for key, value in details.items():
+                    lines.append(f"  - {key}: {value}")
+        lines.append("")
+
+
+def _add_explanation_coverage(lines: list[str], results: list[dict[str, Any]]) -> None:
+    """Add explanation readiness check section."""
+    if not results:
+        return
+
+    stats = check_explanation_quality(results)
+    total = stats["total_results"]
+    has_intent = stats["has_matched_intent"]
+    has_fact = stats["has_matched_fact"]
+    has_both = stats["has_both_explanations"]
+    full_coverage = stats["full_explanation_coverage"]
+
+    lines.append("## Explanation Coverage")
+    lines.append("")
+    lines.append(f"- **Total results:** {total}")
+    lines.append(f"- **Has matched_intent:** {has_intent} ({round(has_intent / total * 100, 1) if total else 0}%)")
+    lines.append(f"- **Has matched_fact:** {has_fact} ({round(has_fact / total * 100, 1) if total else 0}%)")
+    lines.append(f"- **Has both explanations:** {has_both} ({round(has_both / total * 100, 1) if total else 0}%)")
+    if full_coverage is not None and full_coverage < 0.5:
+        lines.append("")
+        lines.append("> ⚠️ Less than 50% of results have full explanations (both matched_intent and matched_fact). "
+                     "This may affect demo readiness.")
+    lines.append("")
 
 
 def _generate_recommendations(variant_summaries: list[dict[str, object]]) -> list[str]:

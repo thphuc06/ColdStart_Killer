@@ -128,3 +128,15 @@ class TestAggregateMetrics:
         summaries = aggregate_metrics(rows, ["variant"])
         assert summaries[0]["ndcg_at_10"] == 0.5
         assert summaries[0]["ndcg_at_10_null_count"] == 1
+
+    def test_judgment_coverage_counts(self) -> None:
+        rows = [
+            {"variant": "v1", "query_id": "q1", "has_judgments": True, "has_positive_judgment": True},
+            {"variant": "v1", "query_id": "q2", "has_judgments": True, "has_positive_judgment": False},
+            {"variant": "v1", "query_id": "q3", "has_judgments": False, "has_positive_judgment": False},
+        ]
+        summaries = aggregate_metrics(rows, ["variant"])
+        assert summaries[0]["judged_query_count"] == 2
+        assert summaries[0]["positive_judged_query_count"] == 1
+        assert summaries[0]["query_judgment_coverage_rate"] == round(2 / 3, 4)
+        assert summaries[0]["metric_confidence"] == "low"

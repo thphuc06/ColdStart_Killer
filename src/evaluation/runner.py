@@ -9,6 +9,9 @@ Import safety: no side effects at import time.
 from __future__ import annotations
 
 import json
+import platform
+import subprocess
+import sys
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -27,6 +30,16 @@ from .variants import EVALUATION_VARIANTS, run_variant
 
 
 FIXTURE_SCHEMA_VERSION = "1.0"
+
+
+def _get_git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        return "unknown"
 
 
 def build_query_fixture(query: EvaluationQuery) -> dict[str, Any]:
@@ -168,6 +181,7 @@ def run_evaluation(
 
     # 1. Build fixtures (track per-query fixture latency)
     fixture_path = output_dir / "query_fixtures.json"
+    fixture_cache_exists = fixture_path.exists()
     fixture_latency: dict[str, float] = {}
     t_fix_start = time.perf_counter()
     fixtures, fix_failures = load_or_build_fixtures(
@@ -183,6 +197,17 @@ def run_evaluation(
         fixture_latency[q.query_id] = per_query_fixture_ms
     all_failures.extend(fix_failures)
     _save_fixtures(fixtures, fixture_path, config.queries_path)
+    cache_was_used = (
+        config.use_cached_fixtures
+        and fixture_cache_exists
+        and not any(f.stage == "fixture_generation" for f in fix_failures)
+    )
+    if cache_was_used:
+        fixture_source = "cached"
+    elif use_fake_results:
+        fixture_source = "fake"
+    else:
+        fixture_source = "fresh"
 
     # 2. Index judgments
     j_by_q = judgments_by_query(judgments)
@@ -258,13 +283,124 @@ def run_evaluation(
                 slice_row["slice"] = s
                 slice_rows.append(slice_row)
     slice_summaries = aggregate_metrics(slice_rows, ["variant", "slice"])
+    vietnamese_hybrid = next(
+        (s for s in slice_summaries if s.get("variant") == "hybrid_union" and s.get("slice") == "vietnamese"),
+        {},
+    )
+    vietnamese_title = next(
+        (s for s in slice_summaries if s.get("variant") == "title_only" and s.get("slice") == "vietnamese"),
+        {},
+    )
+
+    # 5. Compute judgment coverage statistics
+    total_queries = len(queries)
+    judged_queries: set[str] = set()
+    positive_judged_queries: set[str] = set()
+    total_results = 0
+    total_judged_results = 0
+
+    for m in per_query_metrics:
+        if m.get("variant") == (variants[0] if variants else "hybrid_union"):
+            if m.get("has_judgments"):
+                judged_queries.add(str(m["query_id"]))
+            if m.get("has_positive_judgment"):
+                positive_judged_queries.add(str(m["query_id"]))
+            total_results += m.get("result_count", 0)
+            total_judged_results += m.get("judged_result_count", 0)
+
+    # Vietnamese slice judged count
+    vi_judged_queries: set[str] = set()
+    for m in per_query_metrics:
+        slices_str = str(m.get("slices", ""))
+        if "vietnamese" in slices_str and m.get("has_judgments"):
+            vi_judged_queries.add(str(m["query_id"]))
+
+    # Determine report status
+    judged_count = len(judged_queries)
+    positive_count = len(positive_judged_queries)
+    if judged_count < 30:
+        report_status = "insufficient_judgments"
+    elif positive_count < 20:
+        report_status = "insufficient_positive_judgments"
+    else:
+        report_status = "sufficient"
+
+    coverage_stats = {
+        "total_query_count": total_queries,
+        "judged_query_count": judged_count,
+        "positive_judged_query_count": positive_count,
+        "query_judgment_coverage_rate": round(judged_count / total_queries, 4) if total_queries else 0,
+        "result_judgment_coverage_rate": round(total_judged_results / total_results, 4) if total_results else 0,
+        "report_status": report_status,
+        "vietnamese_judged_query_count": len(vi_judged_queries),
+    }
+
+    # 6. Compute cold/warm distribution
+    cold_item_ids: set[str] = set()
+    warm_item_ids: set[str] = set()
+    unknown_item_ids: set[str] = set()
+    for r in all_results:
+        if r.variant == (variants[0] if variants else "hybrid_union"):
+            if r.is_cold_item is True:
+                cold_item_ids.add(r.item_id)
+            elif r.is_cold_item is False:
+                warm_item_ids.add(r.item_id)
+            else:
+                unknown_item_ids.add(r.item_id)
+
+    total_known = len(cold_item_ids) + len(warm_item_ids)
+    cold_pct = round(len(cold_item_ids) / max(total_known, 1) * 100, 1)
+    cold_warm_ratio = {
+        "cold_items": len(cold_item_ids),
+        "warm_items": len(warm_item_ids),
+        "unknown_items": len(unknown_item_ids),
+        "cold_percentage": cold_pct,
+        "dataset_is_cold_dominant": len(cold_item_ids) > len(warm_item_ids) * 3 if warm_item_ids else True,
+    }
+
+    # 7. Enrich config with coverage stats for claim gating
+    enriched_config = dict(asdict(config))
+    mongodb_source = (
+        "fake_results" if use_fake_results
+        else "injected_collection" if collection is not None or items_collection is not None
+        else "live"
+    )
+    mongodb_live = config.mongodb_live
+    if mongodb_live is None:
+        mongodb_live = mongodb_source == "live"
+
+    enriched_config.update(coverage_stats)
+    enriched_config.update({
+        "created_at": config.created_at or time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "git_commit": config.git_commit or _get_git_commit(),
+        "plan_version": config.plan_version or "v2.0",
+        "code_version": config.code_version or "2.0.0",
+        "python_version": config.python_version or sys.version,
+        "platform": config.platform or platform.platform(),
+        "mongodb_live": mongodb_live,
+        "mongodb_source": mongodb_source,
+        "fixture_source": fixture_source,
+        "warm_cache": cache_was_used,
+        "judgment_count": len(judgments),
+        "query_count": len(queries),
+        "result_count": len(all_results),
+        "fixture_schema_version": FIXTURE_SCHEMA_VERSION,
+        "dataset_is_cold_dominant": cold_warm_ratio["dataset_is_cold_dominant"],
+        "cold_warm_ratio": cold_warm_ratio,
+        "latency_sample_count": len(latency_rows),
+        "vietnamese_hybrid_ndcg_at_10": vietnamese_hybrid.get("ndcg_at_10"),
+        "vietnamese_title_ndcg_at_10": vietnamese_title.get("ndcg_at_10"),
+    })
 
     return {
-        "config": asdict(config),
+        "config": enriched_config,
+        "queries": [asdict(q) for q in queries],
         "results": [asdict(r) for r in all_results],
         "per_query_metrics": per_query_metrics,
         "variant_summaries": variant_summaries,
         "slice_summaries": slice_summaries,
         "latency": latency_rows,
         "failures": [asdict(f) for f in all_failures],
+        "coverage_stats": coverage_stats,
+        "cold_warm_ratio": cold_warm_ratio,
     }

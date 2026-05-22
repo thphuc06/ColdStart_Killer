@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 import pytest
 
+from src.search_pipeline import build_union_with_pipeline, build_union_with_pipeline_parametrized
 from src.evaluation.variants import EVALUATION_VARIANTS, run_variant
 
 
@@ -87,7 +88,7 @@ class TestRunVariant:
         assert results[0].item_id == "B001"
         assert coll.pipeline is not None
 
-    def test_hybrid_no_cold_boost_subtracts_boost(self) -> None:
+    def test_hybrid_no_cold_boost_disables_boost_before_sort(self) -> None:
         coll = MockCollection()
         results, failure = run_variant(
             MOCK_FIXTURE, "hybrid_no_cold_boost", "q001", 10,
@@ -95,10 +96,31 @@ class TestRunVariant:
         )
         assert failure is None
         assert len(results) == 1
-        # Score should be original score minus cold_start_boost (0.03)
-        # Original: 0.92, cold_boost: 0.03 -> expected ~0.89
-        assert results[0].score < 0.92
+        assert results[0].score == 0.92
         assert results[0].variant == "hybrid_no_cold_boost"
+        assert coll.pipeline is not None
+
+        bonus_stage_idx = next(
+            i for i, stage in enumerate(coll.pipeline)
+            if "$addFields" in stage and "cold_start_boost" in stage["$addFields"]
+        )
+        score_stage_idx = next(
+            i for i, stage in enumerate(coll.pipeline)
+            if "$addFields" in stage and "score" in stage["$addFields"]
+        )
+        sort_stage_idx = next(i for i, stage in enumerate(coll.pipeline) if "$sort" in stage)
+        limit_stage_idx = next(i for i, stage in enumerate(coll.pipeline) if "$limit" in stage)
+
+        assert coll.pipeline[bonus_stage_idx]["$addFields"]["cold_start_boost"] == 0
+        assert bonus_stage_idx < score_stage_idx < sort_stage_idx < limit_stage_idx
+        score_components = coll.pipeline[score_stage_idx]["$addFields"]["score"]["$add"]
+        assert "$cold_start_boost" not in score_components
+
+    def test_production_pipeline_matches_parametrized_defaults(self) -> None:
+        assert build_union_with_pipeline(MOCK_FIXTURE, top_k=10) == build_union_with_pipeline_parametrized(
+            MOCK_FIXTURE,
+            top_k=10,
+        )
 
     def test_title_only_with_mock(self) -> None:
         coll = MockCollection()
