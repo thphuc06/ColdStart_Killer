@@ -11,10 +11,10 @@ This phase builds:
 - A notebook-generated 3,000-item MVP dataset from Amazon Reviews 2023 metadata.
 - MongoDB insertion code for `items` and `retrieval_units`.
 - Buyer query processing and hybrid retrieval checks through notebooks/scripts.
+- **Retrieval evaluation** framework with 3 layers (diagnostics, IR metrics, demo readiness), 5 search variants, 50 queries, 20 probes.
 
 This phase explicitly does not build:
 
-- Retrieval evaluation yet.
 - Buyer search UI.
 
 ## Dataset Policy
@@ -116,7 +116,29 @@ Atlas Search:
 - Embeddings are stored as normal Python float lists for MVP simplicity.
 - `bindata_float32` is not implemented yet.
 - Bulk LLM generation is sequential and intentionally conservative.
-- No full evaluation or ablation exists in this phase.
+
+## LLM Configuration
+
+- **Model**: Qwen3:8b running locally via Ollama.
+- **Uses**: Vietnamese→English translation (`query_processor.py`), HyPE query generation (`llm_hype.py`), proposition extraction (`llm_propositions.py`).
+- **Config**: Set `OLLAMA_MODEL=qwen3:8b` in `.env`. Default in `src/config.py`.
+
+## Evaluation Framework
+
+The evaluation framework measures retrieval quality across 5 search variants:
+
+- `title_only` — weak regex baseline on `items.title_en`.
+- `vector_only` — HyPE vector search only.
+- `bm25_only` — BM25 proposition search only.
+- `hybrid_union` — production pipeline (vector + BM25 + bonuses).
+- `hybrid_no_cold_boost` — ablation: remove `COLD_START_BOOST`.
+
+Key files:
+
+- `src/evaluation/` — Python package (contracts, dataset, diagnostics, metrics, variants, runner, reporting).
+- `evaluation/` — Data files (50 queries, 20 probes, judgments).
+- `scripts/run_evaluation.py` — CLI (supports `--use-fake-results` for smoke testing without MongoDB).
+- `notebooks/05_evaluation_retrieval_quality.ipynb` — Interactive evaluation notebook.
 
 ## Commands to run later
 
@@ -149,7 +171,8 @@ source .venv/bin/activate
 
 ## Next Phase Suggestion
 
-Build retrieval evaluation and demo polish after this phase is verified end to end:
+Build buyer-facing UI polish after evaluation results are reviewed:
 
-- Retrieval evaluation and ablation.
 - Buyer-facing UI polish if needed.
+- Expand judgment labeling for more complete NDCG/Recall scores.
+- Add more evaluation queries for underrepresented slices.

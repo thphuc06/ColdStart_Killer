@@ -32,3 +32,6 @@ Thumbs.db
 *.log
 *.jsonl
 *.parquet
+
+# Runtime
+.runtime/

@@ -19,7 +19,6 @@ This phase does:
 This phase does not do:
 
 - Buyer search UI.
-- Evaluation or ablation.
 
 ## Phase 0: Setup
 
@@ -334,6 +333,88 @@ python scripts/clear_demo_data.py --yes
 ```
 
 Use cleanup carefully. It deletes documents from MongoDB.
+
+## Phase 7: Evaluation
+
+Run retrieval evaluation to measure search quality across 5 variants.
+
+### Step 1: Layer 1 Diagnostics (no MongoDB required)
+
+```bash
+python scripts/run_eval_diagnostics.py \
+    --probes evaluation/queries/diagnostic_probes.json \
+    --out .runtime/evaluation/diagnostics
+```
+
+Expected result:
+
+- Diagnostics summary with pass rate.
+- Known risks documented.
+
+### Step 2: Smoke Test (no MongoDB/Ollama/BGE-M3 required)
+
+```bash
+python scripts/run_evaluation.py \
+    --queries evaluation/queries/retrieval_queries_seed.json \
+    --judgments evaluation/judgments/retrieval_judgments_seed.json \
+    --out .runtime/evaluation/smoke \
+    --use-fake-results
+```
+
+Expected result:
+
+- `Evaluation completed in 0.1s`
+- `Results: 750`, `Failures: 0`
+- `metrics_summary.md` generated in output directory.
+
+### Step 3: Build Judgment Pool (requires MongoDB + Ollama + BGE-M3)
+
+```bash
+python scripts/build_eval_pool.py \
+    --queries evaluation/queries/retrieval_queries_seed.json \
+    --out .runtime/evaluation/pool \
+    --top-k 20
+```
+
+Expected result:
+
+- `judgment_pool.csv` with (query, item) pairs for manual labeling under `.runtime/evaluation/pool/`.
+
+### Step 3.5: Import Judgments (converts CSV to validated JSON)
+
+After labeling the CSV file (filling in the `relevance` column from 0-3), run:
+
+```bash
+python scripts/import_eval_judgments.py \
+    --csv .runtime/evaluation/pool/judgment_pool.csv \
+    --out evaluation/judgments/retrieval_judgments_seed.json
+```
+
+Expected result:
+
+- `evaluation/judgments/retrieval_judgments_seed.json` is populated with the human relevance judgments.
+
+### Step 4: Full Evaluation (requires judgments)
+
+```bash
+python scripts/run_evaluation.py \
+    --queries evaluation/queries/retrieval_queries_seed.json \
+    --judgments evaluation/judgments/retrieval_judgments_seed.json \
+    --out .runtime/evaluation/eval_seed
+```
+
+Expected result:
+
+- `metrics_summary.md` with Variant Comparison, Claim Status, Latency, Recommendations.
+- All 9 output artifacts in the output directory.
+
+### Step 5: Evaluation Notebook
+
+Open `notebooks/05_evaluation_retrieval_quality.ipynb`, set `USE_FAKE_RESULTS = True` or `False`, Run All Cells.
+
+LLM model: Qwen3:8b chạy local bằng Ollama. Cấu hình trong `.env` với `OLLAMA_MODEL=qwen3:8b`.
+
+## Phase 8: Optional Cleanup
 
 ## Troubleshooting
 
