@@ -1891,6 +1891,10 @@ pytest
 
 - Read HyPE units where `unit_type = "hype_question"`.
 - Group by `item_id`.
+- Do not sort all `retrieval_units` by `item_id` on Atlas M0.
+  - The collection can exceed the 32MB in-memory sort limit.
+  - Limited dry-runs should fetch item ids first, then fetch HyPE units per item.
+  - Full builds should stream HyPE units and group client-side unless a supporting index or higher Atlas tier is confirmed.
 - Validate `embedding` is 1024-dimensional.
 - Reject/skip NaN/Inf embeddings with clear counters.
 - Compute weighted centroid.

@@ -30,6 +30,58 @@ def get_retrieval_units_collection() -> Collection:
     return get_database()["retrieval_units"]
 
 
+def get_users_collection() -> Collection:
+    return get_database()["users"]
+
+
+def get_sessions_collection() -> Collection:
+    return get_database()["sessions"]
+
+
+def get_recommendation_logs_collection() -> Collection:
+    return get_database()["recommendation_logs"]
+
+
+def get_clickstream_events_collection() -> Collection:
+    return get_database()["clickstream_events"]
+
+
+def get_user_item_signals_collection() -> Collection:
+    return get_database()["user_item_signals"]
+
+
+def get_user_profiles_collection() -> Collection:
+    return get_database()["user_profiles"]
+
+
+def get_item_hype_profiles_collection() -> Collection:
+    return get_database()["item_hype_profiles"]
+
+
+def get_item_semantic_neighbors_collection() -> Collection:
+    return get_database()["item_semantic_neighbors"]
+
+
+def get_item_item_cf_edges_collection() -> Collection:
+    return get_database()["item_item_cf_edges"]
+
+
+def get_item_stats_collection() -> Collection:
+    return get_database()["item_stats"]
+
+
+def get_query_embedding_cache_collection() -> Collection:
+    return get_database()["query_embedding_cache"]
+
+
+def get_synthetic_personas_collection() -> Collection:
+    return get_database()["synthetic_personas"]
+
+
+def get_evaluation_runs_collection() -> Collection:
+    return get_database()["evaluation_runs"]
+
+
 def ping_mongodb() -> dict[str, Any]:
     try:
         result = get_mongo_client().admin.command("ping")

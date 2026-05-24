@@ -46,6 +46,17 @@ class Settings:
     m0_safe_limit: int
     dedicated_full_limit: int
     mongodb_timeout_ms: int
+    vector_index_name: str
+    text_index_name: str
+    api_host: str
+    api_port: int
+    demo_mode: bool
+    enable_personalization: bool
+    enable_event_logging: bool
+    algorithm_version: str
+    ranking_version: str
+    event_ttl_days: int
+    cors_allow_origins: str
 
 
 def get_settings() -> Settings:
@@ -61,6 +72,17 @@ def get_settings() -> Settings:
         m0_safe_limit=env_int("M0_SAFE_LIMIT", 3000),
         dedicated_full_limit=env_int("DEDICATED_FULL_LIMIT", 5000),
         mongodb_timeout_ms=env_int("MONGODB_TIMEOUT_MS", 10_000),
+        vector_index_name=os.getenv("VECTOR_INDEX_NAME", "vector_index"),
+        text_index_name=os.getenv("TEXT_INDEX_NAME", "text_index"),
+        api_host=os.getenv("API_HOST", "127.0.0.1"),
+        api_port=env_int("API_PORT", 8000),
+        demo_mode=env_bool("DEMO_MODE", True),
+        enable_personalization=env_bool("ENABLE_PERSONALIZATION", True),
+        enable_event_logging=env_bool("ENABLE_EVENT_LOGGING", True),
+        algorithm_version=os.getenv("ALGORITHM_VERSION", "rec_v1_profile_cf_hype"),
+        ranking_version=os.getenv("RANKING_VERSION", "rank_v1_default_weights"),
+        event_ttl_days=env_int("EVENT_TTL_DAYS", 0),
+        cors_allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173"),
     )
 
 
