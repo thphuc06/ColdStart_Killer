@@ -75,17 +75,28 @@ Expected output ví dụ:
 ```json
 {
   "ok": true,
-  "result": {
-    "ok": 1
-  },
+  "result": {"ok": 1},
   "database": "coldstart_killer",
   "counts": {
     "ok": true,
-    "items": 1610,
-    "retrieval_units": 16332
+    "items": 3000,
+    "retrieval_units": 29753
   }
 }
 ```
+
+Live MongoDB snapshot đã verify:
+
+| Metric | Value |
+|--------|------:|
+| items | 3,000 |
+| retrieval_units | 29,753 |
+| HyPE units | 13,580 |
+| proposition units | 16,173 |
+| cold items | 3,000 (100% cold — interaction_count=0) |
+| categories | All_Beauty, Cell_Phones_and_Accessories |
+| VECTOR_NUM_CANDIDATES | 400 |
+| VECTOR_CHANNEL_LIMIT | 20 |
 
 Atlas Search `text_index` phải có mapping đầy đủ sau:
 
@@ -143,7 +154,7 @@ tests/... PASSED
 | tests/test_evaluation_guardrails.py | import safety, read-only, constant mutation | ❌ |
 | tests/test_evaluation_runner.py | evaluation runner + reporting | ❌ |
 | tests/test_evaluation_variants.py | variant runners + failure handling | ❌ |
-| tests/test_import_eval_judgments.py | human judgment import script | ❌ |
+| tests/test_import_eval_judgments.py | AI-assisted judgment import script | ❌ |
 | tests/test_indexing.py | indexing | ✅ requires Ollama |
 | tests/test_llm_propositions.py | LLM propositions | ✅ requires Ollama |
 | tests/test_llm_client.py | LLM client | ✅ requires ollama package |
@@ -264,8 +275,7 @@ Fixture format:
 
 Note:
 
-- `hard_filters` chỉ chứa: `in_stock`, `price_max`, `price_min`.
-- `category_id` KHÔNG phải filter; category được xử lý bằng embedding semantics.
+- `category_id` is NOT a hard filter — category intent is handled by BGE-M3 embedding semantics in `$vectorSearch`. `hard_filters` only supports: `in_stock`, `price_max`, `price_min`.
 - `query_embedding` là float array 1024-dim được tạo bởi BAAI/bge-m3.
 
 ---
@@ -273,7 +283,9 @@ Note:
 ## ✅ Checklist trước khi Demo
 
 - [ ] MongoDB connected (smoke_test_connection PASS)
-- [ ] Data indexed (~1,610 items, ~16,332 retrieval_units)
+- [ ] Data indexed (~3,000 items, ~29,753 retrieval_units)
+- [ ] HyPE units indexed (~13,580 HyPE units)
+- [ ] Proposition units indexed (~16,173 proposition units)
 - [ ] Atlas vector_index status: READY
 - [ ] Atlas text_index status: READY
 - [ ] Ollama running (ollama serve)
@@ -296,7 +308,7 @@ scripts/run_search.py                   # CLI search bằng precomputed fixture
 scripts/run_evaluation.py               # Full evaluation CLI (hỗ trợ --use-fake-results)
 scripts/run_eval_diagnostics.py         # Layer 1 diagnostic probes
 scripts/build_eval_pool.py              # Tạo judgment pool cho manual labeling
-scripts/import_eval_judgments.py        # Import human judgments từ CSV sang JSON
+scripts/import_eval_judgments.py        # Import AI-assisted conservative judgments từ CSV sang JSON
 src/query_processor.py                  # Raw query → search-ready fixture (dùng Qwen3:8b + BGE-M3)
 src/search_pipeline.py                  # MongoDB hybrid search aggregation
 src/retrieval_output.py                 # Explainable output formatting

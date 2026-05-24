@@ -19,8 +19,8 @@
 | Embedding model (BAAI/bge-m3, 1024-dim, normalized) | BAAI/bge-m3 1024-dimensional normalized embeddings | Implemented | Match |
 | Hybrid retrieval (`$unionWith` default + optional `$rankFusion`) | Native `$rankFusion` plus `$unionWith` fallback | `$unionWith` is the stable default; `$rankFusion` builder is retained for higher Atlas tiers | Free-tier compatible |
 | RRF scoring (k=60) | Reciprocal Rank Fusion with k=60 | Implemented | Match |
-| Vector search (`numCandidates=400`, channel `limit=20`) | `$vectorSearch` over HyPE units | Implemented | Current tuned setting |
-| Evaluation framework | 30-50 queries, ablation A0-A6 | Implemented and populated | 50 retrieval queries, 20 diagnostic probes, 2,119 relevance judgments, 5 retrieval variants, automated diagnostics (Layer 1), IR metrics computation (Layer 2), claim verification (Layer 3), coverage/confidence gates, and hackathon impact reporting. Latest live run produced 2,425 results with 0 failures. |
+| Vector search (`numCandidates=400`, channel `limit=20`) | `$vectorSearch` over HyPE units | Implemented | `VECTOR_NUM_CANDIDATES = 400`, `VECTOR_CHANNEL_LIMIT = 20` (20x ratio per MongoDB ANN recommendations) |
+| Evaluation framework | 30-50 queries, ablation A0-A6 | Implemented and populated | 50 retrieval queries, 20 diagnostic probes, 2,119 AI-assisted conservative relevance judgments, 5 retrieval variants, automated diagnostics (Layer 1), IR metrics computation (Layer 2), claim verification (Layer 3), coverage/confidence gates, and hackathon impact reporting. Latest live run produced 2,425 results with 0 failures. |
 
 ---
 
@@ -28,8 +28,8 @@
 
 | Component | Spec Said | Actually Built | Reason |
 |-----------|-----------|----------------|--------|
-| Dataset | 3,000-item MVP / 20-category diverse slice | `mvp_3000_items_diverse.csv` with 3,000 indexed products | Scope adjusted for hackathon timeline |
-| Indexed items | ~30,000 retrieval units projected | 3,000 items / ~29,753 retrieval units actual | Matches current MVP dataset |
+| Dataset | 3,000-item MVP / broader category-diverse slice | 3,000 items / 2 categories (All_Beauty + Cell_Phones_and_Accessories) | Scope adjusted for hackathon timeline |
+| Indexed items / retrieval units | Full MVP indexing target | 3,000 items / 29,753 retrieval_units actual | Matches current MVP dataset |
 | Atlas index names | `retrieval_units_vector_idx` / `retrieval_units_text_idx` | `vector_index` / `text_index` | Simplified naming during Atlas setup |
 | BM25 target | Proposition-only | Proposition-only (`unit_type = proposition`) | Match |
 | Fusion weights | Dynamic by query type | Fixed 0.60 vector / 0.40 BM25 | Query type detection not implemented |
@@ -50,7 +50,7 @@
 | Diversity cap | 3 items/category | Not built | Low |
 | Recency/seller/metadata scoring | Additional score signals | Not built | Low |
 | Buyer UI | Query inspector + result cards | Not built | High |
-| Electronics + Fashion categories | 4-category dataset | Not built | Low |
+| Additional categories beyond All_Beauty + Cell_Phones_and_Accessories | Broader multi-category dataset | Not built | Low |
 
 ---
 
@@ -58,7 +58,7 @@
 
 | Component | Description |
 |-----------|-------------|
-| `src/query_processor.py` | Real user query processing: language detect, translate VI→EN, price/category filter extraction, HyPE/BM25 text generation, BGE-M3 embedding |
+| `src/query_processor.py` | Real user query processing: language detect, translate VI→EN, price filter extraction, HyPE/BM25 text generation, BGE-M3 embedding |
 | `scripts/run_search.py` | CLI for fixture-based search testing |
 | `notebooks/03_buyer_search_pipeline_test.ipynb` | Integration health test notebook |
 | `notebooks/04_demo_buyer_search.ipynb` | End-to-end demo notebook for video recording |
@@ -84,15 +84,17 @@
 
 | Metric | Value |
 |--------|-------|
-| Source dataset | ~3,000 items |
-| Indexed items | 3,000 |
-| Retrieval units | ~29,753 |
-| HyPE units (with embedding) | ~13,580 |
-| Proposition units | ~16,173 |
-| Categories | 20-category diverse MVP slice |
-| Embedding model | BAAI/bge-m3 (1024-dim) |
-| LLM | Qwen3:8B via Ollama |
-| Atlas indexes | `vector_index`, `text_index` |
+| items | 3,000 |
+| retrieval_units | 29,753 |
+| HyPE units | 13,580 |
+| proposition units | 16,173 |
+| cold items | 3,000 (100% cold — interaction_count=0) |
+| categories | All_Beauty, Cell_Phones_and_Accessories |
+| source dataset | ~3,000 rows (fully indexed) |
+
+**Vector search setting:** `VECTOR_NUM_CANDIDATES = 400`, `VECTOR_CHANNEL_LIMIT = 20` (20x ratio per MongoDB ANN recommendations).
+
+**Category filter setting:** `category_id` is NOT a hard filter — category intent is handled by BGE-M3 embedding semantics in `$vectorSearch`. `hard_filters` only supports: `in_stock`, `price_max`, `price_min`.
 
 ---
 
@@ -111,7 +113,7 @@ python scripts/run_evaluation.py \
 |-------|---------------|
 | Retrieval queries | 50 |
 | Diagnostic probes | 20 |
-| Relevance judgments | 2,119 |
+| AI-assisted conservative judgments | 2,119 |
 | Judged queries | 50 |
 | Seed queries with relevance >= 2 | 43 |
 | Positive judged queries in latest live report | 37 |

@@ -14,7 +14,7 @@ This phase includes:
 - English propositions and English HyPE queries.
 - BAAI/bge-m3 embeddings for HyPE queries only.
 - Product images preserved for result display.
-- **Retrieval evaluation** with 5 variants, 50 queries, 20 diagnostic probes, 2,119 relevance judgments, and IR metrics (NDCG, Recall, MRR, Precision, HitRate, cold-start exposure quality).
+- **Retrieval evaluation** with 5 variants, 50 queries, 20 diagnostic probes, AI-assisted conservative relevance judgments (2,119 query-item pairs labeled using LLM with conservative scoring — human audit recommended before claiming as full ground truth), and IR metrics (NDCG, Recall, MRR, Precision, HitRate, cold-start exposure quality).
 - **Hackathon impact reporting** with variant deltas, qualitative examples, business-impact stories, Vietnamese slice analysis, and cold-start caveats.
 
 This phase does not include:
@@ -37,7 +37,7 @@ Result summary:
 | Item | Current value |
 |---|---:|
 | Retrieval queries | 50 |
-| Relevance judgments | 2,119 |
+| AI-assisted conservative judgments | 2,119 |
 | Judged queries | 50 |
 | Queries with relevance >= 2 | 43 |
 | Live retrieval results | 2,425 |
@@ -46,6 +46,21 @@ Result summary:
 | Dataset cold percentage | 100.0% |
 | Search P95 latency | 116.5ms |
 | Total P95 latency | 1173.0ms |
+
+Live MongoDB data snapshot:
+
+| Metric | Current value |
+|---|---:|
+| items | 3,000 |
+| retrieval_units | 29,753 |
+| HyPE units | 13,580 |
+| proposition units | 16,173 |
+| cold items | 3,000 (100% cold — interaction_count=0) |
+| categories | All_Beauty, Cell_Phones_and_Accessories |
+| VECTOR_NUM_CANDIDATES | 400 |
+| VECTOR_CHANNEL_LIMIT | 20 |
+
+`category_id` is NOT a hard filter — category intent is handled by BGE-M3 embedding semantics in `$vectorSearch`. `hard_filters` only supports: `in_stock`, `price_max`, `price_min`.
 
 Main live metrics:
 
@@ -68,7 +83,9 @@ Live report artifacts:
 
 Interpretation caveats:
 
-- The current relevance labels are AI-assisted conservative judgments. They are sufficient for local evaluation gates, but a human audit is recommended before publication-grade claims.
+> ⚠️ Evaluation labels are AI-assisted, not fully human-audited. NDCG and recall metrics reflect AI-label quality, not human oracle quality.
+
+- The current relevance labels are AI-assisted conservative relevance judgments (2,119 query-item pairs labeled using LLM with conservative scoring — human audit recommended before claiming as full ground truth). They are sufficient for local evaluation gates, but a human audit is recommended before publication-grade claims.
 - The live dataset is cold-dominant (`warm_items = 0` in the latest run), so cold-start metrics are framed as **exposure quality**, not cold-vs-warm lift.
 - `Cold-start window was measured` remains `needs_more_evidence` until source data includes `indexed_at` and `first_seen_in_top_k_at`.
 - Live MongoDB search latency is below the 400ms target in the latest run, but total reported latency is still above 400ms. Treat query processing and embedding/translation caching as demo hardening work.
@@ -212,6 +229,8 @@ Dataset loading uses selected Amazon Reviews 2023 metadata only:
 - All_Beauty metadata: full parquet first, streaming JSONL fallback.
 - Cell_Phones_and_Accessories metadata: streaming JSONL, first 20,000 rows.
 - Optional All_Beauty review sample: audit metadata only.
+
+Dataset covers 2 source categories: All_Beauty and Cell_Phones_and_Accessories.
 
 Reviews are not used as retrieval features.
 

@@ -2,7 +2,9 @@
 
 This directory contains the evaluation data for ColdStart_Killer retrieval quality assessment.
 
-The current evaluation seed is no longer empty. It includes 50 retrieval queries, 20 diagnostic probes, and 2,119 relevance judgments.
+The current evaluation seed is no longer empty. It includes 50 retrieval queries, 20 diagnostic probes, and AI-assisted conservative judgments.
+
+> ⚠️ Labels are AI-assisted (LLM-scored with conservative thresholds), not fully human-audited ground truth. Treat NDCG/Recall as indicative metrics.
 
 ## Current Status
 
@@ -21,7 +23,7 @@ Result summary:
 |---|---:|
 | Retrieval queries | 50 |
 | Diagnostic probes | 20 |
-| Relevance judgments | 2,119 |
+| AI-assisted conservative judgments | 2,119 |
 | Judged queries | 50 |
 | Queries with relevance >= 2 | 43 |
 | Live retrieval results | 2,425 |
@@ -29,6 +31,21 @@ Result summary:
 | Report status | sufficient |
 | Search P95 latency | 116.5ms |
 | Total P95 latency | 1173.0ms |
+
+Live MongoDB data snapshot:
+
+| Metric | Value |
+|---|---:|
+| items | 3,000 |
+| retrieval_units | 29,753 |
+| HyPE units | 13,580 |
+| proposition units | 16,173 |
+| cold items | 3,000 (100% cold — interaction_count=0) |
+| categories | All_Beauty, Cell_Phones_and_Accessories |
+| VECTOR_NUM_CANDIDATES | 400 |
+| VECTOR_CHANNEL_LIMIT | 20 |
+
+`category_id` is NOT a hard filter — category intent is handled by BGE-M3 embedding semantics in `$vectorSearch`. `hard_filters` only supports: `in_stock`, `price_max`, `price_min`.
 
 Main live metrics:
 
@@ -55,7 +72,7 @@ evaluation/
     diagnostic_probes.json      # 20 Layer-1 diagnostic probes
     retrieval_queries_seed.json # 50 Layer-2 retrieval queries
   judgments/
-    retrieval_judgments_seed.json # 2,119 relevance judgments
+    retrieval_judgments_seed.json # 2,119 AI-assisted conservative judgments
 ```
 
 Runtime artifacts are written under `.runtime/evaluation/<run_id>/`.
@@ -78,7 +95,7 @@ Layer 1 checks query processing behavior:
 - Language detection.
 - Vietnamese to English translation path.
 - Price filter extraction.
-- Category/filter extraction.
+- Price/filter extraction; category intent is handled by embedding semantics, not hard filters.
 - Known unsupported cases and edge cases.
 
 Run:

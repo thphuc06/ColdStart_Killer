@@ -8,7 +8,7 @@ This phase does:
 
 - Pull selected Amazon Reviews 2023 product metadata.
 - Normalize and audit metadata.
-- Build a rich, category-diverse 3,000-item MVP dataset.
+- Build a 3,000-item MVP dataset across 2 source categories: All_Beauty and Cell_Phones_and_Accessories.
 - Generate English propositions and English HyPE queries.
 - Embed HyPE queries only with BAAI/bge-m3.
 - Insert `items` and `retrieval_units` into MongoDB.
@@ -19,6 +19,21 @@ This phase does:
 This phase does not do:
 
 - Buyer search UI.
+
+Verified live MongoDB data snapshot:
+
+| Metric | Value |
+|--------|------:|
+| items | 3,000 |
+| retrieval_units | 29,753 |
+| HyPE units | 13,580 |
+| proposition units | 16,173 |
+| cold items | 3,000 (100% cold — interaction_count=0) |
+| categories | All_Beauty, Cell_Phones_and_Accessories |
+| VECTOR_NUM_CANDIDATES | 400 |
+| VECTOR_CHANNEL_LIMIT | 20 |
+
+`category_id` is NOT a hard filter — category intent is handled by BGE-M3 embedding semantics in `$vectorSearch`. `hard_filters` only supports: `in_stock`, `price_max`, `price_min`.
 
 ## Phase 0: Setup
 
@@ -158,7 +173,7 @@ What it does:
 - Builds `product_text_for_llm`.
 - Scores richness.
 - Builds a highest-quality control dataset.
-- Builds a category-diverse 3,000-item dataset.
+- Builds a 3,000-item dataset across All_Beauty and Cell_Phones_and_Accessories.
 
 Script alternative:
 
@@ -392,7 +407,7 @@ python scripts/import_eval_judgments.py \
 
 Expected result:
 
-- `evaluation/judgments/retrieval_judgments_seed.json` is populated with the human relevance judgments.
+- `evaluation/judgments/retrieval_judgments_seed.json` is populated with AI-assisted conservative relevance judgments.
 
 ### Step 4: Full Evaluation (requires judgments)
 
