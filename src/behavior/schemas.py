@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.recommendation.schemas import EMBEDDING_DIM
 from src.utils import utc_now_iso
 
 
@@ -26,6 +28,17 @@ def _non_empty(value: str, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{field_name} must be a non-empty string")
     return value.strip()
+
+
+def _validate_optional_embedding(value: list[float] | None, field_name: str) -> list[float] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) != EMBEDDING_DIM:
+        raise ValueError(f"{field_name} must be a {EMBEDDING_DIM}-dimensional embedding")
+    normalized = [float(item) for item in value]
+    if not all(math.isfinite(item) for item in normalized):
+        raise ValueError(f"{field_name} must contain only finite values")
+    return normalized
 
 
 class PrivacySettings(BaseModel):
@@ -84,6 +97,12 @@ class RecommendationQueryContext(BaseModel):
     english_query: str = ""
     query_type: Literal["specific", "constraint_rich", "normal", "broad", "exploratory", "none"] = "none"
     query_embedding_hash: str | None = None
+    query_embedding: list[float] | None = None
+
+    @field_validator("query_embedding")
+    @classmethod
+    def validate_query_embedding(cls, value: list[float] | None) -> list[float] | None:
+        return _validate_optional_embedding(value, "query_embedding")
 
 
 class RecommendationScores(BaseModel):
@@ -117,8 +136,15 @@ class RecommendationAttribution(BaseModel):
     matched_channels: list[str] = Field(default_factory=list)
     candidate_sources: list[str] = Field(default_factory=list)
     matched_profile_interest_ids: list[str] = Field(default_factory=list)
+    matched_interest_embedding: list[float] | None = None
+    matched_neighbor_embedding: list[float] | None = None
     cf_evidence: CFEvidence | None = None
     explanation: str = ""
+
+    @field_validator("matched_interest_embedding", "matched_neighbor_embedding")
+    @classmethod
+    def validate_attribution_embedding(cls, value: list[float] | None, info) -> list[float] | None:
+        return _validate_optional_embedding(value, info.field_name)
 
 
 class RecommendationLogDocument(BaseModel):

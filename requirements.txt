@@ -11,4 +11,7 @@ ollama
 numpy
 pytest
 ipykernel
+fastapi
+uvicorn
+httpx
 

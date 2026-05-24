@@ -38,3 +38,6 @@ Thumbs.db
 
 #codegraph
 .codegraph/
+
+# Local VS Code MCP config
+.vscode/

@@ -107,7 +107,12 @@ def test_log_recommendation_snapshot_upserts_one_row_per_item_and_stores_version
         items=items,
         algorithm_version="algo_test",
         ranking_version="rank_test",
-        query={"raw_query": "kem duong", "english_query": "moisturizer", "query_type": "normal"},
+        query={
+            "raw_query": "kem duong",
+            "english_query": "moisturizer",
+            "query_type": "normal",
+            "query_embedding": [0.0] * 1024,
+        },
         recommendation_logs_collection=collection,
     )
     second = log_recommendation_snapshot(
@@ -134,6 +139,7 @@ def test_log_recommendation_snapshot_upserts_one_row_per_item_and_stores_version
     assert doc["scores"]["query_hybrid_score"] == 0.75
     assert doc["scores"]["final_score"] == 0.75
     assert doc["attribution"]["matched_channels"] == ["vector", "bm25"]
+    assert len(doc["query"]["query_embedding"]) == 1024
     assert doc["is_synthetic"] is False
 
 

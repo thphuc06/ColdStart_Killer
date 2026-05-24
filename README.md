@@ -14,12 +14,16 @@ This phase includes:
 - English propositions and English HyPE queries.
 - BAAI/bge-m3 embeddings for HyPE queries only.
 - Product images preserved for result display.
+- User behavior logging, profile rebuilding, and item-item Collaborative Filtering recommendation services.
+- A thin FastAPI layer for homepage feed, search, item detail, similar-items, users, events, and debug/demo operations.
+- A React + Vite frontend demo under `frontend/` for homepage, search, detail, similar-products, and debug/admin flows.
 - **Retrieval evaluation** with 5 variants, 50 queries, 20 diagnostic probes, AI-assisted conservative relevance judgments (2,119 query-item pairs labeled using LLM with conservative scoring — human audit recommended before claiming as full ground truth), and IR metrics (NDCG, Recall, MRR, Precision, HitRate, cold-start exposure quality).
 - **Hackathon impact reporting** with variant deltas, qualitative examples, business-impact stories, Vietnamese slice analysis, and cold-start caveats.
 
-This phase does not include:
+This phase still does not include:
 
-- Buyer or seller-facing UI.
+- A production-hardened seller-facing UI.
+- A dedicated onboarding/session-management backend beyond the current demo contract.
 
 ## Current Evaluation Status
 
@@ -105,7 +109,9 @@ The notebooks are the technical proof:
 
 - `src/query_processor.py` — query processing pipeline (language detection, translation via Qwen3:8b, price filter extraction, HyPE query generation, BGE-M3 embedding).
 - `src/search_pipeline.py` — hybrid MongoDB search.
+- `src/api/` — FastAPI adapter exposing recommendation, event, and debug/demo endpoints.
 - `src/retrieval_output.py` — explainable result formatter.
+- `frontend/` — React + Vite Phase 11 demo frontend.
 - `src/evaluation/` — evaluation framework (contracts, dataset loading, diagnostics, metrics, variants, runner, reporting, hackathon report generation, explanation coverage checks).
 - `scripts/run_search.py` — CLI search runner.
 - `scripts/run_evaluation.py` — full evaluation CLI (supports `--use-fake-results` for smoke testing and writes `hackathon_impact_report.md` by default).
@@ -135,6 +141,8 @@ Implementation details were checked against official documentation:
 ## Setup
 
 Use a virtual environment, install dependencies, then copy `.env.example` to `.env` and fill in the values.
+
+Phase 11 frontend demo additionally requires Node.js and npm. The frontend ships with `frontend/.env.example`; copy it to `frontend/.env` only when the API is not running at `http://127.0.0.1:8000`.
 
 Required environment variables:
 
