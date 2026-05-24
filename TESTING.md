@@ -124,6 +124,45 @@ Atlas Search `text_index` phải có mapping đầy đủ sau:
 
 ⚠️ Quan trọng: `text_index` phải có đủ tất cả các fields trên để BM25 search hoạt động đúng.
 
+### Bước 4 — Verify frontend Phase 11
+
+Frontend demo dùng React + Vite + TypeScript và mặc định gọi API tại `http://127.0.0.1:8000`.
+
+Build check:
+
+```bash
+cd frontend
+npm install
+npm run test:ui
+npm run build
+```
+
+`npm run test:ui` chạy route-level UI checks cho homepage, search, item detail, và debug bằng jsdom + mocked API contract. Đây là gate ổn định nhất để verify Phase 11 frontend logic trước khi chạy browser/demo thật.
+
+Local dev check:
+
+```bash
+uvicorn src.api.app:app --reload
+
+# terminal khác
+cd frontend
+npm run dev
+```
+
+Live Phase 11 smoke check:
+
+```bash
+uvicorn src.api.app:app --host 127.0.0.1 --port 8000
+
+# terminal khác
+cd frontend
+npm run smoke:e2e
+```
+
+`npm run smoke:e2e` verify live contract cho homepage feed, search, item detail, similar products, event logging, và debug user flow. Kết quả được ghi vào `.runtime/phase11_smoke/result.json`.
+
+Nếu API chạy ở host/port khác, copy `frontend/.env.example` thành `frontend/.env` và đổi `VITE_API_BASE_URL`.
+
 ---
 
 ## 🔬 Test 1 — Unit Tests (không cần MongoDB)

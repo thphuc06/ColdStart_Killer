@@ -275,6 +275,52 @@ python scripts/run_evaluation.py \
 - `metrics_summary.md`
 - `hackathon_impact_report.md`
 
+### Phase 12 Personalization Evaluation
+
+Phase 12 measures homepage-style personalization and CF lift with a temporal split over clickstream data.
+
+Dry-run against live MongoDB data:
+
+```bash
+python scripts/run_personalization_evaluation.py --dry-run
+```
+
+Optional local output directory override:
+
+```bash
+python scripts/run_personalization_evaluation.py \
+  --out .runtime/evaluation/personalization_live
+```
+
+Optional MongoDB summary write after local artifacts are created:
+
+```bash
+python scripts/run_personalization_evaluation.py --write-evaluation-run
+```
+
+Phase 12 baselines:
+
+- `content_only`
+- `exploration_only`
+- `popularity`
+- `profile_only`
+- `profile_plus_cf`
+
+Phase 12 artifacts:
+
+- `config.json`
+- `baseline_summaries.json`
+- `comparisons.json`
+- `per_user_metrics.json`
+- `per_user_metrics.csv`
+- `metrics_summary.md`
+- `manifest.json`
+
+Important caveat:
+
+- Current demo data is synthetic/demo behavior. The Phase 12 report labels this explicitly and should not be described as human-ground-truth validation.
+- The evaluator rebuilds popularity and item-item CF from the train portion of each user's history to avoid future-event leakage.
+
 ## Tests
 
 Run the evaluation-related test subset:

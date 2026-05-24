@@ -2996,7 +2996,28 @@ Specific query intent dominates profile.
 Score breakdown sums correctly.
 ```
 
-### Phase 10 — React Frontend
+### Phase 10 — HTTP API Layer
+
+**Priority:** Core Required
+
+Tasks:
+
+```text
+Expose thin HTTP routes for feed/search/similar/events/debug flows.
+Keep ranking logic in Python service modules, not routes.
+Return demo users and synthetic personas for UI bootstrapping.
+Protect destructive demo reset writes with explicit confirmation.
+```
+
+Tests:
+
+```text
+API starts locally.
+Feed/search/events/debug endpoints respond through the adapter layer.
+No ranking logic is implemented inside routes.
+```
+
+### Phase 11 — React Frontend
 
 **Priority:** Core Required
 
@@ -3019,7 +3040,7 @@ No duplicate impressions after re-render.
 Click updates profile and feed can refresh.
 ```
 
-### Phase 11 — Evaluation & Demo Proof
+### Phase 12 — Evaluation & Demo Proof
 
 **Priority:** Strongly Recommended
 
@@ -3041,7 +3062,7 @@ Personalized beats popularity for target users.
 CF-supported recommendations exist.
 ```
 
-### Phase 12 — Future Enhancements
+### Phase 13 — Future Enhancements
 
 **Priority:** Advanced / Future
 

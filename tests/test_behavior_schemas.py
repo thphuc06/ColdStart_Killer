@@ -33,13 +33,19 @@ def test_recommendation_log_contract_accepts_snapshot_fields() -> None:
         session_id="sess_001",
         algorithm_version="rec_v1_profile_cf_hype",
         ranking_version="rank_v1_default_weights",
+        query={"query_type": "specific", "query_embedding": [0.0] * EMBEDDING_DIM},
         item_id="B001",
         rank_position=1,
+        attribution={
+            "matched_interest_embedding": [0.0] * EMBEDDING_DIM,
+            "matched_neighbor_embedding": [0.0] * EMBEDDING_DIM,
+        },
     )
     dumped = log.model_dump(by_alias=True)
     assert dumped["request_id"] == "req_001"
     assert dumped["scores"]["final_score"] == 0.0
     assert dumped["attribution"]["candidate_sources"] == []
+    assert len(dumped["query"]["query_embedding"]) == EMBEDDING_DIM
     assert dumped["is_synthetic"] is False
 
 
