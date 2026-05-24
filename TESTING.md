@@ -163,6 +163,70 @@ npm run smoke:e2e
 
 Nếu API chạy ở host/port khác, copy `frontend/.env.example` thành `frontend/.env` và đổi `VITE_API_BASE_URL`.
 
+### Phase 13/14 demo acceptance smoke
+
+Use this small command set before recording the website demo:
+
+```bash
+python -m pytest tests/test_pipeline.py -v -p no:cacheprovider
+python -m pytest tests/test_api_smoke.py -q -p no:cacheprovider
+python -m pytest tests/test_reset_demo_behavior_data.py -q -p no:cacheprovider
+python -m pytest tests/test_demo_reset.py -q -p no:cacheprovider
+
+python scripts/reset_demo_behavior_data.py --soft --dry-run
+python scripts/reset_demo_behavior_data.py --full --dry-run
+
+cd frontend
+npm run build
+npm run test:ui -- --run
+```
+
+Manual browser checklist:
+
+1. Start backend: `python -m uvicorn src.api.app:app --reload`.
+2. Start frontend: `cd frontend && npm run dev`.
+3. Select a profile-backed user.
+4. Verify homepage, product detail, similar products, search, and Debug/Admin pages.
+5. Verify score breakdown is visible but not overwhelming.
+6. Verify `Semantic similarity` and `Collaborative Filtering` are separate labels.
+7. Verify Debug/Admin shows protected collections and reset warnings.
+8. Reload once and inspect for duplicate impression symptoms.
+
+Safety expectations:
+
+- No live reset/seed during test unless explicitly approved by a human.
+- `items` and `retrieval_units` must never appear in reset targets.
+- True CF evidence means `item_item_cf_edges` from `user_item_signals`; semantic similarity is not CF.
+
+Known non-blocking caveat:
+
+- Full `python -m pytest` may fail during collection if optional `datasets` is not installed for legacy dataset-selection tests. Use targeted demo/API/reset tests for Phase 13/14 acceptance unless that dependency is intentionally installed.
+
+### Phase 14 personalization evaluation smoke
+
+Default dry-run reads live inputs but does not write MongoDB or local report artifacts:
+
+```bash
+python scripts/run_personalization_evaluation.py --dry-run
+python scripts/run_personalization_evaluation.py --dry-run --no-artifacts
+```
+
+To intentionally save local `.runtime/evaluation/...` artifacts for a demo report:
+
+```bash
+python scripts/run_personalization_evaluation.py --dry-run --write-artifacts
+```
+
+Expected terminal summary includes:
+
+- `content_only`, `exploration_only`, `popularity`, `profile_only`, `profile_plus_cf`
+- HitRate@10, Recall@20, MAP@20
+- coverage, cold-start exposure, CF-supported count/rate
+- `algorithm_version` and `ranking_version`
+- explicit caveat that synthetic/demo metrics are indicative and not human-audited ground truth
+
+Do not overclaim these metrics. They are useful for demo proof and regression tracking, not a human oracle.
+
 ---
 
 ## 🔬 Test 1 — Unit Tests (không cần MongoDB)

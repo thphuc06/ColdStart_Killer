@@ -15,10 +15,16 @@ This phase does:
 - Process buyer queries into search-ready fixtures.
 - Run hybrid buyer search with MongoDB aggregation and `unionWith` RRF fallback.
 - Test buyer search through CLI and notebooks.
+- Run a React + Vite website demo backed by the FastAPI adapter.
+- Show personalized homepage, query-first search, product detail, similar products, score breakdown, CF evidence, and Debug/Admin lineage.
+- Safely inspect demo reset/recovery with dry-run-first scripts.
 
 This phase does not do:
 
-- Buyer search UI.
+- Production auth/privacy.
+- Seller add-product or Tavily/web enrichment.
+- Redis/async worker infrastructure.
+- Live reset/seed without explicit human confirmation.
 
 Verified live MongoDB data snapshot:
 
@@ -34,6 +40,113 @@ Verified live MongoDB data snapshot:
 | VECTOR_CHANNEL_LIMIT | 20 |
 
 `category_id` is NOT a hard filter — category intent is handled by BGE-M3 embedding semantics in `$vectorSearch`. `hard_filters` only supports: `in_stock`, `price_max`, `price_min`.
+
+## Website Demo Quickstart
+
+Run from repo root unless noted.
+
+Backend:
+
+```bash
+python -m uvicorn src.api.app:app --reload
+```
+
+API smoke:
+
+```bash
+python -m pytest tests/test_api_smoke.py -q -p no:cacheprovider
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm install
+npm run build
+npm run test:ui -- --run
+npm run dev
+```
+
+Manual browser flow:
+
+1. Select a profile-backed user from the user/persona selector.
+2. Verify homepage cards load from the API.
+3. Expand score breakdown and explanation on a product card.
+4. Click a product and verify product detail.
+5. Verify similar products distinguish `Semantic similarity` from `Collaborative Filtering`.
+6. Run search and verify query-first messaging.
+7. Open Debug/Admin and verify lineage: recommendation logs -> clickstream events -> user signals -> profile -> item-item CF edges.
+8. Verify Demo Recovery shows protected collections and reset warnings.
+
+Important CF wording:
+
+- `item_semantic_neighbors` is semantic similarity, not CF.
+- True CF is `item_item_cf_edges` built from `user_item_signals`.
+
+## Demo Reset and Recovery
+
+Dry-run reset commands are safe and should be run before any live reset:
+
+```bash
+python scripts/reset_demo_behavior_data.py --soft --dry-run
+python scripts/reset_demo_behavior_data.py --full --dry-run
+```
+
+Soft reset keeps precomputed demo artifacts such as `item_item_cf_edges` for quick recovery. Full reset clears behavior-derived artifacts and requires rebuilding synthetic events, signals, profiles, item stats, and item-item CF.
+
+Protected collections:
+
+```text
+items
+retrieval_units
+```
+
+Live reset requires explicit write mode plus confirmation:
+
+```bash
+python scripts/reset_demo_behavior_data.py --soft --write --confirm DEMO_RESET
+python scripts/reset_demo_behavior_data.py --full --write --confirm FULL_DEMO_RESET
+```
+
+Do not run live reset on a final/judging database unless the target DB is printed, reviewed, and approved by a human. The old `scripts/clear_demo_data.py` is quarantined and should not be used.
+
+Common troubleshooting:
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `ModuleNotFoundError: datasets` in full pytest | Optional dataset-selection dependency missing | Install the dependency only if running old dataset-selection tests, or run targeted demo tests. |
+| `node_modules` missing | Frontend dependencies not installed | `cd frontend && npm install`. |
+| Python 3.14 warning from torch/sentence-transformers | Runtime newer than recommended ML stack | Prefer Python 3.10-3.12 for demo machines. |
+| MongoDB timeout | IP not whitelisted or wrong URI | Check Atlas Network Access and `.env`, without printing secrets. |
+| BM25/vector search fails | Atlas Search index missing/not ready | Verify `text_index` and `vector_index` in Atlas UI. |
+
+## Personalization Evaluation Smoke
+
+Use this when you need a quick, honest demo-proof summary for personalization and CF.
+
+Dry-run without MongoDB writes or local artifacts:
+
+```bash
+python scripts/run_personalization_evaluation.py --dry-run
+python scripts/run_personalization_evaluation.py --dry-run --no-artifacts
+```
+
+Save local artifacts intentionally:
+
+```bash
+python scripts/run_personalization_evaluation.py --dry-run --write-artifacts
+```
+
+The terminal summary should show:
+
+- `content_only`, `exploration_only`, `popularity`, `profile_only`, and `profile_plus_cf`.
+- HitRate@10, Recall@20, MAP@20.
+- Coverage, cold-start exposure, and CF-supported recommendation count/rate.
+- `algorithm_version` and `ranking_version` for reproducibility.
+
+Interpretation rule:
+
+> Synthetic/demo metrics are indicative only. They help explain system behavior and compare baselines, but they are not human-audited ground truth.
 
 ## Phase 0: Setup
 

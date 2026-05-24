@@ -138,6 +138,20 @@ const debugResponse = {
     cf_edges: [{ source_item_id: "item_1", neighbor_item_id: "item_2" }],
 };
 
+const demoStatusResponse = {
+    ok: true,
+    protected_collections: ["items", "retrieval_units"],
+    counts: {
+        recommendation_logs: 12,
+        clickstream_events: 10,
+        user_item_signals: 8,
+        user_profiles: 4,
+        item_item_cf_edges: 6,
+    },
+    cf_evidence_available: true,
+    precomputed_cf_note: "Existing CF edges may come from seeded/precomputed synthetic behavior.",
+};
+
 function jsonResponse(payload: unknown) {
     return Promise.resolve(
         new Response(JSON.stringify(payload), {
@@ -164,7 +178,8 @@ function installFetchMock() {
                 users: [
                     {
                         user_id_hash: "u_test_user",
-                        profile_status: "new",
+                        profile_status: "warm",
+                        has_profile: true,
                         privacy: {
                             allow_personalization: true,
                             allow_clickstream_logging: true,
@@ -194,6 +209,9 @@ function installFetchMock() {
         }
         if (url.includes("/api/debug/user/")) {
             return jsonResponse(debugResponse);
+        }
+        if (url.includes("/api/demo/status")) {
+            return jsonResponse(demoStatusResponse);
         }
         if (url.includes("/api/events")) {
             return jsonResponse({ ok: true });
@@ -252,7 +270,7 @@ describe("Phase 11 routes", () => {
         renderApp("/");
 
         expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
-        expect(screen.getByText("Picks for you")).toBeInTheDocument();
+        expect(screen.getByText("Recommended for you")).toBeInTheDocument();
     });
 
     it("renders the search page results for a query route", async () => {
@@ -274,5 +292,7 @@ describe("Phase 11 routes", () => {
 
         expect(await screen.findByText("Inspect lineage and operate the demo safely")).toBeInTheDocument();
         expect(await screen.findByText("Top signals")).toBeInTheDocument();
+        expect(await screen.findByText("Demo Recovery")).toBeInTheDocument();
+        expect(await screen.findByText("items")).toBeInTheDocument();
     });
 });

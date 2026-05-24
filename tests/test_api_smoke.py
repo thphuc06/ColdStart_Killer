@@ -32,7 +32,12 @@ def test_demo_users_route_returns_users_and_personas(monkeypatch) -> None:
 
     import src.api.routes_users as routes_users
 
-    monkeypatch.setattr(routes_users, "get_users_collection", lambda: FakeCollection([{"user_id_hash": "u_1"}]))
+    monkeypatch.setattr(routes_users, "get_users_collection", lambda: FakeCollection([{"user_id_hash": "u_api_1"}]))
+    monkeypatch.setattr(
+        routes_users,
+        "get_user_profiles_collection",
+        lambda: FakeCollection([{"user_id_hash": "u_profile_1", "profile_status": "warm"}]),
+    )
     monkeypatch.setattr(
         routes_users,
         "get_synthetic_personas_collection",
@@ -49,7 +54,10 @@ def test_demo_users_route_returns_users_and_personas(monkeypatch) -> None:
     response = client.get("/api/users/demo")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["users"][0]["user_id_hash"] == "u_1"
+    assert payload["users"][0]["user_id_hash"] == "u_profile_1"
+    assert payload["users"][0]["has_profile"] is True
+    assert payload["users"][1]["user_id_hash"] == "u_api_1"
+    assert payload["users"][1]["has_profile"] is False
     assert payload["personas"][0]["persona_id"] == "p_budget_skincare"
     assert "intent_embedding" not in payload["personas"][0]
 
@@ -198,19 +206,21 @@ def test_demo_reset_dry_run_reports_counts(monkeypatch) -> None:
         def delete_many(self, *_args, **_kwargs):
             raise AssertionError("delete_many should not be called in dry-run")
 
+    class FakeDatabase:
+        def __getitem__(self, name):
+            return FakeCollection(11 if name == "clickstream_events" else 12)
+
     import src.api.routes_debug as routes_debug
 
-    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: FakeCollection(11))
-    monkeypatch.setattr(routes_debug, "get_recommendation_logs_collection", lambda: FakeCollection(12))
-    monkeypatch.setattr(routes_debug, "get_user_item_signals_collection", lambda: FakeCollection(13))
-    monkeypatch.setattr(routes_debug, "get_user_profiles_collection", lambda: FakeCollection(14))
-    monkeypatch.setattr(routes_debug, "get_item_stats_collection", lambda: FakeCollection(15))
+    monkeypatch.setattr(routes_debug, "get_database", lambda: FakeDatabase())
     client = TestClient(create_app())
     response = client.post("/api/demo/reset")
     assert response.status_code == 200
     payload = response.json()
     assert payload["mode"] == "dry-run"
-    assert payload["delete_counts"]["clickstream_events"] == 11
+    assert payload["targets"][0]["collection"] == "recommendation_logs"
+    assert any(target["collection"] == "clickstream_events" for target in payload["targets"])
+    assert payload["protected_collections"] == ["items", "retrieval_units"]
 
 
 def test_demo_reset_write_requires_confirmation(monkeypatch) -> None:
@@ -226,11 +236,7 @@ def test_demo_reset_write_requires_confirmation(monkeypatch) -> None:
 
     import src.api.routes_debug as routes_debug
 
-    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: FakeCollection(11))
-    monkeypatch.setattr(routes_debug, "get_recommendation_logs_collection", lambda: FakeCollection(12))
-    monkeypatch.setattr(routes_debug, "get_user_item_signals_collection", lambda: FakeCollection(13))
-    monkeypatch.setattr(routes_debug, "get_user_profiles_collection", lambda: FakeCollection(14))
-    monkeypatch.setattr(routes_debug, "get_item_stats_collection", lambda: FakeCollection(15))
+    monkeypatch.setattr(routes_debug, "get_database", lambda: {"clickstream_events": FakeCollection(11)})
 
     client = TestClient(create_app())
     response = client.post("/api/demo/reset?write=true")
@@ -238,3 +244,34 @@ def test_demo_reset_write_requires_confirmation(monkeypatch) -> None:
     detail = response.json()["detail"]
     assert detail["error"] == "confirmation_required"
     assert detail["expected_confirm"] == "DEMO_RESET"
+
+
+def test_demo_status_reports_counts_and_protected_collections(monkeypatch) -> None:
+    class FakeCollection:
+        def __init__(self, count):
+            self.count = count
+
+        def count_documents(self, *_args, **_kwargs):
+            return self.count
+
+    import src.api.routes_debug as routes_debug
+
+    monkeypatch.setattr(routes_debug, "get_users_collection", lambda: FakeCollection(2))
+    monkeypatch.setattr(routes_debug, "get_recommendation_logs_collection", lambda: FakeCollection(3))
+    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: FakeCollection(4))
+    monkeypatch.setattr(routes_debug, "get_user_item_signals_collection", lambda: FakeCollection(5))
+    monkeypatch.setattr(routes_debug, "get_user_profiles_collection", lambda: FakeCollection(6))
+    monkeypatch.setattr(routes_debug, "get_item_stats_collection", lambda: FakeCollection(7))
+    monkeypatch.setattr(routes_debug, "get_item_item_cf_edges_collection", lambda: FakeCollection(8))
+    monkeypatch.setattr(routes_debug, "get_item_hype_profiles_collection", lambda: FakeCollection(9))
+    monkeypatch.setattr(routes_debug, "get_item_semantic_neighbors_collection", lambda: FakeCollection(10))
+    monkeypatch.setattr(routes_debug, "get_synthetic_personas_collection", lambda: FakeCollection(11))
+
+    client = TestClient(create_app())
+    response = client.get("/api/demo/status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["counts"]["item_item_cf_edges"] == 8
+    assert payload["cf_evidence_available"] is True
+    assert payload["protected_collections"] == ["items", "retrieval_units"]

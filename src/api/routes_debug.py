@@ -4,6 +4,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
+from scripts.reset_demo_behavior_data import CATALOG_COLLECTIONS, execute_reset
 from src.behavior.profile_builder import build_user_profiles
 from src.behavior.signal_builder import build_user_item_signals
 from src.behavior.synthetic_generator import (
@@ -15,6 +16,7 @@ from src.mongodb import (
     get_clickstream_events_collection,
     get_item_hype_profiles_collection,
     get_item_item_cf_edges_collection,
+    get_item_semantic_neighbors_collection,
     get_item_stats_collection,
     get_items_collection,
     get_recommendation_logs_collection,
@@ -23,6 +25,7 @@ from src.mongodb import (
     get_user_item_signals_collection,
     get_user_profiles_collection,
     get_users_collection,
+    get_database,
 )
 from src.recommendation.item_item_cf import build_item_item_cf_edges
 
@@ -51,6 +54,10 @@ def _require_reset_confirmation(*, write: bool, full: bool, confirm: str | None)
             "expected_confirm": expected,
         },
     )
+
+
+def _collection_count(collection_getter) -> int:
+    return int(collection_getter().count_documents({}))
 
 
 @router.get("/debug/user/{user_id}")
@@ -127,26 +134,48 @@ def seed_demo_behavior(
     return result
 
 
+@router.get("/demo/status")
+def get_demo_status() -> dict[str, Any]:
+    counts = {
+        "users": _collection_count(get_users_collection),
+        "recommendation_logs": _collection_count(get_recommendation_logs_collection),
+        "clickstream_events": _collection_count(get_clickstream_events_collection),
+        "user_item_signals": _collection_count(get_user_item_signals_collection),
+        "user_profiles": _collection_count(get_user_profiles_collection),
+        "item_stats": _collection_count(get_item_stats_collection),
+        "item_item_cf_edges": _collection_count(get_item_item_cf_edges_collection),
+        "item_hype_profiles": _collection_count(get_item_hype_profiles_collection),
+        "item_semantic_neighbors": _collection_count(get_item_semantic_neighbors_collection),
+        "synthetic_personas": _collection_count(get_synthetic_personas_collection),
+    }
+    return {
+        "ok": True,
+        "protected_collections": sorted(CATALOG_COLLECTIONS),
+        "counts": counts,
+        "cf_evidence_available": counts["item_item_cf_edges"] > 0,
+        "precomputed_cf_note": (
+            "Existing item_item_cf_edges may come from seeded/precomputed synthetic behavior. "
+            "Use full reset + rebuild to replay the complete event -> signal -> profile -> CF pipeline."
+        ),
+    }
+
+
 @router.post("/demo/reset")
 def reset_demo_behavior(write: bool = False, full: bool = False, confirm: str | None = None) -> dict[str, Any]:
-    targets: dict[str, Any] = {
-        "clickstream_events": get_clickstream_events_collection(),
-        "recommendation_logs": get_recommendation_logs_collection(),
-        "user_item_signals": get_user_item_signals_collection(),
-        "user_profiles": get_user_profiles_collection(),
-        "item_stats": get_item_stats_collection(),
-    }
-    if full:
-        targets["item_item_cf_edges"] = get_item_item_cf_edges_collection()
-
-    counts = {name: collection.count_documents({}) for name, collection in targets.items()}
-    if not write:
-        return {"mode": "dry-run", "full": full, "delete_counts": counts}
-
     _require_reset_confirmation(write=write, full=full, confirm=confirm)
-
-    deleted = {name: collection.delete_many({}).deleted_count for name, collection in targets.items()}
-    return {"mode": "write", "full": full, "deleted": deleted}
+    try:
+        result = execute_reset(get_database(), full=full, write=write, confirm=confirm)
+    except RuntimeError as exc:
+        expected = "FULL_DEMO_RESET" if full else "DEMO_RESET"
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "confirmation_required",
+                "message": str(exc),
+                "expected_confirm": expected,
+            },
+        ) from exc
+    return result
 
 
 @router.post("/debug/process-events")

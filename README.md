@@ -25,6 +25,65 @@ This phase still does not include:
 - A production-hardened seller-facing UI.
 - A dedicated onboarding/session-management backend beyond the current demo contract.
 
+## Phase 14 Demo Quickstart
+
+Current demo path is website-first. Use the React frontend for the hackathon demo, and keep notebooks as technical audit/exploration tools.
+
+Start the backend:
+
+```bash
+python -m uvicorn src.api.app:app --reload
+```
+
+Check API health:
+
+```bash
+python - <<'PY'
+from fastapi.testclient import TestClient
+from src.api.app import create_app
+
+client = TestClient(create_app())
+for path in ["/api/health", "/api/users/demo", "/api/demo/status"]:
+    r = client.get(path)
+    print(path, r.status_code)
+PY
+```
+
+Start the frontend:
+
+```bash
+cd frontend
+npm install
+npm run build
+npm run test:ui -- --run
+npm run dev
+```
+
+Recommended browser demo flow:
+
+1. Select a profile-backed demo user.
+2. Open the homepage and verify personalized cards.
+3. Expand score details on a product card.
+4. Click a product and open product detail.
+5. Verify similar products show semantic similarity and Collaborative Filtering as separate signals.
+6. Run a search query and verify query-first results with personalized reranking.
+7. Open Debug/Admin and verify lineage, demo counts, protected collections, and reset warnings.
+
+Demo safety commands:
+
+```bash
+python scripts/reset_demo_behavior_data.py --soft --dry-run
+python scripts/reset_demo_behavior_data.py --full --dry-run
+```
+
+Do not run live reset unless a human explicitly chooses `--write` and passes the required confirmation string. Reset scripts must never target `items` or `retrieval_units`.
+
+Recommendation honesty:
+
+- Semantic similarity, HyPE matches, and profile embeddings are content/semantic personalization.
+- True Collaborative Filtering is `item_item_cf_edges` built from multi-user `user_item_signals`.
+- Debug/Admin may label CF evidence as seeded/precomputed when it comes from synthetic demo behavior.
+
 ## Current Evaluation Status
 
 Latest verified live run:
@@ -95,9 +154,9 @@ Interpretation caveats:
 - Live MongoDB search latency is below the 400ms target in the latest run, but total reported latency is still above 400ms. Treat query processing and embedding/translation caching as demo hardening work.
 - Python 3.14 currently runs the project, but `torch/sentence-transformers` emits a stability warning. Python 3.10-3.12 is still the safer demo runtime.
 
-## Notebook-First Demo Philosophy
+## Technical Notebook Audit Path
 
-The notebooks are the technical proof:
+The React website is the primary demo. The notebooks remain useful as the technical proof and audit trail:
 
 - `notebooks/01_build_3k_mvp_dataset_from_amazon_reviews.ipynb` audits and builds the MVP dataset.
 - `notebooks/02_insert_3k_mvp_to_mongodb.ipynb` estimates and inserts documents into MongoDB in controlled increments.

@@ -1,9 +1,15 @@
-﻿import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckCircle, Fingerprint, PlusCircle, RefreshCcw, XCircle } from "lucide-react";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { CheckCircle2, Fingerprint, PlusCircle, RefreshCcw, UserRound, XCircle } from "lucide-react";
 import { useEffect } from "react";
 
 import { createUser, getDemoUsers, getHealth } from "../lib/api";
 import { useExperience } from "../state/experience";
+import { StatusBadge } from "./StatusBadge";
+
+
+function shortId(value: string) {
+    return `...${value.slice(-10)}`;
+}
 
 
 export function UserControlPanel() {
@@ -26,104 +32,102 @@ export function UserControlPanel() {
     }, [demoUsersQuery.data?.users, setUserIdHash, userIdHash]);
 
     const apiOnline = healthQuery.data?.ok === true;
+    const activeUser = demoUsersQuery.data?.users.find((user) => user.user_id_hash === userIdHash);
 
     return (
-        <div className="space-y-4">
-            {/* Active Profile */}
-            <section className="panel-strong p-4">
-                <div className="mb-3 flex items-center justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                        <Fingerprint className="h-5 w-5 text-[var(--mint)]" />
-                        <h2 className="text-sm font-semibold text-[var(--ink-strong)]">Active profile</h2>
-                    </div>
-                    <div className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${apiOnline ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-600"}`}>
-                        {apiOnline
-                            ? <CheckCircle className="h-3.5 w-3.5" />
-                            : <XCircle className="h-3.5 w-3.5" />}
-                        {apiOnline ? "API online" : "API offline"}
+        <section className="panel p-4">
+            <div className="mb-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                    <Fingerprint className="h-5 w-5 text-[var(--mint)]" />
+                    <div>
+                        <p className="soft-label">Shopper context</p>
+                        <h2 className="text-base font-bold text-[var(--ink-strong)]">Active profile</h2>
                     </div>
                 </div>
+                <StatusBadge tone={apiOnline ? "mint" : "rose"}>
+                    {apiOnline ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+                    {apiOnline ? "API online" : "API offline"}
+                </StatusBadge>
+            </div>
 
-                {userIdHash ? (
-                    <div className="mb-3 rounded-xl bg-white/80 px-3 py-2.5">
-                        <div className="text-xs text-[var(--ink-soft)]">Shopper ID</div>
-                        <div className="mt-0.5 font-mono text-sm font-semibold text-[var(--ink-strong)]">
-                            ...{userIdHash.slice(-12)}
+            {userIdHash ? (
+                <div className="mb-4 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-3">
+                    <div className="flex items-start justify-between gap-3">
+                        <div>
+                            <p className="text-xs font-semibold text-[var(--ink-muted)]">Selected shopper</p>
+                            <p className="mt-1 font-mono text-sm font-black text-[var(--ink-strong)]">{shortId(userIdHash)}</p>
                         </div>
+                        <StatusBadge tone={activeUser?.has_profile ? "mint" : "amber"}>
+                            {activeUser?.has_profile ? "Profile-backed" : "New user"}
+                        </StatusBadge>
                     </div>
-                ) : (
-                    <p className="mb-3 text-sm text-[var(--ink-soft)]">No profile selected yet.</p>
-                )}
-
-                <div className="grid grid-cols-2 gap-2">
-                    <button className="action-button action-button-secondary text-xs" onClick={() => resetSession()}>
-                        <RefreshCcw className="h-3.5 w-3.5" />
-                        New session
-                    </button>
-                    <button className="action-button action-button-primary text-xs" onClick={() => demoUsersQuery.refetch()}>
-                        <RefreshCcw className="h-3.5 w-3.5" />
-                        Reload
-                    </button>
+                    <p className="mt-2 text-xs leading-5 text-[var(--ink-soft)]">
+                        {activeUser?.profile_status || "new"} profile. Personalization{" "}
+                        {activeUser?.privacy.allow_personalization === false ? "off" : "on"}.
+                    </p>
                 </div>
-            </section>
-
-            {/* Browse anonymously */}
-            <section className="panel p-4">
-                <div className="mb-3 flex items-center gap-2">
-                    <PlusCircle className="h-4 w-4 text-[var(--amber)]" />
-                    <h3 className="text-sm font-semibold text-[var(--ink-strong)]">Browse anonymously</h3>
+            ) : (
+                <div className="mb-4 rounded-lg border border-dashed border-[var(--line-soft)] bg-[var(--surface-muted)] p-3 text-sm text-[var(--ink-soft)]">
+                    Choose a demo shopper to activate recommendations.
                 </div>
-                <button
-                    className="action-button action-button-primary w-full"
-                    disabled={createUserMutation.isPending}
-                    onClick={() =>
-                        createUserMutation.mutate({
-                            allow_personalization: true,
-                            allow_clickstream_logging: true,
-                        })
-                    }
-                >
-                    <PlusCircle className="h-4 w-4" />
-                    {createUserMutation.isPending ? "Creating..." : "Create anonymous shopper"}
+            )}
+
+            <div className="mb-4 grid grid-cols-2 gap-2">
+                <button className="action-button action-button-secondary text-xs" onClick={() => resetSession()}>
+                    <RefreshCcw className="h-3.5 w-3.5" />
+                    New session
                 </button>
-                {createUserMutation.error ? (
-                    <p className="mt-2 text-xs text-[var(--rose)]">{String(createUserMutation.error)}</p>
-                ) : null}
-            </section>
+                <button className="action-button action-button-secondary text-xs" onClick={() => demoUsersQuery.refetch()}>
+                    <RefreshCcw className="h-3.5 w-3.5" />
+                    Reload users
+                </button>
+            </div>
 
-            {/* Switch profile */}
-            <section className="panel p-4">
-                <h3 className="mb-3 text-sm font-semibold text-[var(--ink-strong)]">Switch profile</h3>
-
-                <div className="max-h-64 space-y-1.5 overflow-auto pr-1 scroll-soft">
-                    {demoUsersQuery.isLoading ? (
-                        <p className="text-xs text-[var(--ink-soft)]">Loading profiles...</p>
-                    ) : null}
+            <div className="mb-4">
+                <label className="mb-2 block text-xs font-bold text-[var(--ink-soft)]">Switch demo shopper</label>
+                <select
+                    className="form-select"
+                    value={userIdHash || ""}
+                    onChange={(event) => setUserIdHash(event.target.value || null)}
+                >
+                    {demoUsersQuery.isLoading ? <option value="">Loading profiles...</option> : null}
                     {demoUsersQuery.data?.users.map((user) => (
-                        <button
-                            key={user.user_id_hash}
-                            className={`w-full rounded-xl border px-3 py-2.5 text-left text-sm transition ${user.user_id_hash === userIdHash
-                                ? "border-[rgba(15,118,110,0.38)] bg-[rgba(15,118,110,0.10)]"
-                                : "border-[var(--line-soft)] bg-white/70 hover:bg-white"
-                                }`}
-                            onClick={() => setUserIdHash(user.user_id_hash)}
-                        >
-                            <div className="font-semibold text-[var(--ink-strong)]">...{user.user_id_hash.slice(-10)}</div>
-                            <div className="mt-0.5 text-xs text-[var(--ink-soft)]">
-                                {user.profile_status} - personalization {user.privacy.allow_personalization ? "on" : "off"}
-                            </div>
-                        </button>
+                        <option key={user.user_id_hash} value={user.user_id_hash}>
+                            {shortId(user.user_id_hash)} - {user.profile_status}
+                            {user.has_profile ? " - profile" : " - new"}
+                        </option>
                     ))}
-                </div>
-            </section>
+                </select>
+            </div>
 
-            {/* Session info (collapsed/minimal) */}
-            <details className="panel p-3 text-xs text-[var(--ink-soft)]">
-                <summary className="cursor-pointer select-none font-medium text-[var(--ink-soft)]">Session details</summary>
-                <div className="mt-2 space-y-1 font-mono">
+            <button
+                className="action-button action-button-primary w-full"
+                disabled={createUserMutation.isPending}
+                onClick={() =>
+                    createUserMutation.mutate({
+                        allow_personalization: true,
+                        allow_clickstream_logging: true,
+                    })
+                }
+            >
+                <PlusCircle className="h-4 w-4" />
+                {createUserMutation.isPending ? "Creating..." : "Create anonymous shopper"}
+            </button>
+            {createUserMutation.error ? (
+                <p className="mt-2 text-xs text-[var(--rose)]">{String(createUserMutation.error)}</p>
+            ) : null}
+
+            <details className="mt-4 text-xs text-[var(--ink-soft)]">
+                <summary className="cursor-pointer select-none font-semibold">Session details</summary>
+                <div className="mt-2 rounded-lg bg-[var(--surface-muted)] p-3 font-mono">
                     <div className="truncate">{sessionId}</div>
                 </div>
             </details>
-        </div>
+
+            <div className="mt-4 flex items-center gap-2 rounded-lg bg-[var(--sky-soft)] p-3 text-xs leading-5 text-[var(--sky)]">
+                <UserRound className="h-4 w-4 shrink-0" />
+                Profile-backed users are prioritized for the demo so homepage ranking can use behavior-derived profiles.
+            </div>
+        </section>
     );
 }

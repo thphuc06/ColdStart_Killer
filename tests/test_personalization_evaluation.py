@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
+from argparse import Namespace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from src.evaluation.personalization_eval import (
     temporal_split_events,
     write_personalization_outputs,
 )
+from scripts.run_personalization_evaluation import _build_terminal_summary, _should_write_artifacts
 
 
 BASE_TS = datetime(2026, 5, 24, 9, 0, tzinfo=UTC)
@@ -244,3 +246,55 @@ def test_write_personalization_outputs_writes_reproducible_artifacts_and_caveats
     assert "synthetic/demo" in summary_md
     assert "profile_plus_cf" in summary_md
     assert "popularity" in summary_md
+
+
+def test_cli_artifact_policy_makes_dry_run_filesystem_dry_by_default() -> None:
+    assert _should_write_artifacts(Namespace(dry_run=True, write_artifacts=False, no_artifacts=False)) is False
+    assert _should_write_artifacts(Namespace(dry_run=True, write_artifacts=True, no_artifacts=False)) is True
+    assert _should_write_artifacts(Namespace(dry_run=False, write_artifacts=False, no_artifacts=False)) is True
+    assert _should_write_artifacts(Namespace(dry_run=False, write_artifacts=False, no_artifacts=True)) is False
+
+
+def test_terminal_summary_exposes_observability_metrics_and_caveat() -> None:
+    items = [
+        _item("A1", title="Phone Case", brand="CaseCo", category_id="phones"),
+        _item("A2", title="Charging Cable", brand="ChargeCo", category_id="phones"),
+        _item("B1", title="Face Serum", brand="GlowCo", category_id="beauty"),
+        _item("B2", title="Gentle Cleanser", brand="PureCo", category_id="beauty"),
+    ]
+    events = [
+        _event("u_eval", "A1", "click", 0),
+        _event("u_eval", "B1", "impression", 1),
+        _event("u_eval", "A2", "click", 2),
+        _event("u_support", "A1", "click", 3),
+        _event("u_support", "A2", "click", 4),
+    ]
+    run_data = evaluate_personalization(
+        items=items,
+        clickstream_events=events,
+        config=PersonalizationEvalConfig(
+            run_id="summary_test",
+            synthetic_data=True,
+            algorithm_version="algo_summary",
+            ranking_version="rank_summary",
+        ),
+    )
+
+    summary = _build_terminal_summary(
+        run_data,
+        live_state_counts={"items": 4, "clickstream_events": 5},
+        artifact_paths=None,
+        artifacts_skipped_reason="test no artifacts",
+    )
+
+    assert "synthetic/demo" in summary
+    assert "indicative only" in summary
+    assert "algo_summary" in summary
+    assert "rank_summary" in summary
+    assert "profile_only" in summary
+    assert "profile_plus_cf" in summary
+    assert "popularity" in summary
+    assert "coverage=" in summary
+    assert "cold@20=" in summary
+    assert "cf_count=" in summary
+    assert "artifacts: skipped" in summary

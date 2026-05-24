@@ -22,6 +22,9 @@ export type DemoUser = {
     profile_status: string;
     created_at?: string;
     updated_at?: string;
+    has_profile?: boolean;
+    demo_label?: string;
+    demo_source?: string;
     privacy: {
         allow_personalization: boolean;
         allow_clickstream_logging: boolean;
@@ -160,6 +163,14 @@ export type DebugUserResponse = {
     recent_logs: Record<string, unknown>[];
     recent_events: Record<string, unknown>[];
     cf_edges: Record<string, unknown>[];
+};
+
+export type DemoStatusResponse = {
+    ok: boolean;
+    protected_collections: string[];
+    counts: Record<string, number>;
+    cf_evidence_available: boolean;
+    precomputed_cf_note: string;
 };
 
 export type EventPayload = {
@@ -306,6 +317,10 @@ export function getSimilarProducts(params: {
 
 export function getDebugUser(userIdHash: string) {
     return fetchJson<DebugUserResponse>(`/api/debug/user/${encodeURIComponent(userIdHash)}`);
+}
+
+export function getDemoStatus() {
+    return fetchJson<DemoStatusResponse>("/api/demo/status");
 }
 
 

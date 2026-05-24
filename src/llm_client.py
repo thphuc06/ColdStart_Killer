@@ -5,16 +5,27 @@ import logging
 import re
 from typing import Any
 
-from ollama import chat
-
 from .config import get_settings
 
 
 logger = logging.getLogger(__name__)
 
 
+def _ollama_chat():
+    """Import Ollama lazily so non-LLM workflows can run without it installed."""
+    try:
+        from ollama import chat
+    except ImportError as exc:
+        raise RuntimeError(
+            "Ollama Python package is required for Qwen calls. "
+            "Install it with `pip install ollama` and ensure Ollama is running."
+        ) from exc
+    return chat
+
+
 def call_qwen(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
     settings = get_settings()
+    chat = _ollama_chat()
     response = chat(
         model=settings.ollama_model,
         messages=[{"role": "user", "content": prompt}],

@@ -3,10 +3,12 @@ import { BookmarkPlus, CreditCard, ShieldAlert, ShoppingBag, Sparkles } from "lu
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
-import { getItemDetail, getSimilarProducts, formatVnd, type EventType, type RecommendationCard } from "../lib/api";
+import { ProductCard } from "../components/ProductCard";
+import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
+import { StatusBadge } from "../components/StatusBadge";
+import { formatVnd, getItemDetail, getSimilarProducts, type EventType, type RecommendationCard } from "../lib/api";
 import { buildOriginFromCard, trackRecommendationAction, type RecommendationOrigin } from "../lib/tracking";
 import { useImpressionLogger } from "../lib/useImpressionLogger";
-import { ProductCard } from "../components/ProductCard";
 import { useExperience } from "../state/experience";
 
 
@@ -80,7 +82,7 @@ export function ItemDetailPage() {
 
     async function handleOriginAction(eventType: EventType) {
         if (!origin || !userIdHash || !itemId) {
-            setDetailFeedback("No recommendation origin is attached to this detail view, so the event was kept local only.");
+            setDetailFeedback("This detail view was opened directly, so no recommendation event was logged.");
             return;
         }
 
@@ -93,7 +95,7 @@ export function ItemDetailPage() {
             queryText: origin.queryText,
             clientComponent: "product-detail",
         });
-        setDetailFeedback(`${eventType.replace(/_/g, " ")} logged against the originating ${origin.surface} surface.`);
+        setDetailFeedback(`${eventType.replace(/_/g, " ")} logged against the originating ${origin.surface} recommendation.`);
     }
 
     async function handleOpenSimilar(card: RecommendationCard) {
@@ -129,44 +131,58 @@ export function ItemDetailPage() {
     return (
         <div className="space-y-5">
             {itemQuery.isLoading ? (
-                <section className="panel p-6 text-[var(--ink-soft)]">Loading item detail...</section>
+                <LoadingState title="Loading product" message="Fetching catalog metadata and cold-start state." />
             ) : itemQuery.error ? (
-                <section className="panel p-6 text-[var(--rose)]">{String(itemQuery.error)}</section>
+                <ErrorState message={String(itemQuery.error)} />
             ) : itemQuery.data ? (
-                <section className="panel-strong overflow-hidden p-6">
-                    <div className="grid gap-6 lg:grid-cols-[260px,1fr]">
-                        <div className="overflow-hidden rounded-[28px] bg-gradient-to-br from-slate-100 via-white to-teal-50">
-                            {itemQuery.data.image_url ? (
-                                <img className="h-full min-h-[280px] w-full object-cover" src={itemQuery.data.image_url} alt={itemQuery.data.title} />
-                            ) : (
-                                <div className="flex min-h-[280px] items-center justify-center text-[var(--ink-soft)]">
-                                    <Sparkles className="h-8 w-8" />
-                                </div>
-                            )}
+                <section className="panel-strong overflow-hidden">
+                    <div className="grid gap-0 lg:grid-cols-[420px,minmax(0,1fr)]">
+                        <div className="bg-[var(--surface-muted)] p-5">
+                            <div className="aspect-[4/3] overflow-hidden rounded-lg bg-white">
+                                {itemQuery.data.image_url ? (
+                                    <img className="h-full w-full object-cover" src={itemQuery.data.image_url} alt={itemQuery.data.title} />
+                                ) : (
+                                    <div className="flex h-full items-center justify-center text-[var(--ink-muted)]">
+                                        <Sparkles className="h-10 w-10" />
+                                    </div>
+                                )}
+                            </div>
                         </div>
 
-                        <div className="space-y-5">
-                            <div className="space-y-3">
-                                <div className="flex flex-wrap gap-2">
-                                    <span className="chip chip-primary">{itemQuery.data.category_id}</span>
-                                    <span className="chip chip-warm">{itemQuery.data.price_bucket}</span>
-                                    <span className="chip">quality {itemQuery.data.quality_score.toFixed(2)}</span>
-                                    {itemQuery.data.cold_start.is_cold_item ? <span className="chip chip-warm">cold-start item</span> : null}
+                        <div className="space-y-6 p-6">
+                            <div className="flex flex-wrap gap-2">
+                                <StatusBadge tone="sky">{itemQuery.data.category_id}</StatusBadge>
+                                <StatusBadge tone="amber">{itemQuery.data.price_bucket}</StatusBadge>
+                                <StatusBadge tone="mint">Quality {itemQuery.data.quality_score.toFixed(2)}</StatusBadge>
+                                {itemQuery.data.cold_start.is_cold_item ? <StatusBadge tone="amber">Cold-start item</StatusBadge> : null}
+                            </div>
+
+                            <div>
+                                <p className="soft-label">Product detail</p>
+                                <h2 className="mt-2 text-3xl font-black leading-tight tracking-tight text-[var(--ink-strong)]">
+                                    {itemQuery.data.title}
+                                </h2>
+                                <p className="mt-3 text-sm leading-6 text-[var(--ink-soft)]">
+                                    {itemQuery.data.brand || "Unknown brand"} / {itemQuery.data.source_category || "Unknown source category"}
+                                </p>
+                            </div>
+
+                            <div className="grid gap-3 sm:grid-cols-3">
+                                <div className="metric-block">
+                                    <p className="soft-label">Price</p>
+                                    <p className="metric-value">{formatVnd(itemQuery.data.price_vnd)}</p>
                                 </div>
-                                <div>
-                                    <p className="soft-label">Product detail</p>
-                                    <h2 className="text-3xl font-semibold text-[var(--ink-strong)]">{itemQuery.data.title}</h2>
-                                    <p className="mt-2 text-[var(--ink-soft)]">
-                                        {itemQuery.data.brand || "Unknown brand"} · {itemQuery.data.source_category || "Unknown source category"}
-                                    </p>
+                                <div className="metric-block">
+                                    <p className="soft-label">Interactions</p>
+                                    <p className="metric-value">{itemQuery.data.cold_start.interaction_count}</p>
                                 </div>
-                                <div className="flex flex-wrap items-center gap-3">
-                                    <span className="text-2xl font-bold text-[var(--ink-strong)]">{formatVnd(itemQuery.data.price_vnd)}</span>
-                                    <span className="chip">interactions {itemQuery.data.cold_start.interaction_count}</span>
+                                <div className="metric-block">
+                                    <p className="soft-label">Stock</p>
+                                    <p className="metric-value">Ready</p>
                                 </div>
                             </div>
 
-                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                            <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
                                 <button className="action-button action-button-primary" onClick={() => void handleOriginAction("add_to_cart")}>
                                     <ShoppingBag className="h-4 w-4" />
                                     Add to cart
@@ -186,43 +202,65 @@ export function ItemDetailPage() {
                             </div>
 
                             {detailFeedback ? (
-                                <div className="rounded-2xl border border-[rgba(37,99,235,0.2)] bg-[rgba(37,99,235,0.08)] p-4 text-sm text-[var(--sky)]">
+                                <div className="rounded-lg border border-[rgba(37,99,235,0.18)] bg-[var(--sky-soft)] p-3 text-sm font-semibold text-[var(--sky)]">
                                     {detailFeedback}
                                 </div>
                             ) : null}
 
-                            {origin ? (
-                                <div className="rounded-[22px] border border-[var(--line-soft)] bg-white/72 p-3 text-xs text-[var(--ink-soft)]">
-                                    Recommended from <strong className="text-[var(--ink-strong)]">{origin.surface}</strong>
-                                </div>
-                            ) : null}
+                            <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-4">
+                                <p className="soft-label">Recommendation origin</p>
+                                {origin ? (
+                                    <p className="mt-1 text-sm text-[var(--ink-soft)]">
+                                        Opened from <strong className="text-[var(--ink-strong)]">{origin.surface}</strong> at rank{" "}
+                                        <strong className="text-[var(--ink-strong)]">{origin.rankPosition ?? "n/a"}</strong>.
+                                    </p>
+                                ) : (
+                                    <p className="mt-1 text-sm text-[var(--ink-soft)]">
+                                        Opened directly. Actions are shown locally unless a recommendation origin is attached.
+                                    </p>
+                                )}
+                            </div>
                         </div>
                     </div>
                 </section>
             ) : null}
 
-            <section className="panel-strong p-6">
-                <div className="mb-5 flex items-end justify-between gap-4">
-                    <h3 className="text-xl font-semibold text-[var(--ink-strong)]">You might also like</h3>
+            <section className="panel-strong p-5">
+                <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
+                    <div>
+                        <p className="soft-label">Related recommendations</p>
+                        <h3 className="mt-1 text-2xl font-black text-[var(--ink-strong)]">Similar products</h3>
+                        <p className="mt-2 text-sm text-[var(--ink-soft)]">
+                            Semantic similarity and collaborative filtering are shown separately in each card.
+                        </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <StatusBadge tone="sky">Semantic similarity</StatusBadge>
+                        <StatusBadge tone="violet">Collaborative Filtering</StatusBadge>
+                    </div>
                 </div>
 
                 {similarQuery.isLoading ? (
-                    <p className="text-[var(--ink-soft)]">Loading similar products...</p>
+                    <LoadingState title="Finding similar products" message="Combining semantic neighbors with behavior-derived CF evidence." />
                 ) : similarQuery.error ? (
-                    <p className="text-[var(--rose)]">{String(similarQuery.error)}</p>
+                    <ErrorState message={String(similarQuery.error)} />
                 ) : !userIdHash ? (
-                    <p className="text-sm text-[var(--ink-soft)]">Select a profile to see personalized similar products.</p>
+                    <EmptyState title="Select a profile" message="A shopper profile is required for personalized similar products." />
                 ) : !similarQuery.data?.items?.length ? (
-                    <p className="text-sm text-[var(--ink-soft)]">No similar products found for this item.</p>
+                    <EmptyState title="No similar products found" message="This item does not have enough neighbor evidence yet." />
                 ) : (
                     <div className="grid-cards">
                         {similarQuery.data.items.map((card) => (
-                            <ProductCard key={`${card.request_id}:${card.item_id}`} card={card} onOpenDetail={handleOpenSimilar} onAction={handleSimilarAction} />
+                            <ProductCard
+                                key={`${card.request_id}:${card.item_id}`}
+                                card={card}
+                                onOpenDetail={handleOpenSimilar}
+                                onAction={handleSimilarAction}
+                            />
                         ))}
                     </div>
                 )}
             </section>
-
         </div>
     );
 }

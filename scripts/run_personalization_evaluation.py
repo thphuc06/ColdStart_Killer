@@ -3,6 +3,8 @@
 
 Examples:
     python scripts/run_personalization_evaluation.py --dry-run
+    python scripts/run_personalization_evaluation.py --dry-run --write-artifacts
+    python scripts/run_personalization_evaluation.py --dry-run --no-artifacts
     python scripts/run_personalization_evaluation.py --out .runtime/evaluation/personalization_live
     python scripts/run_personalization_evaluation.py --write-evaluation-run
 """
@@ -56,7 +58,94 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print baseline_summaries as JSON to stdout after completion",
     )
+    artifact_group = parser.add_mutually_exclusive_group()
+    artifact_group.add_argument(
+        "--write-artifacts",
+        action="store_true",
+        help="Write local report artifacts. During --dry-run, artifacts are skipped unless this flag is set.",
+    )
+    artifact_group.add_argument(
+        "--no-artifacts",
+        action="store_true",
+        help="Skip local report artifacts even for non-dry runs.",
+    )
     return parser
+
+
+def _should_write_artifacts(args: argparse.Namespace) -> bool:
+    if args.no_artifacts:
+        return False
+    if args.write_artifacts:
+        return True
+    return not args.dry_run
+
+
+def _format_baseline_row(row: dict[str, object]) -> str:
+    return (
+        "    "
+        f"{row['baseline']}: users={row['evaluated_user_count']}, "
+        f"hit@10={float(row['hit_rate_at_10']):.4f}, "
+        f"recall@20={float(row['recall_at_20']):.4f}, "
+        f"map@20={float(row['map_at_20']):.4f}, "
+        f"coverage={float(row['coverage']):.4f}, "
+        f"cold@20={float(row['cold_start_exposure_at_20']):.4f}, "
+        f"cf_count={int(row['cf_supported_recommendation_count'])}, "
+        f"cf_rate={float(row['cf_supported_recommendation_rate']):.4f}"
+    )
+
+
+def _build_terminal_summary(
+    run_data: dict[str, object],
+    *,
+    live_state_counts: dict[str, int],
+    artifact_paths: dict[str, str] | None,
+    artifacts_skipped_reason: str | None,
+    include_json_summary: bool = False,
+) -> str:
+    config = run_data["config"]  # type: ignore[index]
+    baselines = run_data["baseline_summaries"]  # type: ignore[index]
+    comparisons = run_data.get("comparisons", [])  # type: ignore[union-attr]
+    lines = [
+        f"Personalization evaluation completed: {config['run_id']}",
+        f"  data_label: {config['data_label']}",
+        "  caveat: Synthetic/demo metrics are indicative only; do not present them as human-audited ground truth.",
+        f"  algorithm_version: {config.get('algorithm_version', 'unknown')}",
+        f"  ranking_version: {config.get('ranking_version', 'unknown')}",
+        f"  users: {config['user_count']}",
+        f"  evaluated_users: {config['evaluated_user_count']}",
+        f"  events: {config['event_count']}",
+        "  live_state_counts:",
+    ]
+    for key, value in sorted(live_state_counts.items()):
+        lines.append(f"    {key}: {value}")
+
+    if artifact_paths:
+        lines.append("  artifacts:")
+        for name, path in sorted(artifact_paths.items()):
+            lines.append(f"    {name}: {path}")
+    else:
+        lines.append(f"  artifacts: skipped ({artifacts_skipped_reason or 'not requested'})")
+
+    if include_json_summary:
+        lines.append("  baseline_summaries_json:")
+        lines.append(json.dumps(baselines, indent=2, ensure_ascii=False))
+    else:
+        lines.append("  baseline_summaries:")
+        for row in baselines:  # type: ignore[assignment]
+            lines.append(_format_baseline_row(row))
+
+    lines.append("  key_comparisons:")
+    for row in comparisons:  # type: ignore[assignment]
+        lines.append(
+            "    "
+            f"{row['comparison']}: "
+            f"hit@10_delta={float(row['hit_rate_at_10_delta']):.4f}, "
+            f"recall@20_delta={float(row['recall_at_20_delta']):.4f}, "
+            f"map@20_delta={float(row['map_at_20_delta']):.4f}, "
+            f"cf_supported_delta={int(row['cf_supported_count_delta'])}"
+        )
+
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -71,6 +160,9 @@ def main() -> int:
         return 1
     if args.dry_run and args.write_evaluation_run:
         print("ERROR: --dry-run cannot be combined with --write-evaluation-run", file=sys.stderr)
+        return 1
+    if args.no_artifacts and args.write_evaluation_run:
+        print("ERROR: --no-artifacts cannot be combined with --write-evaluation-run", file=sys.stderr)
         return 1
 
     try:
@@ -95,33 +187,24 @@ def main() -> int:
         item_stats=live_inputs.get("item_stats"),
         config=config,
     )
-    paths = write_personalization_outputs(run_data, args.out)
-
-    print(f"Personalization evaluation completed: {run_data['config']['run_id']}")
-    print(f"  data_label: {run_data['config']['data_label']}")
-    print(f"  users: {run_data['config']['user_count']}")
-    print(f"  evaluated_users: {run_data['config']['evaluated_user_count']}")
-    print(f"  events: {run_data['config']['event_count']}")
-    print("  live_state_counts:")
-    for key, value in sorted(live_inputs.get("live_state_counts", {}).items()):
-        print(f"    {key}: {value}")
-    print("  artifacts:")
-    for name, path in sorted(paths.items()):
-        print(f"    {name}: {path}")
-
-    if args.print_json_summary:
-        print(json.dumps(run_data["baseline_summaries"], indent=2, ensure_ascii=False))
+    paths: dict[str, str] | None = None
+    artifacts_skipped_reason: str | None = None
+    if _should_write_artifacts(args):
+        paths = write_personalization_outputs(run_data, args.out)
+    elif args.dry_run and not args.write_artifacts:
+        artifacts_skipped_reason = "--dry-run skips filesystem writes by default; use --write-artifacts to save reports"
     else:
-        print("  baseline_summaries:")
-        for row in run_data["baseline_summaries"]:
-            print(
-                "    "
-                f"{row['baseline']}: users={row['evaluated_user_count']}, "
-                f"hit@10={row['hit_rate_at_10']:.4f}, "
-                f"recall@20={row['recall_at_20']:.4f}, "
-                f"map@20={row['map_at_20']:.4f}, "
-                f"cf_count={row['cf_supported_recommendation_count']}"
-            )
+        artifacts_skipped_reason = "--no-artifacts"
+
+    print(
+        _build_terminal_summary(
+            run_data,
+            live_state_counts=live_inputs.get("live_state_counts", {}),
+            artifact_paths=paths,
+            artifacts_skipped_reason=artifacts_skipped_reason,
+            include_json_summary=bool(args.print_json_summary),
+        )
+    )
 
     if args.write_evaluation_run:
         try:

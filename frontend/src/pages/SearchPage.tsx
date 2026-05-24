@@ -1,19 +1,34 @@
 import { useQuery } from "@tanstack/react-query";
-import { Search as SearchIcon, Send } from "lucide-react";
+import { Filter, Search as SearchIcon, Send } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useState, useTransition, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { ProductCard } from "../components/ProductCard";
+import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
+import { StatusBadge } from "../components/StatusBadge";
 import { searchProducts, type EventType, type RecommendationCard } from "../lib/api";
 import { buildOriginFromCard, trackRecommendationAction } from "../lib/tracking";
 import { useImpressionLogger } from "../lib/useImpressionLogger";
-import { ProductCard } from "../components/ProductCard";
 import { useExperience } from "../state/experience";
 
 
 const SEARCH_PLACEHOLDERS = [
-    "iphone case samsung galaxy s22",
-    "gift ideas for skincare lover",
-    "fast charging cable under 300k",
+    "wireless charger under 300k",
+    "moisturizing cream for dry skin",
+    "phone case samsung galaxy s22",
+];
+
+const categoryHints = [
+    { label: "Any category", value: "" },
+    { label: "Beauty", value: "beauty" },
+    { label: "Phone accessories", value: "phone accessories" },
+];
+
+const priceHints = [
+    { label: "Any price", value: "" },
+    { label: "Under 300k", value: "under 300k" },
+    { label: "Under 500k", value: "under 500k" },
+    { label: "Budget", value: "budget" },
 ];
 
 
@@ -23,7 +38,10 @@ export function SearchPage() {
     const [searchParams, setSearchParams] = useSearchParams();
     const [isPending, startTransition] = useTransition();
     const currentQuery = searchParams.get("q") ?? "";
+    const personalized = searchParams.get("personalized") !== "false";
     const [draftQuery, setDraftQuery] = useState(currentQuery);
+    const [categoryHint, setCategoryHint] = useState("");
+    const [priceHint, setPriceHint] = useState("");
     const [dismissedIds, setDismissedIds] = useState<string[]>([]);
     const deferredDraft = useDeferredValue(draftQuery);
     const searchPlaceholder = useMemo(() => SEARCH_PLACEHOLDERS[Math.floor(Math.random() * SEARCH_PLACEHOLDERS.length)], []);
@@ -33,8 +51,8 @@ export function SearchPage() {
     }, [currentQuery]);
 
     const searchQuery = useQuery({
-        queryKey: ["search-page", userIdHash, sessionId, currentQuery],
-        queryFn: () => searchProducts({ userIdHash: userIdHash!, sessionId, query: currentQuery }),
+        queryKey: ["search-page", userIdHash, sessionId, currentQuery, personalized],
+        queryFn: () => searchProducts({ userIdHash: userIdHash!, sessionId, query: currentQuery, personalized }),
         enabled: Boolean(userIdHash && currentQuery.trim()),
     });
 
@@ -59,8 +77,9 @@ export function SearchPage() {
     function submitSearch(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
         startTransition(() => {
-            if (draftQuery.trim()) {
-                setSearchParams({ q: draftQuery.trim() });
+            const parts = [draftQuery.trim(), categoryHint, priceHint].filter(Boolean);
+            if (parts.length) {
+                setSearchParams({ q: parts.join(" "), personalized: String(personalized) });
             } else {
                 setSearchParams({});
             }
@@ -102,51 +121,106 @@ export function SearchPage() {
         }
     }
 
+    function togglePersonalized() {
+        const next = personalized ? "false" : "true";
+        if (currentQuery.trim()) {
+            setSearchParams({ q: currentQuery, personalized: next });
+        }
+    }
+
     return (
         <div className="space-y-5">
-            <section className="panel-strong p-5">
-                <form className="grid gap-3 lg:grid-cols-[1fr,160px]" onSubmit={submitSearch}>
-                    <input
-                        className="form-input"
-                        placeholder={searchPlaceholder}
-                        value={draftQuery}
-                        onChange={(event) => setDraftQuery(event.target.value)}
-                    />
-                    <button className="action-button action-button-primary h-[54px]" type="submit">
+            <section className="page-hero p-6">
+                <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                        <p className="soft-label">Query-first search</p>
+                        <h2 className="mt-2 text-3xl font-black tracking-tight text-[var(--ink-strong)]">Find products</h2>
+                        <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ink-soft)]">
+                            Search runs the existing HyPE + BM25 pipeline first. Profile and CF only rerank relevant candidates.
+                        </p>
+                    </div>
+                    <StatusBadge tone={personalized ? "mint" : "amber"}>
+                        {personalized ? "Personalized reranking on" : "Query-only mode"}
+                    </StatusBadge>
+                </div>
+
+                <form className="grid gap-3 xl:grid-cols-[minmax(0,1fr),180px]" onSubmit={submitSearch}>
+                    <div className="relative">
+                        <SearchIcon className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-[var(--ink-muted)]" />
+                        <input
+                            className="form-input pl-11"
+                            placeholder={searchPlaceholder}
+                            value={draftQuery}
+                            onChange={(event) => setDraftQuery(event.target.value)}
+                        />
+                    </div>
+                    <button className="action-button action-button-primary" type="submit">
                         <Send className="h-4 w-4" />
-                        {isPending ? "Searching…" : "Search"}
+                        {isPending ? "Searching..." : "Search"}
                     </button>
                 </form>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-[1fr,1fr,auto]">
+                    <select className="form-select" value={categoryHint} onChange={(event) => setCategoryHint(event.target.value)}>
+                        {categoryHints.map((hint) => (
+                            <option key={hint.label} value={hint.value}>{hint.label}</option>
+                        ))}
+                    </select>
+                    <select className="form-select" value={priceHint} onChange={(event) => setPriceHint(event.target.value)}>
+                        {priceHints.map((hint) => (
+                            <option key={hint.label} value={hint.value}>{hint.label}</option>
+                        ))}
+                    </select>
+                    <button className="action-button action-button-secondary" type="button" onClick={togglePersonalized}>
+                        <Filter className="h-4 w-4" />
+                        {personalized ? "Turn off profile" : "Use profile"}
+                    </button>
+                </div>
+                <p className="mt-3 text-xs leading-5 text-[var(--ink-soft)]">
+                    Category and price controls are folded into the query text so backend intent extraction remains the source of truth.
+                </p>
             </section>
 
             {!currentQuery.trim() ? (
-                <section className="panel p-6 text-sm text-[var(--ink-soft)]">
-                    <SearchIcon className="mb-2 h-8 w-8 text-[var(--ink-soft)]" />
-                    Type something above to find products.
-                </section>
+                <EmptyState title="Start with a shopping intent" message={`Try "${deferredDraft || searchPlaceholder}" or use the query helpers above.`} />
             ) : searchQuery.isLoading ? (
-                <section className="panel flex items-center gap-3 p-6 text-[var(--ink-soft)]">
-                    <Send className="h-5 w-5 animate-spin-slow shrink-0" />
-                    Searching for results...
-                </section>
+                <LoadingState title="Searching products" message="Running hybrid retrieval and lightweight personalization." />
             ) : searchQuery.error ? (
-                <section className="panel p-6 text-[var(--rose)]">{String(searchQuery.error)}</section>
+                <ErrorState message={String(searchQuery.error)} />
             ) : (
                 <>
                     <section className="panel p-4">
-                        <div className="flex flex-wrap gap-2 text-sm text-[var(--ink-soft)]">
-                            <span className="chip">{visibleItems.length} result{visibleItems.length === 1 ? '' : 's'} for "{searchQuery.data?.query.raw_query}"</span>
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <p className="soft-label">Search results</p>
+                                <h3 className="text-lg font-black text-[var(--ink-strong)]">
+                                    {visibleItems.length} result{visibleItems.length === 1 ? "" : "s"} for "{searchQuery.data?.query.raw_query}"
+                                </h3>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                <StatusBadge tone="sky">HyPE + BM25</StatusBadge>
+                                {personalized ? <StatusBadge tone="mint">Profile rerank</StatusBadge> : null}
+                                <StatusBadge tone="violet">CF evidence when available</StatusBadge>
+                            </div>
                         </div>
                     </section>
 
-                    <section className="grid-cards">
-                        {visibleItems.map((card) => (
-                            <ProductCard key={`${card.request_id}:${card.item_id}`} card={card} onOpenDetail={handleOpenDetail} onAction={handleCardAction} />
-                        ))}
-                    </section>
+                    {visibleItems.length ? (
+                        <section className="grid-cards">
+                            {visibleItems.map((card) => (
+                                <ProductCard
+                                    key={`${card.request_id}:${card.item_id}`}
+                                    card={card}
+                                    onOpenDetail={handleOpenDetail}
+                                    onAction={handleCardAction}
+                                />
+                            ))}
+                        </section>
+                    ) : (
+                        <EmptyState title="No results" message="Try a broader intent or remove the price/category hints." />
+                    )}
                 </>
             )}
-
         </div>
     );
 }
