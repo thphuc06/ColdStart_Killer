@@ -132,13 +132,13 @@ export function SearchPage() {
     }
 
     return (
-        <div className="space-y-5">
-            <section className="page-hero p-6">
-                <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+        <div className="space-y-8">
+            <section className="editorial-hero">
+                <div className="mb-8 flex flex-wrap items-start justify-between gap-5">
                     <div>
                         <p className="soft-label">Query-first search</p>
-                        <h2 className="mt-2 text-3xl font-black tracking-tight text-[var(--ink-strong)]">Find products</h2>
-                        <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--ink-soft)]">
+                        <h2 className="display-title mt-3">Find products</h2>
+                        <p className="mt-4 max-w-2xl text-base leading-7 text-[var(--ink-soft)]">
                             Search runs the existing HyPE + BM25 pipeline first. Profile and CF only rerank relevant candidates.
                         </p>
                     </div>
@@ -192,11 +192,11 @@ export function SearchPage() {
                 <ErrorState message={String(searchQuery.error)} />
             ) : (
                 <>
-                    <section className="panel p-4">
+                    <section className="panel p-5">
                         <div className="flex flex-wrap items-center justify-between gap-3">
                             <div>
                                 <p className="soft-label">Search results</p>
-                                <h3 className="text-lg font-black text-[var(--ink-strong)]">
+                                <h3 className="text-lg font-medium text-[var(--ink-strong)]">
                                     {visibleItems.length} result{visibleItems.length === 1 ? "" : "s"} for "{searchQuery.data?.query.raw_query}"
                                 </h3>
                             </div>
@@ -208,12 +208,12 @@ export function SearchPage() {
                         </div>
                     </section>
 
-                    <section className="panel p-4">
+                    <section className="cream-callout p-5">
                         <p className="soft-label">Query processing</p>
                         <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                            <div className="rounded-lg bg-[var(--surface-muted)] p-3">
-                                <p className="text-xs font-bold text-[var(--ink-muted)]">Detected / translated input</p>
-                                <p className="mt-1 text-sm font-semibold text-[var(--ink-strong)]">
+                            <div className="rounded-lg bg-white p-3">
+                                <p className="text-xs font-medium text-[var(--ink-muted)]">Detected / translated input</p>
+                                <p className="mt-1 text-sm font-medium text-[var(--ink-strong)]">
                                     {searchQuery.data?.query.english_query || searchQuery.data?.query.raw_query}
                                 </p>
                                 <p className="mt-1 text-xs text-[var(--ink-soft)]">
@@ -221,20 +221,20 @@ export function SearchPage() {
                                     {searchQuery.data?.query.query_type}
                                 </p>
                             </div>
-                            <div className="rounded-lg bg-[var(--surface-muted)] p-3">
-                                <p className="text-xs font-bold text-[var(--ink-muted)]">HyPE semantic expansion</p>
+                            <div className="rounded-lg bg-white p-3">
+                                <p className="text-xs font-medium text-[var(--ink-muted)]">HyPE semantic expansion</p>
                                 <p className="mt-1 text-sm text-[var(--ink-soft)]">
                                     {searchQuery.data?.query.hype_search_query_en || "No semantic expansion returned."}
                                 </p>
                             </div>
-                            <div className="rounded-lg bg-[var(--surface-muted)] p-3">
-                                <p className="text-xs font-bold text-[var(--ink-muted)]">BM25 keyword query</p>
+                            <div className="rounded-lg bg-white p-3">
+                                <p className="text-xs font-medium text-[var(--ink-muted)]">BM25 keyword query</p>
                                 <p className="mt-1 text-sm text-[var(--ink-soft)]">
                                     {searchQuery.data?.query.bm25_search_query_en || "No keyword query returned."}
                                 </p>
                             </div>
-                            <div className="rounded-lg bg-[var(--surface-muted)] p-3">
-                                <p className="text-xs font-bold text-[var(--ink-muted)]">Extracted filters</p>
+                            <div className="rounded-lg bg-white p-3">
+                                <p className="text-xs font-medium text-[var(--ink-muted)]">Extracted filters</p>
                                 <p className="mt-1 text-sm text-[var(--ink-soft)]">
                                     {hardFilters.length
                                         ? hardFilters.map(([key, value]) => `${key}: ${String(value)}`).join(" / ")

@@ -183,12 +183,7 @@ def _reason_source(attribution: dict[str, Any]) -> str:
 
 
 def _reason_intents(attribution: dict[str, Any]) -> list[str]:
-    for field_name in ("matched_intents", "matched_facts", "matched_unit_ids"):
-        values = _as_string_list(attribution.get(field_name))
-        if values:
-            return values[:5]
-    explanation = str(attribution.get("explanation") or "").strip()
-    return [explanation] if explanation else []
+    return _as_string_list(attribution.get("matched_intents"))[:5]
 
 
 def _merge_reason_scores(
@@ -510,6 +505,15 @@ def build_user_item_signals(
         raise ValueError("user_item_signals_collection is required when write=True")
     if write and rebuild_item_stats and item_stats_collection is None:
         raise ValueError("item_stats_collection is required when write=True and rebuild_item_stats=True")
+    if write and limit_events is not None:
+        if not hasattr(clickstream_events_collection, "count_documents"):
+            raise ValueError("unsafe_partial_signal_write: cannot verify complete clickstream input for limited write")
+        total_events = int(clickstream_events_collection.count_documents({}))
+        if limit_events < total_events:
+            raise ValueError(
+                "unsafe_partial_signal_write: limited write would aggregate "
+                f"{limit_events} of {total_events} clickstream events"
+            )
 
     updated_at = updated_at or utc_now_iso()
     events = _load_clickstream_events(clickstream_events_collection, limit_events=limit_events)

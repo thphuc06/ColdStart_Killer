@@ -81,47 +81,53 @@ export function ShopperLoginPage() {
     return (
         <div className="app-shell min-h-screen">
             <header className="top-nav">
-                <div className="page-wrap flex min-h-[72px] items-center gap-3">
+                <div className="page-wrap flex min-h-16 items-center gap-3">
                     <div className="brand-mark">
                         <Sparkles className="h-5 w-5" />
                     </div>
                     <div>
-                        <h1 className="text-lg font-black tracking-tight text-[var(--ink-strong)]">ColdStart Killer</h1>
-                        <p className="text-xs font-medium text-[var(--ink-soft)]">Select a shopper before recommendation tracking begins.</p>
+                        <h1 className="brand-title">ColdStart Killer</h1>
+                        <p className="text-xs text-[var(--ink-soft)]">Select a shopper before recommendation tracking begins.</p>
                     </div>
                 </div>
             </header>
 
-            <main className="page-wrap py-8">
-                <section className="page-hero mb-6 p-7">
-                    <div className="flex flex-wrap items-start justify-between gap-4">
+            <main className="page-wrap pb-12">
+                <section className="editorial-hero">
+                    <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr),360px] lg:items-center">
                         <div>
                             <p className="soft-label">Shopper sign in</p>
-                            <h2 className="mt-2 text-3xl font-black tracking-tight text-[var(--ink-strong)]">
+                            <h2 className="display-title mt-3">
                                 Start a personalized shopping session
                             </h2>
-                            <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--ink-soft)]">
+                            <p className="mt-5 max-w-2xl text-base leading-7 text-[var(--ink-soft)]">
                                 Create a personal account for live behavior learning, or enter a seeded persona to inspect an
                                 already learned profile and collaborative-filtering evidence.
                             </p>
                         </div>
-                        <StatusBadge tone={healthQuery.data?.ok ? "mint" : "rose"}>
-                            {healthQuery.data?.ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
-                            {healthQuery.data?.ok ? "API online" : "API offline"}
-                        </StatusBadge>
+                        <div className="signature-card signature-dark">
+                            <StatusBadge tone={healthQuery.data?.ok ? "mint" : "rose"}>
+                                {healthQuery.data?.ok ? <CheckCircle2 className="h-3.5 w-3.5" /> : <XCircle className="h-3.5 w-3.5" />}
+                                {healthQuery.data?.ok ? "API online" : "API offline"}
+                            </StatusBadge>
+                            <h3 className="mt-5 text-2xl font-normal leading-snug">Interaction-aware discovery</h3>
+                            <p className="mt-3 text-sm leading-6">
+                                Impressions and actions remain attached to the active shopper and recommendation request.
+                            </p>
+                        </div>
                     </div>
                 </section>
 
                 <div className="grid gap-5 lg:grid-cols-2">
-                    <section className="panel-strong p-6">
+                    <section className="panel p-6">
                         <div className="mb-5 flex items-center gap-3">
                             <PlusCircle className="h-6 w-6 text-[var(--mint)]" />
                             <div>
                                 <p className="soft-label">Live learning</p>
-                                <h3 className="text-xl font-black text-[var(--ink-strong)]">Create personal shopper</h3>
+                                <h3 className="text-xl font-medium text-[var(--ink-strong)]">Create personal shopper</h3>
                             </div>
                         </div>
-                        <label className="mb-2 block text-xs font-bold text-[var(--ink-soft)]" htmlFor="new-shopper-name">
+                        <label className="mb-2 block text-sm font-medium text-[var(--ink-soft)]" htmlFor="new-shopper-name">
                             Shopper name
                         </label>
                         <input
@@ -149,15 +155,15 @@ export function ShopperLoginPage() {
                         ) : null}
                     </section>
 
-                    <section className="panel-strong p-6">
+                    <section className="panel p-6">
                         <div className="mb-5 flex items-center gap-3">
                             <Fingerprint className="h-6 w-6 text-[var(--violet)]" />
                             <div>
                                 <p className="soft-label">Existing shoppers</p>
-                                <h3 className="text-xl font-black text-[var(--ink-strong)]">Select a saved profile</h3>
+                                <h3 className="text-xl font-medium text-[var(--ink-strong)]">Select a saved profile</h3>
                             </div>
                         </div>
-                        <label className="mb-2 block text-xs font-bold text-[var(--ink-soft)]" htmlFor="login-shopper">
+                        <label className="mb-2 block text-sm font-medium text-[var(--ink-soft)]" htmlFor="login-shopper">
                             Shopper account or seeded persona
                         </label>
                         <select
@@ -198,7 +204,7 @@ export function ShopperLoginPage() {
 
                         {selectedUser ? (
                             <div className="mt-4 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-3 text-sm">
-                                <p className="font-bold text-[var(--ink-strong)]">{userLabel(selectedUser, personas)}</p>
+                                <p className="font-medium text-[var(--ink-strong)]">{userLabel(selectedUser, personas)}</p>
                                 <p className="mt-1 text-[var(--ink-soft)]">
                                     {selectedUser.profile_status} profile / {selectedUser.has_profile ? "learned behavior available" : "new shopper"}
                                 </p>

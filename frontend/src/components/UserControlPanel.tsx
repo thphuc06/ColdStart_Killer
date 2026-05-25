@@ -32,13 +32,13 @@ export function UserControlPanel() {
     }
 
     return (
-        <section className="panel p-4">
+        <section className="panel p-5">
             <div className="mb-4 flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
                     <Fingerprint className="h-5 w-5 text-[var(--mint)]" />
                     <div>
                         <p className="soft-label">Shopper context</p>
-                        <h2 className="text-base font-bold text-[var(--ink-strong)]">Active account</h2>
+                        <h2 className="text-base font-medium text-[var(--ink-strong)]">Active account</h2>
                     </div>
                 </div>
                 <StatusBadge tone={apiOnline ? "mint" : "rose"}>
@@ -50,8 +50,8 @@ export function UserControlPanel() {
             <div className="mb-4 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-3">
                 <div className="flex items-start justify-between gap-3">
                     <div>
-                        <p className="text-xs font-semibold text-[var(--ink-muted)]">Signed-in shopper</p>
-                        <p className="mt-1 text-sm font-black text-[var(--ink-strong)]">
+                        <p className="text-xs font-medium text-[var(--ink-muted)]">Signed-in shopper</p>
+                        <p className="mt-1 text-sm font-medium text-[var(--ink-strong)]">
                             {activeUser?.username || activeUser?.demo_label || "Loading shopper..."}
                         </p>
                         {userIdHash ? <p className="font-mono text-xs text-[var(--ink-muted)]">{shortId(userIdHash)}</p> : null}

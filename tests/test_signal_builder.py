@@ -4,6 +4,7 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -48,6 +49,10 @@ class FakeClickstreamEventsCollection:
     def find(self, filter_doc: dict, projection: dict | None = None):
         assert filter_doc == {}
         return FakeCursor([_project(doc, projection) for doc in self.docs])
+
+    def count_documents(self, filter_doc: dict):
+        assert filter_doc == {}
+        return len(self.docs)
 
     def bulk_write(self, operations, ordered=False):
         assert ordered is False
@@ -145,13 +150,17 @@ def _recommendation_log(
     item_id: str = "B001",
     score: float = 0.8,
     intents: list[str] | None = None,
+    facts: list[str] | None = None,
+    unit_ids: list[str] | None = None,
 ) -> dict:
     return {
         "request_id": request_id,
         "item_id": item_id,
         "scores": {"final_score": score, "profile_score": score / 2},
         "attribution": {
-            "matched_intents": intents or ["oil-control sunscreen"],
+            "matched_intents": ["oil-control sunscreen"] if intents is None else intents,
+            "matched_facts": facts or [],
+            "matched_unit_ids": unit_ids or [],
             "candidate_sources": ["profile_seed"],
             "matched_channels": ["synthetic_persona_match"],
             "explanation": "Matched synthetic skincare intent.",
@@ -194,6 +203,21 @@ def test_positive_events_create_positive_signal_and_preserve_recommendation_attr
     assert signal["reason_scores"][0]["intent"] == "oil-control sunscreen"
     assert signal["reason_scores"][0]["source"] == "profile_seed"
     assert signal["reason_scores"][0]["score"] > 0.0
+
+
+def test_product_facts_and_unit_ids_do_not_become_interest_reasons() -> None:
+    result = _run_builder(
+        [_event("evt_click", "click")],
+        [
+            _recommendation_log(
+                intents=[],
+                facts=["The smartphone has a 6.4-inch AMOLED touchscreen."],
+                unit_ids=["uuid-retrieval-unit"],
+            )
+        ],
+    )
+
+    assert result["sample_signals"][0]["reason_scores"] == []
 
 
 def test_hide_and_dislike_create_negative_signal() -> None:
@@ -288,6 +312,24 @@ def test_write_mode_is_idempotent_and_marks_events_processed_after_write() -> No
     assert signal_after_first["positive_score"] == 4.0
     assert all(doc["processed"] is True for doc in clickstream.docs)
     assert all(doc["processed_at"] == FIXED_NOW for doc in clickstream.docs)
+
+
+def test_write_mode_rejects_limited_event_subset_before_overwriting_aggregates() -> None:
+    clickstream = FakeClickstreamEventsCollection([_event("evt_click", "click"), _event("evt_cart", "add_to_cart")])
+    signals = FakeUpsertCollection(("user_id_hash", "item_id"))
+
+    with pytest.raises(ValueError, match="unsafe_partial_signal_write"):
+        build_user_item_signals(
+            clickstream_events_collection=clickstream,
+            recommendation_logs_collection=FakeRecommendationLogsCollection([]),
+            user_item_signals_collection=signals,
+            write=True,
+            limit_events=1,
+            updated_at=FIXED_NOW,
+        )
+
+    assert signals.docs == {}
+    assert clickstream.bulk_calls == []
 
 
 def test_phase5_script_does_not_request_profile_or_cf_collections(monkeypatch, capsys) -> None:

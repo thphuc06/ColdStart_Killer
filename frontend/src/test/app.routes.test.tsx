@@ -9,6 +9,9 @@ import { ExperienceProvider } from "../state/experience";
 
 const STORAGE_KEY = "coldstart-killer/frontend-state/v1";
 const LOGIN_SESSION_KEY = "coldstart-killer/active-login/v1";
+const longHomeExplanation =
+    "Boosted because it matches your sensitive skin profile and preference for natural ingredients with gentle hydration support.";
+const additionalHomeExplanation = "Also supported by recent skincare browsing signals.";
 
 const baseRecommendationItem = {
     request_id: "req_test_1",
@@ -62,7 +65,13 @@ const homeResponse = {
     surface: "home",
     algorithm_version: "rec_v1_profile_cf_hype",
     ranking_version: "rank_v1_default_weights",
-    items: [baseRecommendationItem],
+    items: [
+        {
+            ...baseRecommendationItem,
+            request_id: "req_home_1",
+            explanations: [longHomeExplanation, additionalHomeExplanation],
+        },
+    ],
     snapshot: { ok: true },
     user_id_hash: "u_test_user",
     personalized: true,
@@ -309,6 +318,13 @@ function installFetchMock() {
     });
 }
 
+function eventPayloads() {
+    return vi
+        .mocked(globalThis.fetch)
+        .mock.calls.filter(([input]) => String(input).includes("/api/events"))
+        .map(([, init]) => JSON.parse(String(init?.body)) as Record<string, unknown>);
+}
+
 
 function renderApp(route: string, authenticated = true) {
     const queryClient = new QueryClient({
@@ -355,8 +371,8 @@ describe("Phase 11 routes", () => {
     });
 
     afterEach(() => {
-        vi.restoreAllMocks();
         cleanup();
+        vi.restoreAllMocks();
     });
 
     it("renders the homepage feed cards", async () => {
@@ -364,6 +380,105 @@ describe("Phase 11 routes", () => {
 
         expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
         expect(screen.getByText("Recommended for you")).toBeInTheDocument();
+        expect(screen.getByText("No profile boost in this rank")).toBeInTheDocument();
+        expect(screen.getByText("0 profile matches")).toBeInTheDocument();
+    });
+
+    it("shows refresh progress while retaining the current feed", async () => {
+        renderApp("/");
+
+        expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
+        const fetchMock = vi.mocked(globalThis.fetch);
+        const currentImplementation = fetchMock.getMockImplementation();
+        let resolveRefresh: ((response: Response) => void) | undefined;
+        fetchMock.mockImplementation((input, init) => {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+            if (url.includes("/api/feed/home")) {
+                return new Promise<Response>((resolve) => {
+                    resolveRefresh = resolve;
+                });
+            }
+            return currentImplementation!(input, init);
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Refresh feed" }));
+
+        expect(await screen.findByRole("status")).toHaveTextContent("Refreshing recommendations");
+        expect(screen.getByRole("button", { name: "Refreshing..." })).toBeDisabled();
+        expect(screen.getByText("Test Charger Block")).toBeInTheDocument();
+
+        resolveRefresh?.(
+            new Response(JSON.stringify(homeResponse), {
+                status: 200,
+                headers: { "Content-Type": "application/json" },
+            }),
+        );
+        await waitFor(() => expect(screen.queryByText("Refreshing recommendations. Current picks stay visible until the new ranking is ready.")).not.toBeInTheDocument());
+    });
+
+    it("expands long Why shown explanations without hiding additional reasons", async () => {
+        renderApp("/");
+
+        expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
+        expect(screen.getByText(longHomeExplanation)).toHaveClass("line-clamp-2");
+        expect(screen.queryByText(additionalHomeExplanation)).not.toBeInTheDocument();
+
+        const toggle = screen.getByRole("button", { name: "Read full reason" });
+        expect(toggle).toHaveAttribute("aria-expanded", "false");
+        fireEvent.click(toggle);
+
+        expect(screen.getByText(longHomeExplanation)).not.toHaveClass("line-clamp-2");
+        expect(screen.getByText(additionalHomeExplanation)).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Collapse reason" })).toHaveAttribute("aria-expanded", "true");
+    });
+
+    it("logs each homepage recommendation impression once per request", async () => {
+        renderApp("/");
+
+        expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
+        await waitFor(() => {
+            const impressions = eventPayloads().filter((payload) => payload.event_type === "impression");
+            expect(impressions).toHaveLength(1);
+            expect(impressions[0]).toMatchObject({
+                user_id_hash: "u_test_user",
+                session_id: "sess_test_ui",
+                item_id: "item_1",
+                event_type: "impression",
+                surface: "home",
+                request_id: "req_home_1",
+                rank_position: 1,
+                client: { component: "homepage-grid" },
+            });
+        });
+
+        fireEvent.click(screen.getByRole("button", { name: "Refresh feed" }));
+        await waitFor(() => {
+            const feedCalls = vi
+                .mocked(globalThis.fetch)
+                .mock.calls.filter(([input]) => String(input).includes("/api/feed/home"));
+            expect(feedCalls).toHaveLength(2);
+            expect(eventPayloads().filter((payload) => payload.event_type === "impression")).toHaveLength(1);
+        });
+    });
+
+    it("logs explicit homepage card actions with recommendation attribution", async () => {
+        renderApp("/");
+
+        expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Cart" }));
+
+        await waitFor(() => {
+            expect(eventPayloads()).toContainEqual(
+                expect.objectContaining({
+                    item_id: "item_1",
+                    event_type: "add_to_cart",
+                    surface: "home",
+                    request_id: "req_home_1",
+                    rank_position: 1,
+                    client: { component: "homepage-card", device_type: "desktop" },
+                }),
+            );
+        });
     });
 
     it("requires shopper selection before opening the homepage", async () => {
@@ -427,6 +542,27 @@ describe("Phase 11 routes", () => {
         expect(screen.getByRole("button", { name: /Search/i })).toBeInTheDocument();
     });
 
+    it("preserves search attribution when opening a recommendation", async () => {
+        renderApp("/search?q=wireless%20charger%20under%20300k");
+
+        expect(await screen.findByText("Search Result Charger")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "View details" }));
+
+        await waitFor(() => {
+            expect(eventPayloads()).toContainEqual(
+                expect.objectContaining({
+                    item_id: "item_1",
+                    event_type: "click",
+                    surface: "search",
+                    request_id: "req_search_1",
+                    query_text: "wireless charger under 300k",
+                    rank_position: 1,
+                    client: { component: "search-card", device_type: "desktop" },
+                }),
+            );
+        });
+    });
+
     it("renders the item detail route with similar products", async () => {
         renderApp("/items/item_1");
 
@@ -434,6 +570,50 @@ describe("Phase 11 routes", () => {
         expect(await screen.findByText("Compact charging product description.")).toBeInTheDocument();
         expect(screen.getByText(/Fast charging/)).toBeInTheDocument();
         expect(await screen.findByText("Similar Product Title")).toBeInTheDocument();
+    });
+
+    it("preserves similar-product source attribution when opening details", async () => {
+        renderApp("/items/item_1");
+
+        expect(await screen.findByText("Similar Product Title")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "View details" }));
+
+        await waitFor(() => {
+            expect(eventPayloads()).toContainEqual(
+                expect.objectContaining({
+                    item_id: "item_1",
+                    event_type: "click",
+                    surface: "detail_similar",
+                    request_id: "req_similar_1",
+                    rank_position: 1,
+                    client: { component: "similar-products-rail", device_type: "desktop" },
+                    metadata: { source_item_id: "item_1" },
+                }),
+            );
+        });
+    });
+
+    it("logs attributed detail dwell after navigating away from a recommendation", async () => {
+        renderApp("/");
+
+        expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "View details" }));
+        expect(await screen.findByText("Detail Product Title")).toBeInTheDocument();
+        fireEvent.click(screen.getAllByRole("link", { name: "Home" })[0]);
+
+        await waitFor(() => {
+            expect(eventPayloads()).toContainEqual(
+                expect.objectContaining({
+                    item_id: "item_1",
+                    event_type: "view_detail",
+                    surface: "home",
+                    request_id: "req_home_1",
+                    rank_position: 1,
+                    dwell_time_ms: 500,
+                    client: { component: "product-detail", device_type: "desktop" },
+                }),
+            );
+        });
     });
 
     it("renders the debug route with lineage payloads", async () => {

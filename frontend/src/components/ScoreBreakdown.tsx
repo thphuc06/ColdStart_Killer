@@ -49,7 +49,7 @@ export function ScoreBreakdown({ breakdown }: ScoreBreakdownProps) {
                     <div key={key} className="rounded-lg border border-[var(--line-soft)] bg-white p-3">
                         <div className="mb-2 flex items-center justify-between gap-3 text-sm">
                             <span className="capitalize text-[var(--ink-soft)]">{formatLabel(key)}</span>
-                            <span className="font-black text-[var(--ink-strong)]">{value.toFixed(3)}</span>
+                            <span className="font-medium text-[var(--ink-strong)]">{value.toFixed(3)}</span>
                         </div>
                         <div className="h-1.5 overflow-hidden rounded-full bg-slate-100">
                             <div

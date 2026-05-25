@@ -72,6 +72,7 @@ export type RecommendationCard = {
     interaction_count: number;
     score: number;
     final_score: number;
+    contributions?: Record<string, number>;
     matched_intent: string;
     matched_fact: string;
     cold_start_note: string;
@@ -177,6 +178,14 @@ export type DebugUserResponse = {
     recent_logs: Record<string, unknown>[];
     recent_events: Record<string, unknown>[];
     cf_edges: Record<string, unknown>[];
+    freshness: {
+        state: "current" | "stale" | "unknown";
+        latest_event_at?: string | null;
+        signal_built_at?: string | null;
+        profile_built_at?: string | null;
+        pending_event_count: number;
+        stale_components: string[];
+    };
 };
 
 export type DemoStatusResponse = {
@@ -385,7 +394,7 @@ export function seedDemo(params: {
 export function processEvents(params: { limit?: number; rebuildItemStats?: boolean; write?: boolean }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/process-events${toQueryString({
-            limit: params.limit ?? 500,
+            limit: params.limit,
             rebuild_item_stats: params.rebuildItemStats ?? true,
             write: params.write ?? false,
         })}`,

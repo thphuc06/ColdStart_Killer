@@ -12,6 +12,13 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _positive_contribution(candidate: dict[str, Any], channel: str, raw_field: str) -> bool:
+    contributions = candidate.get("contributions")
+    if isinstance(contributions, dict):
+        return _safe_float(contributions.get(channel), 0.0) > 0
+    return _safe_float(candidate.get(raw_field), 0.0) > 0
+
+
 def build_reason_badges(candidate: dict[str, Any]) -> list[str]:
     badges: list[str] = []
     matched_channels = {str(value) for value in candidate.get("matched_channels", [])}
@@ -19,7 +26,7 @@ def build_reason_badges(candidate: dict[str, Any]) -> list[str]:
         badges.append("HyPE semantic")
     if candidate.get("matched_fact") or "bm25" in matched_channels:
         badges.append("BM25 fact")
-    if _safe_float(candidate.get("profile_score_raw"), -1.0) > 0:
+    if _positive_contribution(candidate, "profile", "profile_score_raw"):
         badges.append("Profile")
     if _safe_float(candidate.get("item_item_cf_score_raw"), 0.0) > 0:
         badges.append("Collaborative Filtering")
@@ -53,7 +60,7 @@ def build_explanations(candidate: dict[str, Any], *, surface: str) -> list[str]:
         explanations.append(f"Matched product fact: {matched_fact}.")
 
     profile_label = str(candidate.get("profile_interest_label") or "").strip()
-    if _safe_float(candidate.get("profile_score_raw"), -1.0) > 0 and profile_label:
+    if _positive_contribution(candidate, "profile", "profile_score_raw") and profile_label:
         explanations.append(f"Boosted because it matches your {profile_label} interest.")
 
     if _safe_float(candidate.get("exploration_score_raw"), 0.0) > 0 and surface == "home":
@@ -81,6 +88,7 @@ def build_result_card(
     matched_intent = str(candidate.get("matched_intent") or "")
     matched_fact = str(candidate.get("matched_fact") or "")
 
+    profile_contributes = _positive_contribution(candidate, "profile", "profile_score_raw")
     return {
         "request_id": request_id,
         "surface": surface,
@@ -104,6 +112,7 @@ def build_result_card(
         "cold_start_note": cold_start_note(candidate),
         "scores": dict(candidate.get("scores") or candidate.get("score_breakdown") or {}),
         "score_breakdown": dict(candidate.get("score_breakdown") or candidate.get("scores") or {}),
+        "contributions": dict(candidate.get("contributions") or {}),
         "reason_badges": build_reason_badges(candidate),
         "explanations": explanations,
         "candidate_sources": candidate_sources,
@@ -113,7 +122,9 @@ def build_result_card(
             "matched_facts": [matched_fact] if matched_fact else [],
             "matched_channels": matched_channels,
             "candidate_sources": candidate_sources,
-            "matched_profile_interest_ids": list(candidate.get("matched_profile_interest_ids", [])),
+            "matched_profile_interest_ids": (
+                list(candidate.get("matched_profile_interest_ids", [])) if profile_contributes else []
+            ),
             "matched_interest_embedding": candidate.get("matched_interest_embedding"),
             "matched_neighbor_embedding": candidate.get("matched_neighbor_embedding"),
             "cf_evidence": candidate.get("cf_evidence"),
@@ -124,7 +135,7 @@ def build_result_card(
             "matched_aspects": list(candidate.get("matched_aspects", [])),
             "matched_unit_ids": list(candidate.get("matched_unit_ids", [])),
             "candidate_sources": candidate_sources,
-            "profile_interest_label": candidate.get("profile_interest_label", ""),
+            "profile_interest_label": candidate.get("profile_interest_label", "") if profile_contributes else "",
             "cf_evidence": candidate.get("cf_evidence"),
         },
     }

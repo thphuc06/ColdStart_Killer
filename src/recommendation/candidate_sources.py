@@ -399,19 +399,43 @@ def profile_signal_for_item(
     best_interest_label = ""
     best_interest_embedding: list[float] | None = None
     interests = profile.get("interest_vectors") if isinstance(profile.get("interest_vectors"), list) else []
+    item_category_id = str(item_profile.get("category_id") or "").strip()
+    scored_interests: list[tuple[float, dict[str, Any]]] = []
     for interest in interests:
         embedding = _embedding_array(interest.get("embedding"))
         if embedding is None:
             continue
         weight_factor = max(0.25, min(1.0, _safe_float(interest.get("weight"), 0.0) / 5.0))
         score = _cosine_similarity(item_vector, embedding) * weight_factor
+        scored_interests.append((score, interest))
+
+    category_matches = [
+        (score, interest)
+        for score, interest in scored_interests
+        if score > 0
+        and item_category_id
+        and item_category_id
+        in {
+            str(category).strip()
+            for category in (
+                interest.get("categories") if isinstance(interest.get("categories"), list) else []
+            )
+        }
+    ]
+    has_categorized_interests = any(
+        isinstance(interest.get("categories"), list) and any(str(value).strip() for value in interest["categories"])
+        for _score, interest in scored_interests
+    )
+    category_guarded = bool(item_category_id and has_categorized_interests)
+    eligible_interests = category_matches if category_guarded else scored_interests
+    for score, interest in eligible_interests:
         if score > best_score:
             best_score = score
             best_interest_id = str(interest.get("interest_id") or "")
             best_interest_label = str(interest.get("label") or "")
             best_interest_embedding = list(interest.get("embedding", [])) if isinstance(interest.get("embedding"), list) else None
 
-    if best_score <= -1.0:
+    if best_score <= -1.0 and not category_guarded:
         long_term_vector = _embedding_array(profile.get("long_term_embedding"))
         if long_term_vector is not None:
             best_score = _cosine_similarity(item_vector, long_term_vector)

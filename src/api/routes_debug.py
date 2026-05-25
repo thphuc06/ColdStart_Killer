@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -61,6 +62,54 @@ def _collection_count(collection_getter) -> int:
     return int(collection_getter().count_documents({}))
 
 
+def _parse_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
+
+
+def _latest_timestamp(values: list[Any]) -> str | None:
+    parsed = [(timestamp, _parse_timestamp(timestamp)) for timestamp in values]
+    valid = [(timestamp, moment) for timestamp, moment in parsed if moment is not None]
+    if not valid:
+        return None
+    return str(max(valid, key=lambda row: row[1])[0])
+
+
+def _freshness_snapshot(
+    *,
+    profile_doc: dict[str, Any] | None,
+    signals: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    pending_event_count: int,
+) -> dict[str, Any]:
+    latest_event_at = _latest_timestamp([event.get("timestamp") for event in events])
+    signal_built_at = _latest_timestamp([signal.get("updated_at") for signal in signals])
+    profile_built_at = str(profile_doc.get("updated_at") or "") or None if profile_doc else None
+    latest_event_time = _parse_timestamp(latest_event_at)
+    stale_components: list[str] = []
+    for name, timestamp in (("signals", signal_built_at), ("profile", profile_built_at)):
+        built_time = _parse_timestamp(timestamp)
+        if latest_event_time and (built_time is None or built_time < latest_event_time):
+            stale_components.append(name)
+    if pending_event_count > 0 and "signals" not in stale_components:
+        stale_components.append("signals")
+    state = "stale" if stale_components else ("current" if latest_event_at else "unknown")
+    return {
+        "state": state,
+        "latest_event_at": latest_event_at,
+        "signal_built_at": signal_built_at,
+        "profile_built_at": profile_built_at,
+        "pending_event_count": pending_event_count,
+        "stale_components": stale_components,
+    }
+
+
 @router.get("/debug/user/{user_id}")
 def get_debug_user(user_id: str) -> dict[str, Any]:
     user_doc = get_users_collection().find_one({"user_id_hash": user_id}, {"_id": 0})
@@ -76,9 +125,13 @@ def get_debug_user(user_id: str) -> dict[str, Any]:
         get_recommendation_logs_collection().find({"user_id_hash": user_id}, {"_id": 0}).sort("shown_at", -1),
         20,
     )
+    clickstream_events_collection = get_clickstream_events_collection()
     events = _safe_list(
-        get_clickstream_events_collection().find({"user_id_hash": user_id}, {"_id": 0}).sort("timestamp", -1),
+        clickstream_events_collection.find({"user_id_hash": user_id}, {"_id": 0}).sort("timestamp", -1),
         50,
+    )
+    pending_event_count = int(
+        clickstream_events_collection.count_documents({"user_id_hash": user_id, "processed": {"$ne": True}})
     )
 
     cf_item_ids = [str(signal.get("item_id") or "") for signal in signals[:5] if str(signal.get("item_id") or "")]
@@ -98,6 +151,12 @@ def get_debug_user(user_id: str) -> dict[str, Any]:
         "recent_logs": logs,
         "recent_events": events,
         "cf_edges": cf_edges,
+        "freshness": _freshness_snapshot(
+            profile_doc=profile_doc,
+            signals=signals,
+            events=events,
+            pending_event_count=pending_event_count,
+        ),
     }
 
 
@@ -182,9 +241,22 @@ def reset_demo_behavior(write: bool = False, full: bool = False, confirm: str | 
 
 
 @router.post("/debug/process-events")
-def process_events(limit: int = 500, rebuild_item_stats: bool = True, write: bool = False) -> dict[str, Any]:
+def process_events(limit: int | None = None, rebuild_item_stats: bool = True, write: bool = False) -> dict[str, Any]:
+    clickstream_events_collection = get_clickstream_events_collection()
+    if write and limit is not None:
+        total_events = int(clickstream_events_collection.count_documents({}))
+        if limit < total_events:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "partial_signal_write_blocked",
+                    "message": "Writing signals from a limited event subset would overwrite complete aggregates.",
+                    "limit_events": limit,
+                    "total_events": total_events,
+                },
+            )
     result = build_user_item_signals(
-        clickstream_events_collection=get_clickstream_events_collection(),
+        clickstream_events_collection=clickstream_events_collection,
         recommendation_logs_collection=get_recommendation_logs_collection(),
         user_item_signals_collection=get_user_item_signals_collection() if write else None,
         item_stats_collection=get_item_stats_collection() if write and rebuild_item_stats else None,

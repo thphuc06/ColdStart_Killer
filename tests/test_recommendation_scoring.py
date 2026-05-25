@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.recommendation.scoring import classify_query_type, get_search_weights, rank_normalize, score_candidate_batch
+from src.recommendation.explanations import build_result_card
 
 
 def test_rank_normalize_assigns_descending_reciprocal_ranks() -> None:
@@ -68,3 +69,42 @@ def test_score_candidate_batch_keeps_raw_and_normalized_breakdown() -> None:
     assert breakdown["item_item_cf_score_raw"] == 0.5
     assert breakdown["item_item_cf_score"] == 1.0
     assert breakdown["final_score"] == ranked[0]["final_score"]
+
+
+def test_non_positive_profile_similarity_does_not_create_a_profile_boost() -> None:
+    ranked = score_candidate_batch(
+        [{"item_id": "UNRELATED", "profile_score_raw": -0.30}],
+        {"profile": 1.0},
+    )
+
+    candidate = ranked[0]
+    assert candidate["score_breakdown"]["profile_score"] == 0.0
+    assert candidate["contributions"]["profile"] == 0.0
+    assert candidate["final_score"] == 0.0
+
+
+def test_profile_reason_requires_weighted_contribution_to_rank() -> None:
+    candidate = score_candidate_batch(
+        [
+            {
+                "item_id": "BEAUTY",
+                "profile_score_raw": 0.85,
+                "profile_interest_label": "gentle skincare",
+            }
+        ],
+        {"profile": 0.0, "quality": 1.0},
+    )[0]
+
+    card = build_result_card(
+        candidate,
+        request_id="req_profile_gate",
+        rank_position=1,
+        surface="home",
+        algorithm_version="algorithm_test",
+        ranking_version="ranking_test",
+    )
+
+    assert candidate["contributions"]["profile"] == 0.0
+    assert "Profile" not in card["reason_badges"]
+    assert all("gentle skincare interest" not in reason for reason in card["explanations"])
+    assert card["debug"]["profile_interest_label"] == ""

@@ -374,26 +374,15 @@ def _build_event_vector(
 
 
 def _intent_list(signal: dict[str, Any], log: dict[str, Any] | None) -> list[str]:
-    intents = []
-    for reason in signal.get("reason_scores", []):
-        intent = str(reason.get("intent") or "").strip()
-        if intent:
-            intents.append(intent)
-    if intents:
-        return intents[:5]
-
     if not isinstance(log, dict):
         return []
     attribution = log.get("attribution")
     if not isinstance(attribution, dict):
         return []
-    for field_name in ("matched_intents", "matched_facts"):
-        values = attribution.get(field_name)
-        if isinstance(values, list):
-            parsed = [str(value).strip() for value in values if str(value).strip()]
-            if parsed:
-                return parsed[:5]
-    return []
+    values = attribution.get("matched_intents")
+    if not isinstance(values, list):
+        return []
+    return [str(value).strip() for value in values if str(value).strip()][:5]
 
 
 def _signal_weight(signal: dict[str, Any]) -> float:

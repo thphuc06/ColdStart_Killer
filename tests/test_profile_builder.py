@@ -310,6 +310,45 @@ def test_build_user_profiles_creates_multiple_interests_for_dissimilar_positive_
     assert result["stats"]["calibration"]["users_with_1_interest"] == 0
 
 
+def test_build_user_profiles_does_not_label_an_interest_with_a_product_fact() -> None:
+    product_fact = "The smartphone has a 6.4-inch Super AMOLED capacitive touchscreen with 16M colors."
+    result = build_user_profiles(
+        user_item_signals_collection=FakeCollection(
+            [_signal("u_fact", "PHONE", positive_score=2.0, reason_intent=product_fact)]
+        ),
+        clickstream_events_collection=FakeCollection(
+            [_event("u_fact", "PHONE", event_type="click", request_id="req_fact")]
+        ),
+        recommendation_logs_collection=FakeCollection(
+            [
+                {
+                    "request_id": "req_fact",
+                    "item_id": "PHONE",
+                    "attribution": {
+                        "matched_intents": [],
+                        "matched_facts": [product_fact],
+                        "matched_channels": ["bm25"],
+                    },
+                    "scores": {"final_score": 0.8},
+                    "shown_at": "2026-01-01T00:00:00+00:00",
+                    "surface": "search",
+                }
+            ]
+        ),
+        item_hype_profiles_collection=FakeCollection(
+            [_item_profile("PHONE", 0, category_id="cell_phones_and_accessories")]
+        ),
+        items_collection=FakeCollection(
+            [_item("PHONE", brand="BrandP", category_id="cell_phones_and_accessories")]
+        ),
+        updated_at=FIXED_NOW,
+    )
+
+    interest = result["sample_profiles"][0]["interest_vectors"][0]
+    assert interest["label"] == "cell phones and accessories"
+    assert product_fact not in interest["top_intents"]
+
+
 def test_build_user_profiles_caps_interests_and_merges_when_limit_reached() -> None:
     signals = []
     events_docs = []

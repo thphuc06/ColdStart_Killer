@@ -156,13 +156,13 @@ export function ItemDetailPage() {
     }
 
     return (
-        <div className="space-y-5">
+        <div className="space-y-10">
             {itemQuery.isLoading ? (
                 <LoadingState title="Loading product" message="Fetching catalog metadata and cold-start state." />
             ) : itemQuery.error ? (
                 <ErrorState message={String(itemQuery.error)} />
             ) : itemQuery.data ? (
-                <section className="panel-strong overflow-hidden">
+                <section className="panel overflow-hidden">
                     <div className="grid gap-0 lg:grid-cols-[420px,minmax(0,1fr)]">
                         <div className="bg-[var(--surface-muted)] p-5">
                             <div className="aspect-[4/3] overflow-hidden rounded-lg bg-white">
@@ -205,7 +205,7 @@ export function ItemDetailPage() {
 
                             <div>
                                 <p className="soft-label">Product detail</p>
-                                <h2 className="mt-2 text-3xl font-black leading-tight tracking-tight text-[var(--ink-strong)]">
+                                <h2 className="display-title mt-3">
                                     {itemQuery.data.title}
                                 </h2>
                                 <p className="mt-3 text-sm leading-6 text-[var(--ink-soft)]">
@@ -248,12 +248,12 @@ export function ItemDetailPage() {
                             </div>
 
                             {detailFeedback ? (
-                                <div className="rounded-lg border border-[rgba(37,99,235,0.18)] bg-[var(--sky-soft)] p-3 text-sm font-semibold text-[var(--sky)]">
+                                <div className="rounded-lg border border-[#c7d8f3] bg-[var(--sky-soft)] p-3 text-sm font-medium text-[var(--sky)]">
                                     {detailFeedback}
                                 </div>
                             ) : null}
 
-                            <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-4">
+                            <div className="cream-callout p-4">
                                 <p className="soft-label">Recommendation origin</p>
                                 {origin ? (
                                     <p className="mt-1 text-sm text-[var(--ink-soft)]">
@@ -274,7 +274,7 @@ export function ItemDetailPage() {
                                     <p className="soft-label">Product information</p>
                                     {itemQuery.data.source_text.description_text ? (
                                         <div>
-                                            <h3 className="text-sm font-bold text-[var(--ink-strong)]">Description</h3>
+                                            <h3 className="text-sm font-medium text-[var(--ink-strong)]">Description</h3>
                                             <p className="mt-2 whitespace-pre-line text-sm leading-6 text-[var(--ink-soft)]">
                                                 {itemQuery.data.source_text.description_text}
                                             </p>
@@ -282,7 +282,7 @@ export function ItemDetailPage() {
                                     ) : null}
                                     {featureLines.length ? (
                                         <div>
-                                            <h3 className="text-sm font-bold text-[var(--ink-strong)]">Features</h3>
+                                            <h3 className="text-sm font-medium text-[var(--ink-strong)]">Features</h3>
                                             <ul className="mt-2 space-y-1 text-sm leading-6 text-[var(--ink-soft)]">
                                                 {featureLines.map((line) => (
                                                     <li key={line}>- {line}</li>
@@ -292,7 +292,7 @@ export function ItemDetailPage() {
                                     ) : null}
                                     {itemQuery.data.source_text.details_text ? (
                                         <details>
-                                            <summary className="cursor-pointer text-sm font-bold text-[var(--ink-strong)]">
+                                            <summary className="cursor-pointer text-sm font-medium text-[var(--ink-strong)]">
                                                 Technical details
                                             </summary>
                                             <p className="mt-2 whitespace-pre-line text-sm leading-6 text-[var(--ink-soft)]">
@@ -309,11 +309,11 @@ export function ItemDetailPage() {
                 </section>
             ) : null}
 
-            <section className="panel-strong p-5">
+            <section className="border-t border-[var(--line-soft)] pt-10">
                 <div className="mb-5 flex flex-wrap items-end justify-between gap-4">
                     <div>
                         <p className="soft-label">Related recommendations</p>
-                        <h3 className="mt-1 text-2xl font-black text-[var(--ink-strong)]">Similar products</h3>
+                        <h3 className="section-title mt-2">Similar products</h3>
                         <p className="mt-2 text-sm text-[var(--ink-soft)]">
                             Semantic similarity and collaborative filtering are shown separately in each card.
                         </p>

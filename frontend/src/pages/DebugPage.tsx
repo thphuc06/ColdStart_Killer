@@ -20,7 +20,7 @@ function FieldRow({ label, value }: { label: string; value: string | number | nu
     return (
         <div className="flex items-center justify-between gap-3 border-b border-[var(--line-soft)] py-2 last:border-0">
             <span className="text-sm text-[var(--ink-soft)]">{label}</span>
-            <span className="text-right text-sm font-bold text-[var(--ink-strong)]">{value ?? "n/a"}</span>
+            <span className="text-right text-sm font-medium text-[var(--ink-strong)]">{value ?? "n/a"}</span>
         </div>
     );
 }
@@ -89,7 +89,7 @@ export function DebugPage() {
     const cfMutation = useMutation({ mutationFn: rebuildCf, onSuccess: refreshAdminState });
     const applyBehaviorMutation = useMutation({
         mutationFn: async () => ({
-            signals: await processEvents({ limit: 100000, rebuildItemStats: true, write: true }),
+            signals: await processEvents({ rebuildItemStats: true, write: true }),
             profiles: await rebuildProfiles({ write: true }),
             cf: await rebuildCf({ write: true }),
         }),
@@ -107,10 +107,11 @@ export function DebugPage() {
     );
 
     const profileQuality = debugQuery.data?.profile?.profile_quality as Record<string, unknown> | undefined;
+    const freshness = debugQuery.data?.freshness;
 
     return (
-        <div className="space-y-5">
-            <section className="page-hero p-6">
+        <div className="space-y-8">
+            <section className="editorial-hero">
                 <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr),420px] lg:items-end">
                     <div>
                         <div className="mb-4 flex flex-wrap gap-2">
@@ -119,7 +120,7 @@ export function DebugPage() {
                             <StatusBadge tone="amber">Dry-run first</StatusBadge>
                         </div>
                         <p className="soft-label">Debug and demo recovery</p>
-                        <h2 className="mt-2 text-3xl font-black tracking-tight text-[var(--ink-strong)]">
+                        <h2 className="display-title mt-3">
                             Inspect lineage and operate the demo safely
                         </h2>
                         <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--ink-soft)]">
@@ -152,7 +153,7 @@ export function DebugPage() {
             <section className="grid gap-5 xl:grid-cols-[360px,minmax(0,1fr)]">
                 <section className="panel p-5">
                     <p className="soft-label">Current user</p>
-                    <h3 className="mt-1 text-lg font-black text-[var(--ink-strong)]">
+                    <h3 className="mt-2 text-lg font-medium text-[var(--ink-strong)]">
                         {userIdHash ? `...${userIdHash.slice(-12)}` : "No active user"}
                     </h3>
                     <div className="mt-4">
@@ -161,11 +162,29 @@ export function DebugPage() {
                         <FieldRow label="Positive items" value={Number(profileQuality?.num_positive_items ?? 0)} />
                         <FieldRow label="Confidence" value={Number(profileQuality?.confidence ?? 0).toFixed(2)} />
                     </div>
+                    {freshness ? (
+                        <div className="mt-5 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-3">
+                            <StatusBadge tone={freshness.state === "stale" ? "amber" : freshness.state === "current" ? "mint" : "sky"}>
+                                {freshness.state === "stale" ? "Derived data stale" : freshness.state === "current" ? "Derived data current" : "Freshness unknown"}
+                            </StatusBadge>
+                            <div className="mt-3">
+                                <FieldRow label="Pending events" value={freshness.pending_event_count} />
+                                <FieldRow label="Latest event" value={freshness.latest_event_at ?? "n/a"} />
+                                <FieldRow label="Signals built" value={freshness.signal_built_at ?? "n/a"} />
+                                <FieldRow label="Profile built" value={freshness.profile_built_at ?? "n/a"} />
+                            </div>
+                            {freshness.stale_components.length ? (
+                                <p className="mt-2 text-xs text-[var(--ink-soft)]">
+                                    Rebuild required: {freshness.stale_components.join(", ")}.
+                                </p>
+                            ) : null}
+                        </div>
+                    ) : null}
                 </section>
 
                 <section className="panel p-5">
                     <p className="soft-label">Data lineage</p>
-                    <h3 className="mt-1 text-lg font-black text-[var(--ink-strong)]">Recommendation trace</h3>
+                    <h3 className="mt-2 text-lg font-medium text-[var(--ink-strong)]">Recommendation trace</h3>
                     <div className="mt-4 grid gap-3 md:grid-cols-5">
                         {[
                             ["Logs", metricSummary.logs, "sky"],
@@ -176,7 +195,7 @@ export function DebugPage() {
                         ].map(([label, value, tone]) => (
                             <div key={String(label)} className="rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-3">
                                 <StatusBadge tone={tone as "sky" | "mint" | "amber" | "violet"}>{Number(value) > 0 ? "Verified" : "Not verified"}</StatusBadge>
-                                <p className="mt-3 text-sm font-bold text-[var(--ink-strong)]">{label}</p>
+                                <p className="mt-3 text-sm font-medium text-[var(--ink-strong)]">{label}</p>
                                 <p className="text-xs text-[var(--ink-soft)]">{String(value)} records visible</p>
                             </div>
                         ))}
@@ -188,7 +207,7 @@ export function DebugPage() {
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr),360px]">
                     <div>
                         <p className="soft-label">Demo Recovery</p>
-                        <h3 className="mt-1 text-xl font-black text-[var(--ink-strong)]">Reset modes and rebuild order</h3>
+                        <h3 className="mt-2 text-xl font-medium text-[var(--ink-strong)]">Reset modes and rebuild order</h3>
                         <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
                             Soft reset clears recommendation logs, clickstream events, user signals, profiles, and item stats while
                             keeping catalog data and precomputed synthetic CF edges. Full reset also clears behavior-derived CF edges
@@ -237,7 +256,7 @@ export function DebugPage() {
                 </div>
 
                 <details className="mt-5 rounded-lg border border-[var(--line-soft)] bg-white p-4">
-                    <summary className="cursor-pointer font-bold text-[var(--ink-strong)]">
+                    <summary className="cursor-pointer font-medium text-[var(--ink-strong)]">
                         Recovery steps after {resetFull ? "full" : "soft"} reset
                     </summary>
                     <div className="mt-3">
@@ -256,7 +275,7 @@ export function DebugPage() {
                     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr),320px] lg:items-center">
                         <div>
                             <p className="soft-label">Captured UI behavior</p>
-                            <h3 className="mt-1 text-lg font-black text-[var(--ink-strong)]">
+                            <h3 className="mt-2 text-lg font-medium text-[var(--ink-strong)]">
                                 Apply interactions to personalization
                             </h3>
                             <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
@@ -280,7 +299,7 @@ export function DebugPage() {
                         <DatabaseBackup className="h-5 w-5 text-[var(--rose)]" />
                         <div>
                             <p className="soft-label">Reset behavior data</p>
-                            <h3 className="text-lg font-black text-[var(--ink-strong)]">Dry-run first, confirm before live reset</h3>
+                            <h3 className="text-lg font-medium text-[var(--ink-strong)]">Dry-run first, confirm before live reset</h3>
                         </div>
                     </div>
 
@@ -316,7 +335,7 @@ export function DebugPage() {
                         <TestTube2 className="h-5 w-5 text-[var(--amber)]" />
                         <div>
                             <p className="soft-label">Seed synthetic behavior</p>
-                            <h3 className="text-lg font-black text-[var(--ink-strong)]">Admin-only synthetic data writer</h3>
+                            <h3 className="text-lg font-medium text-[var(--ink-strong)]">Admin-only synthetic data writer</h3>
                         </div>
                     </div>
 
@@ -353,10 +372,13 @@ export function DebugPage() {
                         <Wrench className="h-5 w-5 text-[var(--mint)]" />
                         <div>
                             <p className="soft-label">Process events</p>
-                            <h3 className="text-lg font-black text-[var(--ink-strong)]">Signals and item stats</h3>
+                            <h3 className="text-lg font-medium text-[var(--ink-strong)]">Signals and item stats</h3>
                         </div>
                     </div>
                     <input className="form-input" type="number" placeholder="event limit" value={processLimit} onChange={(event) => setProcessLimit(Number(event.target.value))} />
+                    <p className="text-xs leading-5 text-[var(--ink-soft)]">
+                        Limited processing is for dry-run inspection. A live write is blocked unless the limit covers every event.
+                    </p>
                     <label className="mt-3 flex items-center gap-3 rounded-lg bg-[var(--surface-muted)] px-4 py-3 text-sm font-semibold">
                         <input checked={processWrite} type="checkbox" onChange={(event) => setProcessWrite(event.target.checked)} />
                         write mode
@@ -376,13 +398,13 @@ export function DebugPage() {
                         <Gauge className="h-5 w-5 text-[var(--sky)]" />
                         <div>
                             <p className="soft-label">Rebuild downstream artifacts</p>
-                            <h3 className="text-lg font-black text-[var(--ink-strong)]">Profiles and CF edges</h3>
+                            <h3 className="text-lg font-medium text-[var(--ink-strong)]">Profiles and CF edges</h3>
                         </div>
                     </div>
 
                     <div className="grid gap-4 lg:grid-cols-2">
                         <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-4">
-                            <div className="mb-3 font-bold text-[var(--ink-strong)]">Profiles</div>
+                            <div className="mb-3 font-medium text-[var(--ink-strong)]">Profiles</div>
                             <input
                                 className="form-input"
                                 placeholder="limit users (optional)"
@@ -408,7 +430,7 @@ export function DebugPage() {
                         </div>
 
                         <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-4">
-                            <div className="mb-3 font-bold text-[var(--ink-strong)]">Collaborative Filtering</div>
+                            <div className="mb-3 font-medium text-[var(--ink-strong)]">Collaborative Filtering</div>
                             <div className="grid gap-3 sm:grid-cols-2">
                                 <input
                                     className="form-input"

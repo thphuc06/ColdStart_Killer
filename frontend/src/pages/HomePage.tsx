@@ -46,9 +46,10 @@ export function HomePage() {
         () => homepageQuery.data?.items.filter((item) => !dismissedIds.includes(item.item_id)) ?? [],
         [homepageQuery.data?.items, dismissedIds],
     );
+    const refreshing = homepageQuery.isFetching && !homepageQuery.isLoading;
 
     const cfCount = visibleItems.filter((item) => item.attribution.cf_evidence || item.score_breakdown.item_item_cf_score > 0).length;
-    const profileCount = visibleItems.filter((item) => item.score_breakdown.profile_score > 0).length;
+    const profileCount = visibleItems.filter((item) => Number(item.contributions?.profile ?? 0) > 0).length;
     const coldCount = visibleItems.filter((item) => item.is_cold_item).length;
 
     async function handleOpenDetail(card: RecommendationCard) {
@@ -96,46 +97,52 @@ export function HomePage() {
     }
 
     return (
-        <div className="space-y-5">
-            <section className="page-hero p-6 lg:p-8">
-                <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr),360px] lg:items-end">
+        <div className="space-y-8">
+            <section className="editorial-hero">
+                <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr),380px] lg:items-center">
                     <div>
-                        <div className="mb-4 flex flex-wrap gap-2">
-                            <StatusBadge tone="mint">
+                        <p className="soft-label">Personalized marketplace feed</p>
+                        <h2 className="display-title mt-3">
+                            Recommended for you
+                        </h2>
+                        <p className="mt-5 max-w-2xl text-base leading-7 text-[var(--ink-soft)]">
+                            A query-free shopping feed blending behavior profiles, item-item collaborative filtering,
+                            HyPE semantic retrieval, and cold-start exploration.
+                        </p>
+                        <div className="mt-7 flex flex-wrap gap-2">
+                            <StatusBadge tone={profileCount > 0 ? "mint" : "neutral"}>
                                 <ShieldCheck className="h-3.5 w-3.5" />
-                                Profile-backed
+                                {profileCount > 0 ? "Profile-backed" : "No profile boost in this rank"}
                             </StatusBadge>
                             <StatusBadge tone="sky">Vector Search enabled</StatusBadge>
                             <StatusBadge tone="violet">CF enabled</StatusBadge>
                         </div>
-                        <p className="soft-label">Personalized marketplace feed</p>
-                        <h2 className="mt-2 text-3xl font-black tracking-tight text-[var(--ink-strong)] lg:text-4xl">
-                            Recommended for you
-                        </h2>
-                        <p className="mt-3 max-w-3xl text-base leading-7 text-[var(--ink-soft)]">
-                            A query-free shopping feed blending behavior profiles, item-item collaborative filtering,
-                            HyPE semantic retrieval, and cold-start exploration.
-                        </p>
                     </div>
 
-                    <div className="grid grid-cols-3 gap-3">
-                        <div className="metric-block">
-                            <p className="soft-label">Items</p>
-                            <p className="metric-value">{visibleItems.length}</p>
-                        </div>
-                        <div className="metric-block">
-                            <p className="soft-label">CF</p>
-                            <p className="metric-value">{cfCount}</p>
-                        </div>
-                        <div className="metric-block">
-                            <p className="soft-label">Cold</p>
-                            <p className="metric-value">{coldCount}</p>
+                    <div className="signature-card signature-coral">
+                        <p className="soft-label">Live ranking snapshot</p>
+                        <h3 className="mt-3 text-2xl font-normal leading-snug">
+                            Discovery with measurable feedback.
+                        </h3>
+                        <div className="signature-metrics">
+                            <div className="signature-metric">
+                                <p className="soft-label">Items</p>
+                                <p className="metric-value">{visibleItems.length}</p>
+                            </div>
+                            <div className="signature-metric">
+                                <p className="soft-label">CF</p>
+                                <p className="metric-value">{cfCount}</p>
+                            </div>
+                            <div className="signature-metric">
+                                <p className="soft-label">Cold</p>
+                                <p className="metric-value">{coldCount}</p>
+                            </div>
                         </div>
                     </div>
                 </div>
             </section>
 
-            <section className="panel p-4">
+            <section className="panel p-5">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex flex-wrap gap-2">
                         <StatusBadge tone="mint">
@@ -145,15 +152,27 @@ export function HomePage() {
                         <StatusBadge tone="violet">{cfCount} CF-supported items</StatusBadge>
                         <StatusBadge tone="amber">{coldCount} cold-start exposures</StatusBadge>
                     </div>
-                    <button className="action-button action-button-secondary" onClick={() => homepageQuery.refetch()}>
-                        <RefreshCcw className="h-4 w-4" />
-                        Refresh feed
+                    <button
+                        aria-busy={refreshing}
+                        className="action-button action-button-secondary"
+                        disabled={refreshing}
+                        onClick={() => homepageQuery.refetch()}
+                    >
+                        <RefreshCcw className={`h-4 w-4${refreshing ? " animate-spin-slow" : ""}`} />
+                        {refreshing ? "Refreshing..." : "Refresh feed"}
                     </button>
                 </div>
             </section>
 
+            {refreshing ? (
+                <div className="feed-refresh-status" role="status" aria-live="polite">
+                    <RefreshCcw className="h-4 w-4 shrink-0 animate-spin-slow text-[var(--sky)]" />
+                    <span>Refreshing recommendations. Current picks stay visible until the new ranking is ready.</span>
+                </div>
+            ) : null}
+
             {feedback ? (
-                <div className="rounded-lg border border-[rgba(15,118,110,0.18)] bg-[var(--mint-soft)] p-3 text-sm font-semibold text-[var(--mint)]">
+                <div className="rounded-lg border border-[#b8d8b8] bg-[var(--mint-soft)] p-3 text-sm font-medium text-[var(--mint)]">
                     {feedback}
                 </div>
             ) : null}
@@ -163,7 +182,7 @@ export function HomePage() {
             ) : homepageQuery.error ? (
                 <ErrorState message={String(homepageQuery.error)} />
             ) : visibleItems.length ? (
-                <section className="grid-cards">
+                <section className={`grid-cards feed-grid${refreshing ? " feed-grid-refreshing" : ""}`} aria-busy={refreshing}>
                     {visibleItems.map((card) => (
                         <ProductCard
                             key={`${card.request_id}:${card.item_id}`}

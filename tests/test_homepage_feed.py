@@ -249,3 +249,95 @@ def test_homepage_feed_changes_with_different_profiles() -> None:
 
     assert phone_payload["items"][0]["item_id"] == "PHONE_ITEM"
     assert beauty_payload["items"][0]["item_id"] == "BEAUTY_ITEM"
+
+
+def test_homepage_reason_uses_matching_category_interest_instead_of_stronger_unrelated_interest() -> None:
+    beauty_item_profile = _item_profile("BEAUTY_ITEM", 0, "all_beauty", "100k_300k")
+    beauty_item_profile["item_semantic_embedding"] = [0.6, 0.8] + ([0.0] * 1022)
+    profile = _profile("u_mixed", embedding_index=0)
+    profile["interest_vectors"] = [
+        {
+            "interest_id": "int_phone",
+            "label": "phone screen specifications",
+            "embedding": _embedding(0),
+            "weight": 5.0,
+            "categories": ["cell_phones_and_accessories"],
+        },
+        {
+            "interest_id": "int_beauty",
+            "label": "gentle skincare",
+            "embedding": _embedding(1),
+            "weight": 1.0,
+            "categories": ["all_beauty"],
+        },
+    ]
+    empty = FakeCollection([])
+
+    payload = get_homepage_feed(
+        "u_mixed",
+        "sess_mixed",
+        top_k=1,
+        user_profiles_collection=FakeCollection([profile]),
+        user_item_signals_collection=empty,
+        items_collection=FakeCollection(
+            [
+                _item(
+                    "BEAUTY_ITEM",
+                    category_id="all_beauty",
+                    brand="BeautyBrand",
+                    price_bucket="100k_300k",
+                    cold=True,
+                    quality=0.8,
+                )
+            ]
+        ),
+        item_stats_collection=FakeCollection(
+            [_item_stats("BEAUTY_ITEM", cold=True, quality=0.8, interaction_count=0)]
+        ),
+        item_hype_profiles_collection=FakeCollection([beauty_item_profile]),
+        item_semantic_neighbors_collection=empty,
+        item_item_cf_edges_collection=empty,
+        recommendation_logs_collection=FakeCollection([]),
+    )
+
+    card = payload["items"][0]
+    assert card["debug"]["profile_interest_label"] == "gentle skincare"
+    assert "Boosted because it matches your gentle skincare interest." in card["explanations"]
+    assert all("phone screen specifications" not in explanation for explanation in card["explanations"])
+
+
+def test_homepage_does_not_apply_cross_category_profile_reason_without_matching_interest() -> None:
+    profile = _profile("u_phone_only", embedding_index=0)
+    profile["interest_vectors"] = [
+        {
+            "interest_id": "int_phone",
+            "label": "phone accessories",
+            "embedding": _embedding(0),
+            "weight": 5.0,
+            "categories": ["cell_phones_and_accessories"],
+        }
+    ]
+    fashion_profile = _item_profile("FASHION_ITEM", 0, "amazon_fashion", "100k_300k")
+    empty = FakeCollection([])
+
+    payload = get_homepage_feed(
+        "u_phone_only",
+        "sess_cross_category",
+        top_k=1,
+        user_profiles_collection=FakeCollection([profile]),
+        user_item_signals_collection=empty,
+        items_collection=FakeCollection(
+            [_item("FASHION_ITEM", category_id="amazon_fashion", brand="FashionBrand", price_bucket="100k_300k", cold=True, quality=0.8)]
+        ),
+        item_stats_collection=FakeCollection([_item_stats("FASHION_ITEM", cold=True, quality=0.8, interaction_count=0)]),
+        item_hype_profiles_collection=FakeCollection([fashion_profile]),
+        item_semantic_neighbors_collection=empty,
+        item_item_cf_edges_collection=empty,
+        recommendation_logs_collection=FakeCollection([]),
+    )
+
+    card = payload["items"][0]
+    assert card["contributions"]["profile"] == 0.0
+    assert "Profile" not in card["reason_badges"]
+    assert card["debug"]["profile_interest_label"] == ""
+    assert all("phone accessories" not in explanation for explanation in card["explanations"])

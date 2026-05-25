@@ -14,20 +14,18 @@ export function AppShell() {
     return (
         <div className="app-shell">
             <header className="top-nav">
-                <div className="page-wrap flex min-h-[72px] items-center justify-between gap-4">
+                <div className="page-wrap flex min-h-16 items-center justify-between gap-5">
                     <div className="flex min-w-0 items-center gap-3">
                         <div className="brand-mark">
                             <Sparkles className="h-5 w-5" />
                         </div>
                         <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                                <h1 className="text-lg font-black tracking-tight text-[var(--ink-strong)]">
-                                    ColdStart Killer
-                                </h1>
-                                <StatusBadge tone="mint">MongoDB Recommendation Engine</StatusBadge>
+                                <h1 className="brand-title">ColdStart Killer</h1>
+                                <StatusBadge tone="mint">MongoDB recommendations</StatusBadge>
                             </div>
-                            <p className="text-xs font-medium text-[var(--ink-soft)]">
-                                HyPE retrieval, behavior signals, and item-item CF in one shopping demo.
+                            <p className="hidden text-xs text-[var(--ink-soft)] sm:block">
+                                Personalized shopping with visible recommendation evidence.
                             </p>
                         </div>
                     </div>
@@ -49,7 +47,7 @@ export function AppShell() {
                 </div>
             </header>
 
-            <div className="page-wrap py-6">
+            <div className="page-wrap py-8 lg:py-12">
                 <nav className="mb-4 flex gap-2 md:hidden">
                     <NavLink className={navLinkClassName} to="/">
                         <Home className="h-4 w-4" />
@@ -70,14 +68,15 @@ export function AppShell() {
                         <Outlet />
                     </main>
                     <aside className="space-y-4 xl:sticky xl:top-24 xl:self-start">
-                        <div className="panel p-4">
+                        <div className="signature-card signature-forest p-5">
                             <div className="flex items-start gap-3">
-                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-[var(--sky-soft)] text-[var(--sky)]">
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/20 text-white">
                                     <ShieldCheck className="h-5 w-5" />
                                 </div>
                                 <div>
-                                    <p className="text-sm font-bold text-[var(--ink-strong)]">Demo guardrails</p>
-                                    <p className="mt-1 text-xs leading-5 text-[var(--ink-soft)]">
+                                    <p className="soft-label">Demo guardrails</p>
+                                    <h3 className="mt-2 text-base font-medium">Tracked recommendations</h3>
+                                    <p className="mt-2 text-xs leading-5">
                                         Search stays query-first. CF badges only appear when behavior edges are present.
                                     </p>
                                 </div>

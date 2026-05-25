@@ -176,7 +176,7 @@ def rank_normalize(scores: list[float]) -> list[float]:
 
 def cosine_to_score(raw_cosine: Any) -> float:
     cosine = _safe_float(raw_cosine, -1.0)
-    return round(_clamp01((cosine + 1.0) / 2.0), 6)
+    return round(_clamp01(cosine), 6)
 
 
 def classify_query_type(raw_query: str, hard_filters: dict[str, Any] | None = None) -> QueryType:
@@ -246,17 +246,22 @@ def score_candidate_batch(
         exploration_score = round(_clamp01(exploration_raw), 6)
         quality_score = round(_clamp01(quality_raw), 6)
 
-        final_score = (
-            (_safe_float(weights.get("query_hybrid"), 0.0) * query_norm[index])
-            + (_safe_float(weights.get("profile"), 0.0) * profile_score)
-            + (_safe_float(weights.get("semantic_neighbor"), 0.0) * semantic_norm[index])
-            + (_safe_float(weights.get("cf"), 0.0) * cf_norm[index])
-            + (_safe_float(weights.get("metadata"), 0.0) * metadata_score)
-            + (_safe_float(weights.get("cold_explore"), 0.0) * max(cold_start_score, exploration_score))
-            + (_safe_float(weights.get("quality"), 0.0) * quality_score)
-            - seen_penalty
-            - negative_penalty
-        )
+        contributions = {
+            "query_hybrid": round(_safe_float(weights.get("query_hybrid"), 0.0) * query_norm[index], 6),
+            "profile": round(_safe_float(weights.get("profile"), 0.0) * profile_score, 6),
+            "semantic_neighbor": round(
+                _safe_float(weights.get("semantic_neighbor"), 0.0) * semantic_norm[index], 6
+            ),
+            "cf": round(_safe_float(weights.get("cf"), 0.0) * cf_norm[index], 6),
+            "metadata": round(_safe_float(weights.get("metadata"), 0.0) * metadata_score, 6),
+            "cold_explore": round(
+                _safe_float(weights.get("cold_explore"), 0.0) * max(cold_start_score, exploration_score), 6
+            ),
+            "quality": round(_safe_float(weights.get("quality"), 0.0) * quality_score, 6),
+            "seen_penalty": round(-seen_penalty, 6),
+            "negative_penalty": round(-negative_penalty, 6),
+        }
+        final_score = sum(contributions.values())
 
         score_breakdown = {
             "query_hybrid_score": round(query_norm[index], 6),
@@ -279,12 +284,14 @@ def score_candidate_batch(
             "quality_score_raw": round(quality_raw, 6),
             "seen_penalty": round(seen_penalty, 6),
             "negative_penalty": round(negative_penalty, 6),
+            "profile_contribution": contributions["profile"],
             "final_score": round(final_score, 6),
         }
 
         enriched = dict(candidate)
         enriched["scores"] = score_breakdown
         enriched["score_breakdown"] = dict(score_breakdown)
+        enriched["contributions"] = contributions
         enriched["final_score"] = round(final_score, 6)
         scored.append(enriched)
 

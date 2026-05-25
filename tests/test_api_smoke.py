@@ -265,13 +265,18 @@ def test_debug_user_route_returns_joined_debug_payload(monkeypatch) -> None:
         def find(self, *_args, **_kwargs):
             return FakeCursor(self.docs)
 
+        def count_documents(self, filter_doc):
+            if filter_doc.get("processed") == {"$ne": True}:
+                return sum(1 for doc in self.docs if doc.get("processed") is not True)
+            return len(self.docs)
+
     import src.api.routes_debug as routes_debug
 
     monkeypatch.setattr(routes_debug, "get_users_collection", lambda: FakeCollection([{"user_id_hash": "u_1"}]))
-    monkeypatch.setattr(routes_debug, "get_user_profiles_collection", lambda: FakeCollection([{"user_id_hash": "u_1", "profile_status": "warming"}]))
-    monkeypatch.setattr(routes_debug, "get_user_item_signals_collection", lambda: FakeCollection([{"user_id_hash": "u_1", "item_id": "A1"}]))
+    monkeypatch.setattr(routes_debug, "get_user_profiles_collection", lambda: FakeCollection([{"user_id_hash": "u_1", "profile_status": "warming", "updated_at": "2026-01-01T01:00:00+00:00"}]))
+    monkeypatch.setattr(routes_debug, "get_user_item_signals_collection", lambda: FakeCollection([{"user_id_hash": "u_1", "item_id": "A1", "updated_at": "2026-01-01T01:00:00+00:00"}]))
     monkeypatch.setattr(routes_debug, "get_recommendation_logs_collection", lambda: FakeCollection([{"user_id_hash": "u_1", "request_id": "req_1"}]))
-    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: FakeCollection([{"user_id_hash": "u_1", "event_id": "evt_1"}]))
+    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: FakeCollection([{"user_id_hash": "u_1", "event_id": "evt_1", "timestamp": "2026-01-01T02:00:00+00:00", "processed": False}]))
     monkeypatch.setattr(routes_debug, "get_item_item_cf_edges_collection", lambda: FakeCollection([{"item_id": "A1", "neighbor_item_id": "A2"}]))
 
     client = TestClient(create_app())
@@ -280,6 +285,9 @@ def test_debug_user_route_returns_joined_debug_payload(monkeypatch) -> None:
     payload = response.json()
     assert payload["profile"]["profile_status"] == "warming"
     assert payload["signals"][0]["item_id"] == "A1"
+    assert payload["freshness"]["state"] == "stale"
+    assert payload["freshness"]["pending_event_count"] == 1
+    assert payload["freshness"]["stale_components"] == ["signals", "profile"]
 
 
 def test_demo_reset_dry_run_reports_counts(monkeypatch) -> None:
@@ -399,7 +407,13 @@ def test_process_events_write_rebuild_stats_clears_catalog_cache(monkeypatch) ->
     build_calls = []
     cache_clears = []
 
-    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: sentinel)
+    class FakeEventsCollection:
+        def count_documents(self, *_args, **_kwargs):
+            return 25
+
+    events_collection = FakeEventsCollection()
+
+    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: events_collection)
     monkeypatch.setattr(routes_debug, "get_recommendation_logs_collection", lambda: sentinel)
     monkeypatch.setattr(routes_debug, "get_user_item_signals_collection", lambda: sentinel)
     monkeypatch.setattr(routes_debug, "get_item_stats_collection", lambda: sentinel)
@@ -418,6 +432,30 @@ def test_process_events_write_rebuild_stats_clears_catalog_cache(monkeypatch) ->
     assert build_calls[0]["write"] is True
     assert build_calls[0]["item_stats_collection"] is sentinel
     assert cache_clears == [True]
+
+
+def test_process_events_rejects_partial_write_before_building_derived_data(monkeypatch) -> None:
+    import src.api.routes_debug as routes_debug
+
+    build_calls = []
+
+    class FakeEventsCollection:
+        def count_documents(self, *_args, **_kwargs):
+            return 26
+
+    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: FakeEventsCollection())
+    monkeypatch.setattr(
+        routes_debug,
+        "build_user_item_signals",
+        lambda **kwargs: build_calls.append(kwargs) or {"ok": True},
+    )
+
+    client = TestClient(create_app())
+    response = client.post("/api/debug/process-events?limit=25&rebuild_item_stats=true&write=true")
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "partial_signal_write_blocked"
+    assert build_calls == []
 
 
 def test_rebuild_cf_replaces_existing_edges_only_for_full_write(monkeypatch) -> None:

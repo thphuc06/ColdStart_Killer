@@ -1,4 +1,4 @@
-import { ExternalLink, Heart, MinusCircle, ShoppingBag } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, Heart, MinusCircle, ShoppingBag } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { EventType, RecommendationCard } from "../lib/api";
@@ -28,7 +28,7 @@ function hasPositiveScore(card: RecommendationCard, key: string) {
 function buildBadges(card: RecommendationCard) {
     const badges: Array<{ label: string; tone: "mint" | "sky" | "amber" | "violet" | "neutral" }> = [];
     const channels = card.debug?.matched_channels || card.attribution?.matched_channels || [];
-    if (hasPositiveScore(card, "profile_score") || card.attribution.matched_profile_interest_ids.length) {
+    if (card.reason_badges.includes("Profile")) {
         badges.push({ label: "Profile", tone: "mint" });
     }
     if (card.attribution.cf_evidence || hasPositiveScore(card, "item_item_cf_score")) {
@@ -64,11 +64,21 @@ function primaryExplanation(card: RecommendationCard) {
 }
 
 
+function cardExplanations(card: RecommendationCard) {
+    const explanations = card.explanations.map((explanation) => explanation.trim()).filter(Boolean);
+    return explanations.length ? [...new Set(explanations)] : [primaryExplanation(card)];
+}
+
+
 export function ProductCard({ card, onOpenDetail, onAction }: ProductCardProps) {
-    const [expanded, setExpanded] = useState(false);
+    const [scoresExpanded, setScoresExpanded] = useState(false);
+    const [whyExpanded, setWhyExpanded] = useState(false);
     const [busyAction, setBusyAction] = useState<string | null>(null);
     const badges = useMemo(() => buildBadges(card), [card]);
+    const explanations = useMemo(() => cardExplanations(card), [card]);
     const cfEvidence = card.attribution.cf_evidence;
+    const canExpandExplanation = explanations.length > 1 || explanations[0].length > 90;
+    const explanationId = `why-shown-${card.request_id}-${card.item_id}`;
 
     async function runAction(eventType: EventType) {
         try {
@@ -103,7 +113,7 @@ export function ProductCard({ card, onOpenDetail, onAction }: ProductCardProps) 
                 </div>
 
                 <div>
-                    <h3 className="product-title text-base font-black leading-snug text-[var(--ink-strong)]">
+                    <h3 className="product-title text-base leading-snug">
                         {card.title}
                     </h3>
                     <p className="mt-1 line-clamp-2 text-sm text-[var(--ink-soft)]">
@@ -113,18 +123,39 @@ export function ProductCard({ card, onOpenDetail, onAction }: ProductCardProps) 
 
                 <div className="flex items-end justify-between gap-3">
                     <div>
-                        <p className="text-xs font-bold uppercase tracking-[0.08em] text-[var(--ink-muted)]">Price</p>
-                        <p className="mt-0.5 text-lg font-black text-[var(--ink-strong)]">{formatVnd(card.price_vnd)}</p>
+                        <p className="soft-label">Price</p>
+                        <p className="mt-1 text-lg font-medium text-[var(--ink-strong)]">{formatVnd(card.price_vnd)}</p>
                     </div>
                     <div className="text-right">
-                        <p className="text-xs font-bold uppercase tracking-[0.08em] text-[var(--ink-muted)]">Score</p>
-                        <p className="mt-0.5 text-lg font-black text-[var(--mint)]">{card.final_score.toFixed(3)}</p>
+                        <p className="soft-label">Score</p>
+                        <p className="mt-1 text-lg font-medium text-[var(--mint)]">{card.final_score.toFixed(3)}</p>
                     </div>
                 </div>
 
                 <div className="rounded-lg bg-[var(--surface-muted)] p-3">
                     <p className="soft-label mb-1">Why shown</p>
-                    <p className="line-clamp-2 text-sm leading-5 text-[var(--ink-soft)]">{primaryExplanation(card)}</p>
+                    <div id={explanationId} className="space-y-2">
+                        {(whyExpanded ? explanations : explanations.slice(0, 1)).map((explanation, index) => (
+                            <p
+                                className={`${whyExpanded ? "" : "line-clamp-2 "}text-sm leading-5 text-[var(--ink-soft)]`}
+                                key={`${index}:${explanation}`}
+                            >
+                                {explanation}
+                            </p>
+                        ))}
+                    </div>
+                    {canExpandExplanation ? (
+                        <button
+                            aria-controls={explanationId}
+                            aria-expanded={whyExpanded}
+                            className="why-toggle"
+                            onClick={() => setWhyExpanded((value) => !value)}
+                            type="button"
+                        >
+                            {whyExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                            {whyExpanded ? "Collapse reason" : "Read full reason"}
+                        </button>
+                    ) : null}
                 </div>
 
                 <div className="grid grid-cols-[1fr,auto] gap-2">
@@ -134,10 +165,10 @@ export function ProductCard({ card, onOpenDetail, onAction }: ProductCardProps) 
                     </button>
                     <button
                         className="action-button action-button-secondary"
-                        aria-label={expanded ? "Hide score details" : "Show score details"}
-                        onClick={() => setExpanded((value) => !value)}
+                        aria-label={scoresExpanded ? "Hide score details" : "Show score details"}
+                        onClick={() => setScoresExpanded((value) => !value)}
                     >
-                        {expanded ? "Hide" : "Scores"}
+                        {scoresExpanded ? "Hide" : "Scores"}
                     </button>
                 </div>
 
@@ -168,7 +199,7 @@ export function ProductCard({ card, onOpenDetail, onAction }: ProductCardProps) 
                     </button>
                 </div>
 
-                {expanded ? (
+                {scoresExpanded ? (
                     <div className="space-y-4 border-t border-[var(--line-soft)] pt-4">
                         <div>
                             <p className="soft-label mb-2">Score breakdown</p>
@@ -180,21 +211,21 @@ export function ProductCard({ card, onOpenDetail, onAction }: ProductCardProps) 
                                 <div className="grid grid-cols-2 gap-2 text-sm">
                                     <div>
                                         <span className="text-[var(--ink-soft)]">Support</span>
-                                        <p className="font-black text-[var(--ink-strong)]">{cfEvidence.support ?? 0}</p>
+                                        <p className="font-medium text-[var(--ink-strong)]">{cfEvidence.support ?? 0}</p>
                                     </div>
                                     <div>
                                         <span className="text-[var(--ink-soft)]">CF score</span>
-                                        <p className="font-black text-[var(--ink-strong)]">
+                                        <p className="font-medium text-[var(--ink-strong)]">
                                             {(cfEvidence.cf_score ?? 0).toFixed(3)}
                                         </p>
                                     </div>
                                     <div>
                                         <span className="text-[var(--ink-soft)]">Co-clicks</span>
-                                        <p className="font-black text-[var(--ink-strong)]">{cfEvidence.co_click_count ?? 0}</p>
+                                        <p className="font-medium text-[var(--ink-strong)]">{cfEvidence.co_click_count ?? 0}</p>
                                     </div>
                                     <div>
                                         <span className="text-[var(--ink-soft)]">Co-carts</span>
-                                        <p className="font-black text-[var(--ink-strong)]">{cfEvidence.co_cart_count ?? 0}</p>
+                                        <p className="font-medium text-[var(--ink-strong)]">{cfEvidence.co_cart_count ?? 0}</p>
                                     </div>
                                 </div>
                             </div>
