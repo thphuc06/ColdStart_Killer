@@ -448,19 +448,26 @@ Expected behavior:
 
 ## Phase 6: Optional Cleanup
 
-To clear demo data:
+The old `scripts/clear_demo_data.py` script is quarantined and must not be used
+for cleanup. Demo reset/recovery is behavior-only and dry-run-first.
+
+Safe preview commands:
 
 ```bash
-python scripts/clear_demo_data.py --yes --seller-only
+python scripts/reset_demo_behavior_data.py --soft --dry-run
+python scripts/reset_demo_behavior_data.py --full --dry-run
 ```
 
-To clear Amazon MVP plus seller demo data:
+Only run live reset after the target database has been reviewed by a human and
+the correct confirmation string is provided:
 
 ```bash
-python scripts/clear_demo_data.py --yes
+python scripts/reset_demo_behavior_data.py --soft --write --confirm DEMO_RESET
+python scripts/reset_demo_behavior_data.py --full --write --confirm FULL_DEMO_RESET
 ```
 
-Use cleanup carefully. It deletes documents from MongoDB.
+These reset paths protect `items` and `retrieval_units`; do not use any cleanup
+path that targets catalog collections.
 
 ## Phase 7: Evaluation
 
