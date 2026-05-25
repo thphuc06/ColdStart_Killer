@@ -3,8 +3,9 @@ import { DatabaseBackup, Gauge, RefreshCcw, TestTube2, Wrench } from "lucide-rea
 import { useMemo, useState } from "react";
 
 import { JsonCard } from "../components/JsonCard";
+import { EvaluationSummaryCard } from "../components/EvaluationSummaryCard";
 import { StatusBadge } from "../components/StatusBadge";
-import { applyPendingBehavior, getDebugUser, getDemoStatus, processEvents, rebuildCf, rebuildProfiles, resetDemo, seedDemo } from "../lib/api";
+import { applyPendingBehavior, getDebugUser, getDemoStatus, getLatestEvaluationRun, processEvents, rebuildCf, rebuildProfiles, resetDemo, seedDemo } from "../lib/api";
 import { useExperience } from "../state/experience";
 
 
@@ -83,6 +84,7 @@ export function DebugPage() {
         enabled: Boolean(userIdHash),
     });
     const demoStatusQuery = useQuery({ queryKey: ["demo-status"], queryFn: getDemoStatus });
+    const evaluationRunQuery = useQuery({ queryKey: ["evaluation-run-latest"], queryFn: getLatestEvaluationRun });
 
     const refreshAdminState = async () => {
         const tasks: Promise<unknown>[] = [
@@ -281,6 +283,12 @@ export function DebugPage() {
                     </div>
                 </section>
             </section>
+
+            <EvaluationSummaryCard
+                data={evaluationRunQuery.data}
+                isLoading={evaluationRunQuery.isLoading}
+                error={evaluationRunQuery.error instanceof Error ? evaluationRunQuery.error : null}
+            />
 
             <section className="panel p-5">
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr),360px]">

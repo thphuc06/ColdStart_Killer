@@ -142,9 +142,16 @@ class QueryEmbeddingCacheDocument(BaseModel):
     id: str | None = Field(default=None, alias="_id")
     query_hash: str
     raw_query: str
+    normalized_query: str = ""
     english_query: str
     embedding: list[float]
+    processed_query: dict[str, Any] | None = None
     embedding_model: str
+    vector_index_name: str = "vector_index"
+    text_index_name: str = "text_index"
+    query_cache_version: str = "query_cache_v1"
+    algorithm_version: str = ""
+    ranking_version: str = ""
     created_at: str = Field(default_factory=utc_now_iso)
     last_used_at: str = Field(default_factory=utc_now_iso)
     usage_count: int = 1
@@ -193,15 +200,23 @@ class SyntheticPersonaDocument(BaseModel):
 class EvaluationRunDocument(BaseModel):
     id: str | None = Field(default=None, alias="_id")
     run_id: str
+    run_type: str = "personalization_eval"
     algorithm_version: str
     ranking_version: str
+    data_label: str = "synthetic_demo"
+    synthetic_data: bool = True
     metrics: dict[str, Any] = Field(default_factory=dict)
-    artifacts: dict[str, str] = Field(default_factory=dict)
+    baseline_summaries: list[dict[str, Any]] = Field(default_factory=list)
+    comparisons: list[dict[str, Any]] = Field(default_factory=list)
+    live_state_counts: dict[str, int] = Field(default_factory=dict)
+    caveat: str = "Synthetic/demo behavior data, not production traffic."
+    evaluated_user_count: int = 0
+    artifacts: dict[str, Any] = Field(default_factory=dict)
     created_at: str = Field(default_factory=utc_now_iso)
 
     model_config = {"populate_by_name": True}
 
-    @field_validator("run_id", "algorithm_version", "ranking_version")
+    @field_validator("run_id", "run_type", "algorithm_version", "ranking_version", "data_label", "caveat")
     @classmethod
     def validate_required_text(cls, value: str, info) -> str:
         return _non_empty(value, info.field_name)

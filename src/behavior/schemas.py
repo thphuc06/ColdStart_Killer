@@ -55,6 +55,7 @@ class OnboardingState(BaseModel):
     selected_categories: list[str] = Field(default_factory=list)
     selected_price_buckets: list[str] = Field(default_factory=list)
     selected_seed_item_ids: list[str] = Field(default_factory=list)
+    selected_intents: list[str] = Field(default_factory=list)
 
 
 class UserDocument(BaseModel):
@@ -285,6 +286,7 @@ class ExplicitPrefs(BaseModel):
     categories: list[str] = Field(default_factory=list)
     price_buckets: list[str] = Field(default_factory=list)
     seed_item_ids: list[str] = Field(default_factory=list)
+    intents: list[str] = Field(default_factory=list)
 
 
 class PriceAffinity(BaseModel):

@@ -17,6 +17,7 @@ This phase does:
 - Test buyer search through CLI and notebooks.
 - Run a React + Vite website demo backed by the FastAPI adapter.
 - Show personalized homepage, query-first search, product detail, similar products, score breakdown, CF evidence, and Debug/Admin lineage.
+- Capture optional cold-shopper onboarding preferences without direct profile or CF seeding.
 - Safely inspect demo reset/recovery with dry-run-first scripts.
 
 This phase does not do:
@@ -70,13 +71,15 @@ npm run dev
 Manual browser flow:
 
 1. Select a profile-backed user from the user/persona selector.
-2. Verify homepage cards load from the API.
-3. Expand score breakdown and explanation on a product card.
-4. Click a product and verify product detail.
-5. Verify similar products distinguish `Semantic similarity` from `Collaborative Filtering`.
-6. Run search and verify query-first messaging.
-7. Open Debug/Admin and verify lineage: recommendation logs -> clickstream events -> user signals -> profile -> item-item CF edges.
-8. Verify Demo Recovery shows protected collections and reset warnings.
+2. Optionally create a new shopper and open Preferences onboarding.
+3. Preview preferences read-only, then skip or complete onboarding.
+4. Verify homepage cards load from the API.
+5. Expand score breakdown and explanation on a product card.
+6. Click a product and verify product detail.
+7. Verify similar products distinguish `Semantic similarity` from `Collaborative Filtering`.
+8. Run search and verify query-first messaging.
+9. Open Debug/Admin and verify lineage: recommendation logs -> clickstream events -> user signals -> profile -> item-item CF edges.
+10. Verify Demo Recovery shows protected collections and reset warnings.
 
 Important CF wording:
 
@@ -137,6 +140,16 @@ Save local artifacts intentionally:
 python scripts/run_personalization_evaluation.py --dry-run --write-artifacts
 ```
 
+Persist a compact MongoDB `evaluation_runs` summary only after human approval:
+
+```bash
+python scripts/run_personalization_evaluation.py --write-evaluation-run --confirm EVAL_RUN_WRITE
+```
+
+This writes a compact, caveated summary only. It does not write local report artifacts unless `--write-artifacts` is also provided. Rollback is operational: do not pass `--write-evaluation-run`; any cleanup of persisted test runs should be a separate human-approved admin action.
+
+The Debug/Admin evaluation dashboard is read-only. It lists the latest persisted `evaluation_runs` summary, shows baseline metrics and the synthetic/demo caveat, and never starts an evaluation job from the browser. If the collection is empty, the UI shows the command above as text for a human-approved run.
+
 The terminal summary should show:
 
 - `content_only`, `exploration_only`, `popularity`, `profile_only`, and `profile_plus_cf`.
@@ -147,6 +160,38 @@ The terminal summary should show:
 Interpretation rule:
 
 > Synthetic/demo metrics are indicative only. They help explain system behavior and compare baselines, but they are not human-audited ground truth.
+
+## Optional Query Embedding Cache
+
+Batch 14.2 adds an optional runtime cache around `process_query()` for repeated search queries. It is safe by default:
+
+```text
+ENABLE_QUERY_EMBEDDING_CACHE=false
+QUERY_CACHE_WRITE_ENABLED=false
+QUERY_CACHE_VERSION=query_cache_v1
+QUERY_CACHE_TTL_DAYS=0
+```
+
+Rollback is immediate: set `ENABLE_QUERY_EMBEDDING_CACHE=false`. Cache writes require `QUERY_CACHE_WRITE_ENABLED=true`; leave writes disabled for judging/demo unless a human explicitly approves cache persistence.
+
+## Optional Shopper Onboarding
+
+Batch 14.1 adds an optional Preferences route for cold shoppers:
+
+```text
+ENABLE_ONBOARDING=true
+ONBOARDING_MAX_SEED_ITEMS=8
+ONBOARDING_PREVIEW_LIMIT=12
+```
+
+Safety contract:
+
+- `GET /api/onboarding/options` and `POST /api/onboarding/preview` are read-only.
+- `POST /api/onboarding/complete` writes only `users.onboarding` and onboarding `clickstream_events` for selected real catalog seed items.
+- It does not write `user_profiles`, `item_item_cf_edges`, `items`, or `retrieval_units`.
+- To derive profiles from onboarding choices, run the existing behavior processing flow in Debug/Admin or scripts after human approval.
+
+Rollback is immediate: set `ENABLE_ONBOARDING=false`. The login/demo user selector and existing recommendation demo continue to work.
 
 ## Phase 0: Setup
 

@@ -37,6 +37,7 @@ from src.recommendation.item_item_cf import (
     DEFAULT_CF_MIN_SUPPORT,
     compute_item_item_cf_edges,
 )
+from src.recommendation.schemas import EvaluationRunDocument
 
 
 BASELINE_NAMES = (
@@ -844,6 +845,7 @@ def evaluate_personalization(
         "map_k": config.map_k,
         "algorithm_version": algorithm_version,
         "ranking_version": ranking_version,
+        "synthetic_data": bool(config.synthetic_data),
         "data_label": f"{synthetic_label} evaluation; metrics must be interpreted with explicit synthetic/demo caveats.",
         "event_count": len(clickstream_events),
         "user_count": len(events_by_user),
@@ -1110,19 +1112,45 @@ def persist_evaluation_run(
     run_data: dict[str, Any],
     *,
     evaluation_runs_collection: Any | None = None,
+    artifact_paths: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if evaluation_runs_collection is None:
         evaluation_runs_collection = get_evaluation_runs_collection()
 
-    payload = {
-        "run_id": run_data.get("config", {}).get("run_id", "unknown"),
-        "created_at": run_data.get("config", {}).get("created_at", _now_iso()),
-        "algorithm_version": run_data.get("config", {}).get("algorithm_version", "unknown"),
-        "ranking_version": run_data.get("config", {}).get("ranking_version", "unknown"),
-        "data_label": run_data.get("config", {}).get("data_label", "synthetic/demo"),
-        "baseline_summaries": run_data.get("baseline_summaries", []),
-        "comparisons": run_data.get("comparisons", []),
-        "evaluated_user_count": run_data.get("config", {}).get("evaluated_user_count", 0),
+    config = run_data.get("config", {})
+    live_state_counts = config.get("extra_metadata", {}).get("live_state_counts", {})
+    baseline_summaries = run_data.get("baseline_summaries", [])
+    compact_metrics = {
+        "baseline_count": len(baseline_summaries) if isinstance(baseline_summaries, list) else 0,
+        "comparison_count": len(run_data.get("comparisons", [])) if isinstance(run_data.get("comparisons", []), list) else 0,
+        "cf_qualified_gate": run_data.get("cf_qualified_gate", {}),
+        "cf_diagnostics": {
+            "min_support": run_data.get("cf_diagnostics", {}).get("min_support"),
+            "current_directional_edge_count": run_data.get("cf_diagnostics", {}).get("current_directional_edge_count"),
+            "qualified_directional_edge_count": run_data.get("cf_diagnostics", {}).get("qualified_directional_edge_count"),
+        },
     }
+    artifacts = {
+        "written": bool(artifact_paths),
+        "path": str(Path(next(iter(artifact_paths.values()))).parent) if artifact_paths else None,
+        "files": dict(artifact_paths or {}),
+    }
+    document = EvaluationRunDocument(
+        run_id=str(config.get("run_id", "unknown")),
+        run_type="personalization_eval",
+        created_at=str(config.get("created_at", _now_iso())),
+        algorithm_version=str(config.get("algorithm_version", "unknown")),
+        ranking_version=str(config.get("ranking_version", "unknown")),
+        data_label=str(config.get("data_label", "synthetic/demo")),
+        synthetic_data=bool(config.get("synthetic_data", True)),
+        metrics=compact_metrics,
+        baseline_summaries=baseline_summaries if isinstance(baseline_summaries, list) else [],
+        comparisons=run_data.get("comparisons", []) if isinstance(run_data.get("comparisons", []), list) else [],
+        live_state_counts=live_state_counts if isinstance(live_state_counts, dict) else {},
+        caveat="Synthetic/demo behavior data, not production traffic. Metrics are indicative only.",
+        evaluated_user_count=int(config.get("evaluated_user_count", 0) or 0),
+        artifacts=artifacts,
+    )
+    payload = document.model_dump(by_alias=True, exclude_none=True)
     result = evaluation_runs_collection.insert_one(payload)
-    return {"ok": True, "inserted_id": str(result.inserted_id)}
+    return {"ok": True, "inserted_id": str(result.inserted_id), "run_id": payload["run_id"]}

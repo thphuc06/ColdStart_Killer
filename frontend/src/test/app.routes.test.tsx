@@ -215,6 +215,68 @@ const demoStatusResponse = {
     precomputed_cf_note: "Existing CF edges may come from seeded/precomputed synthetic behavior.",
 };
 
+const evaluationEmptyResponse = {
+    ok: true,
+    empty: true,
+    latest: null,
+    message: "No persisted evaluation runs yet. Run scripts/run_personalization_evaluation.py --write-evaluation-run --confirm EVAL_RUN_WRITE after human approval.",
+};
+
+const evaluationLatestResponse = {
+    ok: true,
+    empty: false,
+    latest: {
+        id: "eval_object_id",
+        run_id: "personalization_20260525",
+        run_type: "personalization_eval",
+        algorithm_version: "rec_v1_profile_cf_hype",
+        ranking_version: "rank_v1_default_weights",
+        data_label: "synthetic/demo evaluation",
+        synthetic_data: true,
+        metrics: { baseline_count: 2, comparison_count: 1 },
+        baseline_summaries: [
+            {
+                baseline: "profile_only",
+                evaluated_user_count: 42,
+                hit_rate_at_10: 0.04,
+                recall_at_20: 0.05,
+                map_at_20: 0.01,
+                coverage: 0.17,
+                cold_start_exposure_at_20: 1,
+                cf_supported_recommendation_count: 0,
+            },
+            {
+                baseline: "profile_plus_cf",
+                evaluated_user_count: 42,
+                hit_rate_at_10: 0.16,
+                recall_at_20: 0.07,
+                map_at_20: 0.02,
+                coverage: 0.06,
+                cold_start_exposure_at_20: 1,
+                cf_supported_recommendation_count: 433,
+            },
+        ],
+        comparisons: [
+            {
+                comparison: "profile_plus_cf_vs_profile_only",
+                hit_rate_at_10_delta: 0.12,
+                recall_at_20_delta: 0.02,
+                map_at_20_delta: 0.01,
+                cf_supported_count_delta: 433,
+            },
+        ],
+        live_state_counts: {
+            items: 3000,
+            clickstream_events: 2121,
+            user_profiles: 43,
+        },
+        caveat: "Synthetic/demo behavior data, not production traffic.",
+        evaluated_user_count: 42,
+        artifacts: { written: false, path: null },
+        created_at: "2026-05-25T00:00:00+00:00",
+    },
+};
+
 function jsonResponse(payload: unknown) {
     return Promise.resolve(
         new Response(JSON.stringify(payload), {
@@ -256,6 +318,7 @@ function installFetchMock() {
                             selected_categories: [],
                             selected_price_buckets: [],
                             selected_seed_item_ids: [],
+                            selected_intents: [],
                         },
                     },
                     {
@@ -271,6 +334,7 @@ function installFetchMock() {
                             selected_categories: [],
                             selected_price_buckets: [],
                             selected_seed_item_ids: [],
+                            selected_intents: [],
                         },
                     },
                 ],
@@ -303,9 +367,85 @@ function installFetchMock() {
                     selected_categories: [],
                     selected_price_buckets: [],
                     selected_seed_item_ids: [],
+                    selected_intents: [],
                 },
             };
             return jsonResponse(createdUser);
+        }
+        if (url.includes("/api/onboarding/options")) {
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                categories: [
+                    { id: "all_beauty", label: "All Beauty", count: 24 },
+                    { id: "all_electronics", label: "All Electronics", count: 18 },
+                ],
+                price_buckets: [
+                    { id: "unknown", label: "Open to any price" },
+                    { id: "100k_300k", label: "100k to 300k" },
+                ],
+                intent_chips: [
+                    { id: "daily_use", label: "Daily use" },
+                    { id: "gift_ready", label: "Gift ready" },
+                ],
+                seed_items: [
+                    {
+                        item_id: "ITEM_A",
+                        title: "Hydrating Cleanser",
+                        brand: "DemoBeauty",
+                        category_id: "all_beauty",
+                        price_bucket: "100k_300k",
+                        price_vnd: 199000,
+                        image_url: null,
+                    },
+                ],
+                source: "catalog_snapshot",
+            });
+        }
+        if (url.includes("/api/onboarding/preview")) {
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                write_performed: false,
+                preview: {
+                    selected_categories: ["all_beauty"],
+                    selected_price_buckets: ["100k_300k"],
+                    selected_intents: ["daily_use"],
+                    selected_seed_item_ids: ["ITEM_A"],
+                    seed_items: [
+                        {
+                            item_id: "ITEM_A",
+                            title: "Hydrating Cleanser",
+                            brand: "DemoBeauty",
+                            category_id: "all_beauty",
+                            price_bucket: "100k_300k",
+                            price_vnd: 199000,
+                            image_url: null,
+                        },
+                    ],
+                    summary: "Selected 1 categories, 1 price preferences, 1 shopping intents, 1 seed items",
+                },
+                explanation: "Preview only. These preferences become onboarding events after explicit completion.",
+            });
+        }
+        if (url.includes("/api/onboarding/complete")) {
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                write_performed: true,
+                user_id_hash: "u_test_user",
+                onboarding: {
+                    completed: true,
+                    completed_at: "2026-05-26T00:00:00+00:00",
+                    selected_categories: ["all_beauty"],
+                    selected_price_buckets: ["100k_300k"],
+                    selected_intents: ["daily_use"],
+                    selected_seed_item_ids: ["ITEM_A"],
+                },
+                events_attempted: 1,
+                events_inserted: 1,
+                message: "Onboarding saved. Run behavior processing later to derive signals and profile updates.",
+            });
         }
         if (url.includes("/api/feed/home")) {
             return jsonResponse(homeResponse);
@@ -324,6 +464,9 @@ function installFetchMock() {
         }
         if (url.includes("/api/demo/status")) {
             return jsonResponse(demoStatusResponse);
+        }
+        if (url.includes("/api/evaluation/runs/latest")) {
+            return jsonResponse(evaluationEmptyResponse);
         }
         if (url.includes("/api/demo/reset")) {
             return jsonResponse({
@@ -607,7 +750,7 @@ describe("Phase 11 routes", () => {
         fireEvent.change(await screen.findByPlaceholderText("Example: Judge live demo"), {
             target: { value: "Phuc demo shopper" },
         });
-        fireEvent.click(screen.getByRole("button", { name: "Create account and enter" }));
+        fireEvent.click(screen.getByRole("button", { name: "Create account and choose preferences" }));
 
         await waitFor(() => {
             const call = vi
@@ -616,8 +759,65 @@ describe("Phase 11 routes", () => {
             expect(call).toBeDefined();
             expect(String(call?.[1]?.body)).toContain('"display_name":"Phuc demo shopper"');
         });
-        expect(await screen.findByText("Phuc demo shopper")).toBeInTheDocument();
-        expect(screen.getByText("Personal live-learning account")).toBeInTheDocument();
+        expect(await screen.findByText("Choose your starter preferences")).toBeInTheDocument();
+    });
+
+    it("renders onboarding and previews preferences without saving", async () => {
+        renderApp("/onboarding");
+
+        expect(await screen.findByText("Choose your starter preferences")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /All Beauty/ }));
+        fireEvent.click(screen.getByRole("button", { name: /100k to 300k/ }));
+        fireEvent.click(screen.getByRole("button", { name: /Daily use/ }));
+        fireEvent.click(screen.getByRole("button", { name: /Hydrating Cleanser/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Preview preferences" }));
+
+        expect(await screen.findByText(/Selected 1 categories/)).toBeInTheDocument();
+        const previewCall = vi
+            .mocked(globalThis.fetch)
+            .mock.calls.find(([input]) => String(input).includes("/api/onboarding/preview"));
+        expect(previewCall).toBeDefined();
+        expect(String(previewCall?.[1]?.body)).toContain('"selected_categories":["all_beauty"]');
+    });
+
+    it("completes onboarding and sends only selected preferences to the API", async () => {
+        renderApp("/onboarding");
+
+        expect(await screen.findByText("Choose your starter preferences")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /All Beauty/ }));
+        fireEvent.click(screen.getByRole("button", { name: /100k to 300k/ }));
+        fireEvent.click(screen.getByRole("button", { name: /Daily use/ }));
+        fireEvent.click(screen.getByRole("button", { name: /Hydrating Cleanser/ }));
+        fireEvent.click(screen.getByRole("button", { name: "Complete onboarding" }));
+
+        await waitFor(() => {
+            const completeCall = vi
+                .mocked(globalThis.fetch)
+                .mock.calls.find(([input]) => String(input).includes("/api/onboarding/complete"));
+            expect(completeCall).toBeDefined();
+            const body = JSON.parse(String(completeCall?.[1]?.body)) as Record<string, unknown>;
+            expect(body).toMatchObject({
+                user_id_hash: "u_test_user",
+                session_id: "sess_test_ui",
+                selected_categories: ["all_beauty"],
+                selected_price_buckets: ["100k_300k"],
+                selected_intents: ["daily_use"],
+                selected_seed_item_ids: ["ITEM_A"],
+            });
+        });
+        expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
+    });
+
+    it("allows shoppers to skip onboarding", async () => {
+        renderApp("/onboarding");
+
+        fireEvent.click(await screen.findByRole("button", { name: "Skip onboarding" }));
+
+        expect(await screen.findByText("Recommended for you")).toBeInTheDocument();
+        const onboardingCalls = vi
+            .mocked(globalThis.fetch)
+            .mock.calls.filter(([input]) => String(input).includes("/api/onboarding/complete"));
+        expect(onboardingCalls).toHaveLength(0);
     });
 
     it("returns to shopper selection when changing account", async () => {
@@ -716,11 +916,37 @@ describe("Phase 11 routes", () => {
         renderApp("/debug");
 
         expect(await screen.findByText("Inspect lineage and operate the demo safely")).toBeInTheDocument();
+        expect(await screen.findByText("Evaluation dashboard")).toBeInTheDocument();
+        expect(await screen.findByText("No persisted evaluation runs yet.")).toBeInTheDocument();
+        expect(screen.getByText(/EVAL_RUN_WRITE/)).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /run evaluation/i })).not.toBeInTheDocument();
         expect(await screen.findByText("Top signals")).toBeInTheDocument();
         expect(await screen.findByText("Demo Recovery")).toBeInTheDocument();
         expect(await screen.findByText("items")).toBeInTheDocument();
         expect(await screen.findByText("Derived version mismatch")).toBeInTheDocument();
         expect(await screen.findByText("Version rebuild required: signal, profile.")).toBeInTheDocument();
+    });
+
+    it("renders latest evaluation run summary and caveat on the debug route", async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        const currentImplementation = fetchMock.getMockImplementation();
+        fetchMock.mockImplementation((input, init) => {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+            if (url.includes("/api/evaluation/runs/latest")) {
+                return jsonResponse(evaluationLatestResponse);
+            }
+            return currentImplementation!(input, init);
+        });
+
+        renderApp("/debug");
+
+        expect(await screen.findByText("Latest personalization evaluation")).toBeInTheDocument();
+        expect(await screen.findByText("personalization_20260525")).toBeInTheDocument();
+        expect(screen.getByText("Synthetic/demo behavior data, not production traffic.")).toBeInTheDocument();
+        expect(screen.getByText("profile_plus_cf")).toBeInTheDocument();
+        expect(screen.getByText("profile_plus_cf_vs_profile_only")).toBeInTheDocument();
+        expect(screen.getByText("rec_v1_profile_cf_hype")).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /run evaluation/i })).not.toBeInTheDocument();
     });
 
     it("disables authoritative profile rebuild when a user limit is present", async () => {

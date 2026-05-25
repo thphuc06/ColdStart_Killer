@@ -14,7 +14,6 @@ from src.mongodb import (
     get_user_item_signals_collection,
     get_user_profiles_collection,
 )
-from src.query_processor import process_query
 from src.recommendation.candidate_sources import (
     build_cf_candidates,
     enrich_with_profile_context,
@@ -25,6 +24,7 @@ from src.recommendation.candidate_sources import (
     merge_candidate_rows,
 )
 from src.recommendation.explanations import build_result_card
+from src.recommendation.query_cache import process_query_with_cache
 from src.recommendation.scoring import classify_query_type, get_search_weights, score_candidate_batch
 from src.search_pipeline import run_search
 
@@ -79,7 +79,7 @@ def personalized_search(
     top_k: int = 20,
     personalized: bool = True,
     *,
-    process_query_fn: Callable[[str], dict[str, Any]] = process_query,
+    process_query_fn: Callable[[str], dict[str, Any]] = process_query_with_cache,
     run_search_fn: Callable[..., list[dict[str, Any]]] = run_search,
     user_profiles_collection: Any | None = None,
     user_item_signals_collection: Any | None = None,

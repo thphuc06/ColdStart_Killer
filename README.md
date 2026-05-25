@@ -17,13 +17,14 @@ This phase includes:
 - User behavior logging, profile rebuilding, and item-item Collaborative Filtering recommendation services.
 - A thin FastAPI layer for homepage feed, search, item detail, similar-items, users, events, and debug/demo operations.
 - A React + Vite frontend demo under `frontend/` for homepage, search, detail, similar-products, and debug/admin flows.
+- Optional cold-shopper onboarding for category, price, intent, and real catalog seed-item preferences. Preview is read-only; completion writes only `users.onboarding` and onboarding `clickstream_events`.
 - **Retrieval evaluation** with 5 variants, 50 queries, 20 diagnostic probes, AI-assisted conservative relevance judgments (2,119 query-item pairs labeled using LLM with conservative scoring — human audit recommended before claiming as full ground truth), and IR metrics (NDCG, Recall, MRR, Precision, HitRate, cold-start exposure quality).
 - **Hackathon impact reporting** with variant deltas, qualitative examples, business-impact stories, Vietnamese slice analysis, and cold-start caveats.
 
 This phase still does not include:
 
 - A production-hardened seller-facing UI.
-- A dedicated onboarding/session-management backend beyond the current demo contract.
+- Production auth/session management beyond the current demo contract.
 
 ## Phase 14 Demo Quickstart
 
@@ -62,12 +63,14 @@ npm run dev
 Recommended browser demo flow:
 
 1. Select a profile-backed demo user.
-2. Open the homepage and verify personalized cards.
-3. Expand score details on a product card.
-4. Click a product and open product detail.
-5. Verify similar products show semantic similarity and Collaborative Filtering as separate signals.
-6. Run a search query and verify query-first results with personalized reranking.
-7. Open Debug/Admin and verify lineage, demo counts, protected collections, and reset warnings.
+2. Optionally create a cold shopper and open Preferences onboarding.
+3. Preview onboarding preferences without saving, then either skip or complete.
+4. Open the homepage and verify personalized cards.
+5. Expand score details on a product card.
+6. Click a product and open product detail.
+7. Verify similar products show semantic similarity and Collaborative Filtering as separate signals.
+8. Run a search query and verify query-first results with personalized reranking.
+9. Open Debug/Admin and verify lineage, demo counts, protected collections, and reset warnings.
 
 Demo safety commands:
 
@@ -83,6 +86,7 @@ Recommendation honesty:
 - Semantic similarity, HyPE matches, and profile embeddings are content/semantic personalization.
 - True Collaborative Filtering is `item_item_cf_edges` built from multi-user `user_item_signals`.
 - Debug/Admin may label CF evidence as seeded/precomputed when it comes from synthetic demo behavior.
+- Onboarding is not direct profile or CF seeding. It captures explicit preferences and weak seed-item events; use the existing behavior/signal/profile pipeline to derive profiles afterward.
 
 ## Current Evaluation Status
 

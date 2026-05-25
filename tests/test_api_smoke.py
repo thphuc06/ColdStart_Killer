@@ -15,6 +15,31 @@ def test_health_endpoint_returns_versions() -> None:
     assert payload["ranking_version"]
 
 
+def test_evaluation_latest_route_returns_empty_state(monkeypatch) -> None:
+    class FakeCursor(list):
+        def sort(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, n):
+            return FakeCursor(self[:n])
+
+    class FakeCollection:
+        def find(self, *_args, **_kwargs):
+            return FakeCursor([])
+
+    import src.api.routes_evaluation as routes_evaluation
+
+    monkeypatch.setattr(routes_evaluation, "get_evaluation_runs_collection", lambda: FakeCollection())
+    client = TestClient(create_app())
+    response = client.get("/api/evaluation/runs/latest")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["empty"] is True
+    assert payload["latest"] is None
+
+
 def test_demo_users_route_returns_users_and_personas(monkeypatch) -> None:
     class FakeCursor(list):
         def sort(self, *_args, **_kwargs):
@@ -60,6 +85,41 @@ def test_demo_users_route_returns_users_and_personas(monkeypatch) -> None:
     assert payload["users"][1]["has_profile"] is False
     assert payload["personas"][0]["persona_id"] == "p_budget_skincare"
     assert "intent_embedding" not in payload["personas"][0]
+
+
+def test_onboarding_options_route_returns_catalog_options(monkeypatch) -> None:
+    class FakeCursor(list):
+        def sort(self, *_args, **_kwargs):
+            return self
+
+        def limit(self, n):
+            return FakeCursor(self[:n])
+
+    class FakeCollection:
+        def find(self, *_args, **_kwargs):
+            return FakeCursor(
+                [
+                    {
+                        "_id": "A1",
+                        "title_en": "Example",
+                        "category_id": "all_beauty",
+                        "source_category": "All Beauty",
+                        "price_bucket": "100k_300k",
+                    }
+                ]
+            )
+
+    import src.api.routes_onboarding as routes_onboarding
+
+    monkeypatch.setattr(routes_onboarding, "get_items_collection", lambda: FakeCollection())
+    client = TestClient(create_app())
+    response = client.get("/api/onboarding/options")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enabled"] is True
+    assert payload["categories"][0]["id"] == "all_beauty"
 
 
 def test_create_user_persists_username_for_personal_shopper(monkeypatch) -> None:

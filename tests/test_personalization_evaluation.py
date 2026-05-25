@@ -282,7 +282,8 @@ def test_write_personalization_outputs_writes_reproducible_artifacts_and_caveats
 def test_cli_artifact_policy_makes_dry_run_filesystem_dry_by_default() -> None:
     assert _should_write_artifacts(Namespace(dry_run=True, write_artifacts=False, no_artifacts=False)) is False
     assert _should_write_artifacts(Namespace(dry_run=True, write_artifacts=True, no_artifacts=False)) is True
-    assert _should_write_artifacts(Namespace(dry_run=False, write_artifacts=False, no_artifacts=False)) is True
+    assert _should_write_artifacts(Namespace(dry_run=False, write_artifacts=False, no_artifacts=False)) is False
+    assert _should_write_artifacts(Namespace(dry_run=False, write_artifacts=True, no_artifacts=False)) is True
     assert _should_write_artifacts(Namespace(dry_run=False, write_artifacts=False, no_artifacts=True)) is False
 
 

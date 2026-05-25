@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Fingerprint, PlusCircle, Sparkles, UserRound, XCircle } from "lucide-react";
+import { CheckCircle2, Fingerprint, PlusCircle, SlidersHorizontal, Sparkles, UserRound, XCircle } from "lucide-react";
 import { useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
@@ -62,6 +62,11 @@ export function ShopperLoginPage() {
         navigate(destination, { replace: true });
     }
 
+    function startOnboarding(userIdHash: string) {
+        setUserIdHash(userIdHash);
+        navigate("/onboarding", { replace: true });
+    }
+
     const createUserMutation = useMutation({
         mutationFn: () =>
             createUser({
@@ -74,7 +79,7 @@ export function ShopperLoginPage() {
                 users: [user, ...(current?.users.filter((existing) => existing.user_id_hash !== user.user_id_hash) || [])],
                 personas: current?.personas || [],
             }));
-            enterShopper(user.user_id_hash);
+            startOnboarding(user.user_id_hash);
         },
     });
 
@@ -148,7 +153,7 @@ export function ShopperLoginPage() {
                             onClick={() => createUserMutation.mutate()}
                         >
                             <PlusCircle className="h-4 w-4" />
-                            {createUserMutation.isPending ? "Creating account..." : "Create account and enter"}
+                            {createUserMutation.isPending ? "Creating account..." : "Create account and choose preferences"}
                         </button>
                         {createUserMutation.error ? (
                             <p className="mt-3 text-sm font-semibold text-[var(--rose)]">{String(createUserMutation.error)}</p>
@@ -225,6 +230,14 @@ export function ShopperLoginPage() {
                             onClick={() => selectedUserId && enterShopper(selectedUserId)}
                         >
                             Enter as selected shopper
+                        </button>
+                        <button
+                            className="action-button action-button-ghost mt-3 w-full"
+                            disabled={!selectedUserId}
+                            onClick={() => selectedUserId && startOnboarding(selectedUserId)}
+                        >
+                            <SlidersHorizontal className="h-4 w-4" />
+                            Choose starter preferences
                         </button>
                     </section>
                 </div>

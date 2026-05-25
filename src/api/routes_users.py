@@ -46,6 +46,7 @@ def _user_summary(doc: dict[str, Any]) -> dict[str, Any]:
             "selected_categories": list(onboarding.get("selected_categories", [])),
             "selected_price_buckets": list(onboarding.get("selected_price_buckets", [])),
             "selected_seed_item_ids": list(onboarding.get("selected_seed_item_ids", [])),
+            "selected_intents": list(onboarding.get("selected_intents", [])),
         },
         "has_profile": bool(doc.get("has_profile", False)),
         "username": doc.get("username") or doc.get("demo_label", ""),
@@ -95,6 +96,7 @@ def _profile_backed_user_doc(profile_doc: dict[str, Any], user_doc: dict[str, An
         "selected_seed_item_ids": list(
             onboarding.get("selected_seed_item_ids", explicit_prefs.get("seed_item_ids", []))
         ),
+        "selected_intents": list(onboarding.get("selected_intents", explicit_prefs.get("intents", []))),
     }
     doc["has_profile"] = True
     doc["demo_label"] = doc.get("demo_label") or f"Profile-backed shopper {user_id_hash[-6:]}"

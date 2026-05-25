@@ -170,6 +170,7 @@ Use this small command set before recording the website demo:
 ```bash
 python -m pytest tests/test_pipeline.py -v -p no:cacheprovider
 python -m pytest tests/test_api_smoke.py -q -p no:cacheprovider
+python -m pytest tests/test_onboarding.py -q -p no:cacheprovider
 python -m pytest tests/test_reset_demo_behavior_data.py -q -p no:cacheprovider
 python -m pytest tests/test_demo_reset.py -q -p no:cacheprovider
 
@@ -186,11 +187,12 @@ Manual browser checklist:
 1. Start backend: `python -m uvicorn src.api.app:app --reload`.
 2. Start frontend: `cd frontend && npm run dev`.
 3. Select a profile-backed user.
-4. Verify homepage, product detail, similar products, search, and Debug/Admin pages.
-5. Verify score breakdown is visible but not overwhelming.
-6. Verify `Semantic similarity` and `Collaborative Filtering` are separate labels.
-7. Verify Debug/Admin shows protected collections and reset warnings.
-8. Reload once and inspect for duplicate impression symptoms.
+4. Optionally create a cold shopper, preview onboarding preferences, then skip or complete.
+5. Verify homepage, product detail, similar products, search, and Debug/Admin pages.
+6. Verify score breakdown is visible but not overwhelming.
+7. Verify `Semantic similarity` and `Collaborative Filtering` are separate labels.
+8. Verify Debug/Admin shows protected collections and reset warnings.
+9. Reload once and inspect for duplicate impression symptoms.
 
 Safety expectations:
 
@@ -217,6 +219,16 @@ To intentionally save local `.runtime/evaluation/...` artifacts for a demo repor
 python scripts/run_personalization_evaluation.py --dry-run --write-artifacts
 ```
 
+To persist a compact MongoDB `evaluation_runs` summary, use the explicit confirmation string:
+
+```bash
+python scripts/run_personalization_evaluation.py --write-evaluation-run --confirm EVAL_RUN_WRITE
+```
+
+Do not run that live write unless a human approves it. The persisted document is compact and caveated; it does not include raw event dumps or secrets. Local report artifacts are written only when `--write-artifacts` is supplied.
+
+The Debug/Admin evaluation dashboard is read-only. It fetches `/api/evaluation/runs/latest`, renders an empty state when `evaluation_runs` is empty, and does not expose a browser action to run or persist evaluation jobs.
+
 Expected terminal summary includes:
 
 - `content_only`, `exploration_only`, `popularity`, `profile_only`, `profile_plus_cf`
@@ -226,6 +238,42 @@ Expected terminal summary includes:
 - explicit caveat that synthetic/demo metrics are indicative and not human-audited ground truth
 
 Do not overclaim these metrics. They are useful for demo proof and regression tracking, not a human oracle.
+
+### Phase 14 query embedding cache tests
+
+The query cache wraps `process_query()` only when explicitly enabled. Read and write are disabled by default, and unit tests use fake collections rather than live MongoDB:
+
+```bash
+python -m pytest tests/test_query_embedding_cache.py -q -p no:cacheprovider
+```
+
+Rollback/local disable:
+
+```text
+ENABLE_QUERY_EMBEDDING_CACHE=false
+QUERY_CACHE_WRITE_ENABLED=false
+```
+
+### Phase 14 onboarding tests
+
+Onboarding preview is read-only. Completion writes only `users.onboarding` and onboarding `clickstream_events` for selected real catalog seed items; it must not seed `user_profiles` or `item_item_cf_edges` directly.
+
+```bash
+python -m pytest tests/test_onboarding.py -q -p no:cacheprovider
+```
+
+Frontend route-level coverage:
+
+```bash
+cd frontend
+npm run test:ui -- --run
+```
+
+Rollback/local disable:
+
+```text
+ENABLE_ONBOARDING=false
+```
 
 ---
 

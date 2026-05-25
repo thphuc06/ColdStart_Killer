@@ -5,8 +5,8 @@ Examples:
     python scripts/run_personalization_evaluation.py --dry-run
     python scripts/run_personalization_evaluation.py --dry-run --write-artifacts
     python scripts/run_personalization_evaluation.py --dry-run --no-artifacts
-    python scripts/run_personalization_evaluation.py --out .runtime/evaluation/personalization_live
-    python scripts/run_personalization_evaluation.py --write-evaluation-run
+    python scripts/run_personalization_evaluation.py --out .runtime/evaluation/personalization_live --write-artifacts
+    python scripts/run_personalization_evaluation.py --write-evaluation-run --confirm EVAL_RUN_WRITE
 """
 
 from __future__ import annotations
@@ -30,6 +30,9 @@ from src.evaluation.personalization_eval import (
 )
 
 
+EVALUATION_RUN_CONFIRMATION = "EVAL_RUN_WRITE"
+
+
 def _default_output_dir() -> str:
     stamp = time.strftime("%Y%m%d_%H%M%S")
     return str(ROOT / ".runtime" / "evaluation" / f"personalization_{stamp}")
@@ -47,7 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--write-evaluation-run",
         action="store_true",
-        help="Persist a compact summary into evaluation_runs after local artifacts are written",
+        help="Persist a compact summary into evaluation_runs. Requires --confirm EVAL_RUN_WRITE.",
+    )
+    parser.add_argument(
+        "--confirm",
+        default="",
+        help="Confirmation string required for --write-evaluation-run.",
     )
     parser.add_argument(
         "--real-data",
@@ -74,11 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _should_write_artifacts(args: argparse.Namespace) -> bool:
-    if args.no_artifacts:
-        return False
-    if args.write_artifacts:
-        return True
-    return not args.dry_run
+    return bool(args.write_artifacts and not args.no_artifacts)
 
 
 def _format_baseline_row(row: dict[str, object]) -> str:
@@ -168,9 +172,9 @@ def _build_terminal_summary(
     return "\n".join(lines)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     if args.top_k <= 0:
         print("ERROR: --top-k must be positive", file=sys.stderr)
@@ -181,8 +185,12 @@ def main() -> int:
     if args.dry_run and args.write_evaluation_run:
         print("ERROR: --dry-run cannot be combined with --write-evaluation-run", file=sys.stderr)
         return 1
-    if args.no_artifacts and args.write_evaluation_run:
-        print("ERROR: --no-artifacts cannot be combined with --write-evaluation-run", file=sys.stderr)
+    if args.write_evaluation_run and args.confirm != EVALUATION_RUN_CONFIRMATION:
+        print(
+            "Refusing to write evaluation run: --write-evaluation-run requires "
+            f"--confirm {EVALUATION_RUN_CONFIRMATION}.",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -216,6 +224,8 @@ def main() -> int:
         paths = write_personalization_outputs(run_data, args.out)
     elif args.dry_run and not args.write_artifacts:
         artifacts_skipped_reason = "--dry-run skips filesystem writes by default; use --write-artifacts to save reports"
+    elif not args.write_artifacts:
+        artifacts_skipped_reason = "artifacts not requested; use --write-artifacts to save reports"
     else:
         artifacts_skipped_reason = "--no-artifacts"
 
@@ -231,15 +241,18 @@ def main() -> int:
 
     if args.write_evaluation_run:
         try:
-            mongo_write = persist_evaluation_run(run_data)
+            mongo_write = persist_evaluation_run(run_data, artifact_paths=paths)
         except Exception as exc:
             print(f"ERROR: failed to write evaluation_runs summary: {type(exc).__name__}: {exc}", file=sys.stderr)
             return 1
-        print(f"  evaluation_runs_inserted_id: {mongo_write['inserted_id']}")
+        print(f"  evaluation_runs write: inserted run_id={mongo_write['run_id']} inserted_id={mongo_write['inserted_id']}")
     elif args.dry_run:
-        print("  evaluation_runs write skipped due to --dry-run")
+        print("  Dry-run: evaluation_runs write skipped.")
     else:
-        print("  evaluation_runs write skipped (use --write-evaluation-run to persist summary)")
+        print(
+            "  evaluation_runs write skipped "
+            f"(use --write-evaluation-run --confirm {EVALUATION_RUN_CONFIRMATION} to persist summary)"
+        )
 
     return 0
 

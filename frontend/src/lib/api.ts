@@ -35,6 +35,7 @@ export type DemoUser = {
         selected_categories: string[];
         selected_price_buckets: string[];
         selected_seed_item_ids: string[];
+        selected_intents?: string[];
     };
 };
 
@@ -247,6 +248,69 @@ export type DemoStatusResponse = {
     precomputed_cf_note: string;
 };
 
+export type EvaluationBaselineSummary = {
+    baseline: string;
+    evaluated_user_count?: number;
+    hit_rate_at_10?: number;
+    recall_at_20?: number;
+    map_at_20?: number;
+    coverage?: number;
+    cold_start_exposure_at_20?: number;
+    cf_supported_recommendation_count?: number;
+    cf_supported_recommendation_rate?: number;
+    [key: string]: unknown;
+};
+
+export type EvaluationComparison = {
+    comparison: string;
+    hit_rate_at_10_delta?: number;
+    recall_at_20_delta?: number;
+    map_at_20_delta?: number;
+    cf_supported_count_delta?: number;
+    [key: string]: unknown;
+};
+
+export type EvaluationRun = {
+    id?: string | null;
+    run_id: string;
+    run_type: string;
+    algorithm_version: string;
+    ranking_version: string;
+    data_label: string;
+    synthetic_data: boolean;
+    metrics: Record<string, unknown>;
+    baseline_summaries: EvaluationBaselineSummary[];
+    comparisons: EvaluationComparison[];
+    live_state_counts: Record<string, number>;
+    caveat: string;
+    evaluated_user_count: number;
+    artifacts: {
+        written: boolean;
+        path?: string | null;
+    };
+    created_at: string;
+};
+
+export type EvaluationLatestResponse = {
+    ok: boolean;
+    empty: boolean;
+    latest: EvaluationRun | null;
+    message?: string | null;
+};
+
+export type EvaluationRunsResponse = {
+    ok: boolean;
+    empty: boolean;
+    runs: EvaluationRun[];
+    limit: number;
+    message?: string | null;
+};
+
+export type EvaluationRunDetailResponse = {
+    ok: boolean;
+    run: EvaluationRun;
+};
+
 export type EventPayload = {
     user_id_hash: string;
     session_id: string;
@@ -265,6 +329,77 @@ export type EventPayload = {
         device_type: "desktop" | "mobile" | "unknown";
     };
     metadata?: Record<string, unknown>;
+};
+
+export type OnboardingOption = {
+    id: string;
+    label: string;
+    count?: number;
+};
+
+export type OnboardingSeedItem = {
+    item_id: string;
+    title: string;
+    brand?: string;
+    category_id?: string;
+    price_bucket?: string;
+    price_vnd?: number | null;
+    image_url?: string | null;
+};
+
+export type OnboardingOptionsResponse = {
+    ok: boolean;
+    enabled: boolean;
+    categories: OnboardingOption[];
+    price_buckets: OnboardingOption[];
+    intent_chips: OnboardingOption[];
+    seed_items: OnboardingSeedItem[];
+    source: string;
+    message?: string;
+    warning?: string;
+};
+
+export type OnboardingPreferencesPayload = {
+    user_id_hash?: string;
+    selected_categories: string[];
+    selected_price_buckets: string[];
+    selected_intents: string[];
+    selected_seed_item_ids: string[];
+};
+
+export type OnboardingPreviewResponse = {
+    ok: boolean;
+    enabled: boolean;
+    write_performed: false;
+    preview: null | (OnboardingPreferencesPayload & {
+        seed_items: OnboardingSeedItem[];
+        summary: string;
+    });
+    explanation?: string;
+    message?: string;
+};
+
+export type CompleteOnboardingPayload = OnboardingPreferencesPayload & {
+    user_id_hash: string;
+    session_id: string;
+};
+
+export type CompleteOnboardingResponse = {
+    ok: boolean;
+    enabled: boolean;
+    write_performed: boolean;
+    user_id_hash: string;
+    onboarding: {
+        completed: boolean;
+        completed_at: string;
+        selected_categories: string[];
+        selected_price_buckets: string[];
+        selected_intents: string[];
+        selected_seed_item_ids: string[];
+    };
+    events_attempted: number;
+    events_inserted: number;
+    message: string;
 };
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -399,6 +534,42 @@ export function getDebugUser(userIdHash: string) {
 
 export function getDemoStatus() {
     return fetchJson<DemoStatusResponse>("/api/demo/status");
+}
+
+
+export function getOnboardingOptions() {
+    return fetchJson<OnboardingOptionsResponse>("/api/onboarding/options");
+}
+
+
+export function previewOnboardingPreferences(payload: OnboardingPreferencesPayload) {
+    return fetchJson<OnboardingPreviewResponse>("/api/onboarding/preview", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}
+
+
+export function completeOnboarding(payload: CompleteOnboardingPayload) {
+    return fetchJson<CompleteOnboardingResponse>("/api/onboarding/complete", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}
+
+
+export function getLatestEvaluationRun() {
+    return fetchJson<EvaluationLatestResponse>("/api/evaluation/runs/latest");
+}
+
+
+export function getEvaluationRuns(limit = 10) {
+    return fetchJson<EvaluationRunsResponse>(`/api/evaluation/runs${toQueryString({ limit })}`);
+}
+
+
+export function getEvaluationRun(runId: string) {
+    return fetchJson<EvaluationRunDetailResponse>(`/api/evaluation/runs/${encodeURIComponent(runId)}`);
 }
 
 

@@ -63,6 +63,13 @@ class Settings:
     demo_mode: bool
     enable_personalization: bool
     enable_event_logging: bool
+    enable_onboarding: bool
+    onboarding_max_seed_items: int
+    onboarding_preview_limit: int
+    enable_query_embedding_cache: bool
+    query_cache_write_enabled: bool
+    query_cache_version: str
+    query_cache_ttl_days: int
     algorithm_version: str
     ranking_version: str
     signal_model_version: str
@@ -111,6 +118,13 @@ def get_settings() -> Settings:
         demo_mode=env_bool("DEMO_MODE", True),
         enable_personalization=env_bool("ENABLE_PERSONALIZATION", True),
         enable_event_logging=env_bool("ENABLE_EVENT_LOGGING", True),
+        enable_onboarding=env_bool("ENABLE_ONBOARDING", True),
+        onboarding_max_seed_items=env_int("ONBOARDING_MAX_SEED_ITEMS", 8),
+        onboarding_preview_limit=env_int("ONBOARDING_PREVIEW_LIMIT", 12),
+        enable_query_embedding_cache=env_bool("ENABLE_QUERY_EMBEDDING_CACHE", False),
+        query_cache_write_enabled=env_bool("QUERY_CACHE_WRITE_ENABLED", False),
+        query_cache_version=os.getenv("QUERY_CACHE_VERSION", "query_cache_v1"),
+        query_cache_ttl_days=env_int("QUERY_CACHE_TTL_DAYS", 0),
         algorithm_version=os.getenv("ALGORITHM_VERSION", "rec_v2_negative_suppression_seed_guard"),
         ranking_version=os.getenv("RANKING_VERSION", "rank_v1_default_weights"),
         signal_model_version=os.getenv("SIGNAL_MODEL_VERSION", "signal_v4_boundary_hygiene"),
