@@ -2,12 +2,12 @@
 
 **Version:** v1.0  
 **Date:** 2026-05-25  
-**Status:** Bundles A-C complete; Bundle D freshness safety and CF evidence tooling implemented. Runtime CF remains `current_supported`; qualified-CF promotion remains open.
+**Status:** Bundles A-D complete. Runtime CF remains `current_supported`; qualified-CF promotion remains open.
 **Purpose:** Turn verified audit findings into a phased plan for correcting personalization, explanations, implicit feedback handling, collaborative filtering, and operational freshness.
 
-## Status Update - 2026-05-25 Bundles A-D Safety And Evidence Tooling Implemented
+## Status Update - 2026-05-25 Bundles A-D Complete
 
-Bundle A explanation/profile hygiene and Bundle B correctness changes have been implemented. After tests and the read-only CF comparison passed their safety checks, an explicitly approved controlled rebuild applied the v4 signal/profile lineage while retaining the current CF runtime policy. Bundle C made displayed reasons and badges contribution-faithful without changing ranking weights or CF runtime. Bundle D now adds safe incremental pending processing, truthful CF freshness status, and a runtime-parity offline CF gate. Qualified CF is not promoted because evidence remains insufficient.
+Bundle A explanation/profile hygiene and Bundle B correctness changes have been implemented. After tests and the read-only CF comparison passed their safety checks, an explicitly approved controlled rebuild applied the v4 signal/profile lineage while retaining the current CF runtime policy. Bundle C made displayed reasons and badges contribution-faithful without changing ranking weights or CF runtime. Bundle D now has safe incremental pending processing, truthful CF freshness status, a runtime-parity offline CF gate, aligned runtime versioning, and persisted current-policy CF lineage metadata on live edges. Qualified CF is not promoted because evidence remains insufficient.
 
 The current code gate covers:
 
@@ -48,7 +48,7 @@ Read-only CF gate run on 2026-05-25 (`bundle_b_cf_gate_20260525_2124`):
 
 Gate outcome: `needs_more_evidence`. Qualified CF generated no supported recommendation or edge under `min_support=2`; the subsequent approved rebuild retained the current CF runtime policy rather than adopting qualified CF.
 
-Bundle D read-only parity rerun on 2026-05-25: runtime-parity `profile_plus_cf` reported `HitRate@10=0.166667`, `Recall@20=0.069841`, `MAP@20=0.023210`, `NDCG@20=0.047865` with `268` train directional edges and negative re-exposure `0`; `profile_plus_qualified_cf` still produced `0` edges. This metric shift reflects corrected evaluator parity, not a Mongo CF rebuild.
+Bundle D read-only parity rerun on 2026-05-25: runtime-parity `profile_plus_cf` reported `HitRate@10=0.166667`, `Recall@20=0.069841`, `MAP@20=0.023210`, `NDCG@20=0.047865` with `268` train directional edges and negative re-exposure `0`; `profile_plus_qualified_cf` still produced `0` edges. This metric shift reflects corrected evaluator parity, not a qualified-CF promotion. A later current-policy CF rewrite refreshed live edges only to persist Bundle D lineage metadata.
 
 ---
 

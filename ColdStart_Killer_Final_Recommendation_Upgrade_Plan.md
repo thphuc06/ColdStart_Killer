@@ -17,10 +17,10 @@ Current execution snapshot:
 - The behavior pipeline, API layer, React frontend, evaluation flow, and demo reset/recovery workflow are live in the repo.
 - Bundle A recommendation hygiene has been implemented and validated; Bundle B correctness for negative suppression and search seed eligibility has been applied, while the qualified-CF evidence gate remains open.
 - Bundle C explanation faithfulness has been implemented without ranking tuning: primary reasons/badges now follow material weighted contributions, forced cold insertion is attributed, and frontend cards trust backend badge output.
-- Bundle D safety/evidence tooling is implemented: incremental pending processing refreshes affected signals/item stats/profiles, freshness explicitly identifies lagging CF, and evaluation uses the runtime CF computation.
+- Bundle D safety/evidence closeout is complete: incremental pending processing refreshes affected signals/item stats/profiles, freshness explicitly identifies lagging CF, evaluation uses the runtime CF computation, and live CF edges now persist the full Bundle D lineage contract.
 - After tests and read-only evaluation, an explicitly approved rebuild wrote `1157` signal v4 documents, `43` profile v4 documents, and `514` current-policy CF edges sourced from signal v4.
 - Bundle C uses `explain_v3_contribution_faithful` and needs no Mongo rebuild; a read-only `phuc_demo` sample reported `0` primary attribution mismatches across top `10` cards.
-- Runtime CF remains on `CF_RUNTIME_INPUT_POLICY=current_supported` while `profile_plus_qualified_cf` is evaluated offline with `min_support=2`; no Bundle D Mongo rebuild has been executed.
+- Runtime CF remains on `CF_RUNTIME_INPUT_POLICY=current_supported` while `profile_plus_qualified_cf` is evaluated offline with `min_support=2`; a final current-policy CF rewrite refreshed `514` live edges to persist Bundle D lineage metadata without changing runtime policy.
 - Remaining forward-looking scope is the qualified-CF promotion decision after real deliberate multi-user support exists, plus production scheduling/SLO work.
 
 Latest execution evidence and reproduction:
@@ -32,9 +32,9 @@ Latest execution evidence and reproduction:
 
 Artifacts under `.runtime/evaluation/` are local ignored outputs; their command and summary metrics must be recorded when used as evidence.
 
-Latest read-only gate result (`bundle_b_cf_gate_20260525_2124`): current `profile_plus_cf` achieved `HitRate@10=0.166667`, `Recall@20=0.086508`, `MAP@20=0.019393` with `278` train directional CF edges; qualified CF achieved `0.119048`, `0.078571`, `0.010767` with `0` qualified edges. Decision: `needs_more_evidence`; the approved lineage rebuild therefore retained current CF policy and did not switch runtime CF.
+Initial CF gate run (`bundle_b_cf_gate_20260525_2124`, pre-evaluator parity correction): current `profile_plus_cf` achieved `HitRate@10=0.166667`, `Recall@20=0.086508`, `MAP@20=0.019393` with `278` train directional CF edges; qualified CF achieved `0.119048`, `0.078571`, `0.010767` with `0` qualified edges. Decision: `needs_more_evidence`; the approved lineage rebuild therefore retained current CF policy and did not switch runtime CF.
 
-Bundle D parity rerun on 2026-05-25 corrected the evaluator to share the runtime CF edge computation (including caps, recency decay, and symmetric pruning). It reports current `profile_plus_cf` at `HitRate@10=0.166667`, `Recall@20=0.069841`, `MAP@20=0.023210`, `NDCG@20=0.047865` with `268` train directional edges; qualified CF still has `0` edges and the decision remains `needs_more_evidence`. No live derived collection was written in this rerun.
+Bundle D parity rerun on 2026-05-25 corrected the evaluator to share the runtime CF edge computation (including caps, recency decay, and symmetric pruning). It reports current `profile_plus_cf` at `HitRate@10=0.166667`, `Recall@20=0.069841`, `MAP@20=0.023210`, `NDCG@20=0.047865` with `268` train directional edges; qualified CF still has `0` edges and the decision remains `needs_more_evidence`. A later closeout rewrite refreshed live current-policy CF edges only to persist lineage metadata; it did not switch runtime policy or promote qualified CF.
 
 This document replaces the planning role of the two earlier plan files. It is a ready-to-implement canonical plan for upgrading ColdStart Killer from a cold-start hybrid retrieval engine into a personalized recommendation engine with behavior logging, user profiles, item-item collaborative filtering, React demo UI, explainability, and evaluation.
 

@@ -20,6 +20,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from src.config import get_settings
 from src.evaluation.personalization_eval import (
     PersonalizationEvalConfig,
     evaluate_personalization,
@@ -190,12 +191,15 @@ def main() -> int:
         print(f"ERROR: failed to load live MongoDB inputs: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
+    settings = get_settings()
     config = PersonalizationEvalConfig(
         run_id=Path(args.out).name,
         output_dir=str(args.out),
         train_ratio=args.train_ratio,
         top_k=args.top_k,
         synthetic_data=not args.real_data,
+        algorithm_version=settings.algorithm_version,
+        ranking_version=settings.ranking_version,
         extra_metadata={"live_state_counts": live_inputs.get("live_state_counts", {})},
     )
 

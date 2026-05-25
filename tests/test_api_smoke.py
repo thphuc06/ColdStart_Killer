@@ -296,20 +296,22 @@ def test_debug_user_route_returns_joined_debug_payload(monkeypatch) -> None:
 def test_debug_version_snapshot_marks_profile_and_cf_stale_when_signal_lineage_is_old() -> None:
     import src.api.routes_debug as routes_debug
 
-    configured_signal_version = routes_debug.configured_model_versions(routes_debug.get_settings())["signal_model_version"]
+    configured_versions = routes_debug.configured_model_versions(routes_debug.get_settings())
+    configured_signal_version = configured_versions["signal_model_version"]
+    stale_signal_version = f"{configured_signal_version}__legacy"
     snapshot = routes_debug._model_versions_snapshot(
         profile_doc={
             "derivation": {
-                "model_version": routes_debug.configured_model_versions(routes_debug.get_settings())["profile_model_version"],
-                "source_signal_model_version": "signal_v3_intent_hierarchy",
+                "model_version": configured_versions["profile_model_version"],
+                "source_signal_model_version": stale_signal_version,
             }
         },
         signals=[{"derivation": {"model_version": configured_signal_version}}],
         cf_edges=[
             {
                 "derivation": {
-                    "model_version": routes_debug.configured_model_versions(routes_debug.get_settings())["cf_model_version"],
-                    "source_signal_model_version": "signal_v3_intent_hierarchy",
+                    "model_version": configured_versions["cf_model_version"],
+                    "source_signal_model_version": stale_signal_version,
                 }
             }
         ],
