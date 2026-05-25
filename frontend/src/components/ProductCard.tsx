@@ -1,8 +1,9 @@
-import { ExternalLink, Heart, MinusCircle, ShoppingBag, Sparkles } from "lucide-react";
+import { ExternalLink, Heart, MinusCircle, ShoppingBag } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import type { EventType, RecommendationCard } from "../lib/api";
 import { formatVnd } from "../lib/api";
+import { ProductImage } from "./ProductImage";
 import { ScoreBreakdown } from "./ScoreBreakdown";
 import { StatusBadge } from "./StatusBadge";
 
@@ -81,13 +82,12 @@ export function ProductCard({ card, onOpenDetail, onAction }: ProductCardProps) 
     return (
         <article className="product-card">
             <div className="product-card-image relative">
-                {card.image_url ? (
-                    <img className="h-full w-full object-cover" src={card.image_url} alt={card.title} loading="lazy" />
-                ) : (
-                    <div className="flex h-full items-center justify-center text-[var(--ink-muted)]">
-                        <Sparkles className="h-8 w-8" />
-                    </div>
-                )}
+                <ProductImage
+                    alt={card.title}
+                    className="h-full w-full object-contain p-3"
+                    fallbackSrc={card.image_fallback_url}
+                    src={card.image_url}
+                />
                 <div className="absolute left-3 top-3">
                     <StatusBadge tone="sky">Rank #{card.rank_position}</StatusBadge>
                 </div>

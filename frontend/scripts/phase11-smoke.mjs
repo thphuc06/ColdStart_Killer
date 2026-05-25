@@ -12,6 +12,7 @@ const artifactDir = path.resolve(repoRoot, ".runtime", "phase11_smoke");
 const apiBaseUrl = (process.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 const frontendBaseUrl = (process.env.FRONTEND_BASE_URL || "http://127.0.0.1:4173").replace(/\/$/, "");
 const searchQuery = process.env.PHASE11_SMOKE_QUERY || "wireless charger under 300k";
+const shopperName = process.env.PHASE11_SMOKE_USERNAME || `Phase 11 smoke ${Date.now()}`;
 
 
 async function fetchJson(url, init) {
@@ -52,6 +53,7 @@ async function main() {
     const createdUser = await fetchJson(`${apiBaseUrl}/api/users`, {
         method: "POST",
         body: JSON.stringify({
+            display_name: shopperName,
             allow_personalization: true,
             allow_clickstream_logging: true,
         }),

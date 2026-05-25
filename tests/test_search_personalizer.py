@@ -132,7 +132,9 @@ def test_personalized_search_keeps_specific_query_dominant_over_profile_bias() -
     def fake_process_query(raw_query: str) -> dict:
         return {
             "original_query": raw_query,
+            "language_detected": "vi",
             "english_query": raw_query,
+            "hype_search_query_en": f"user looking for {raw_query} for everyday use",
             "bm25_search_query_en": raw_query,
             "hard_filters": {},
             "query_embedding": [0.0] * 1024,
@@ -181,6 +183,9 @@ def test_personalized_search_keeps_specific_query_dominant_over_profile_bias() -
 
     assert [item["item_id"] for item in payload["items"]] == ["PHONE_CASE", "SKINCARE"]
     assert payload["query"]["query_type"] == "specific"
+    assert payload["query"]["language_detected"] == "vi"
+    assert payload["query"]["hype_search_query_en"].startswith("user looking for")
+    assert payload["query"]["hard_filters"] == {}
     assert payload["snapshot"]["attempted"] == 2
     assert all(item.get("score_breakdown") for item in payload["items"])
 

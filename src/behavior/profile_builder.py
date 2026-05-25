@@ -573,7 +573,7 @@ def _profile_status(profile_quality: dict[str, Any]) -> str:
     num_events = _safe_int(profile_quality.get("num_events"), 0)
     if num_events <= 0:
         return "new"
-    if num_events < 5:
+    if num_events < 5 or _safe_int(profile_quality.get("num_positive_items"), 0) <= 0:
         return "warming"
     return "warm"
 

@@ -167,7 +167,11 @@ def personalized_search(
     ]
     query_context = {
         "raw_query": raw_query,
+        "language_detected": query_fixture.get("language_detected", ""),
         "english_query": query_fixture.get("english_query", ""),
+        "hype_search_query_en": query_fixture.get("hype_search_query_en", ""),
+        "bm25_search_query_en": query_fixture.get("bm25_search_query_en", ""),
+        "hard_filters": dict(query_fixture.get("hard_filters") or {}),
         "query_type": query_type,
         "query_embedding": query_fixture.get("query_embedding"),
     }

@@ -48,20 +48,20 @@ def build_sync_operations(profile_docs: list[dict[str, Any]], *, now: str | None
     operations = []
     for profile_doc in profile_docs:
         user_doc = build_user_doc_from_profile(profile_doc, now=now)
-        created_doc = dict(user_doc)
-        created_doc.pop("updated_at", None)
+        updated_doc = {
+            "profile_status": user_doc["profile_status"],
+            "onboarding": user_doc["onboarding"],
+            "demo_label": user_doc["demo_label"],
+            "demo_source": user_doc["demo_source"],
+            "updated_at": user_doc["updated_at"],
+        }
+        created_doc = {key: value for key, value in user_doc.items() if key not in updated_doc}
         operations.append(
             UpdateOne(
                 {"user_id_hash": user_doc["user_id_hash"]},
                 {
                     "$setOnInsert": created_doc,
-                    "$set": {
-                        "profile_status": user_doc["profile_status"],
-                        "onboarding": user_doc["onboarding"],
-                        "demo_label": user_doc["demo_label"],
-                        "demo_source": user_doc["demo_source"],
-                        "updated_at": user_doc["updated_at"],
-                    },
+                    "$set": updated_doc,
                 },
                 upsert=True,
             )

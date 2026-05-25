@@ -57,6 +57,7 @@ class OnboardingState(BaseModel):
 class UserDocument(BaseModel):
     id: str | None = Field(default=None, alias="_id")
     user_id_hash: str
+    username: str = ""
     created_at: str = Field(default_factory=utc_now_iso)
     profile_status: ProfileStatus = "new"
     privacy: PrivacySettings = Field(default_factory=PrivacySettings)
@@ -94,7 +95,11 @@ class SessionDocument(BaseModel):
 
 class RecommendationQueryContext(BaseModel):
     raw_query: str = ""
+    language_detected: str = ""
     english_query: str = ""
+    hype_search_query_en: str = ""
+    bm25_search_query_en: str = ""
+    hard_filters: dict[str, Any] = Field(default_factory=dict)
     query_type: Literal["specific", "constraint_rich", "normal", "broad", "exploratory", "none"] = "none"
     query_embedding_hash: str | None = None
     query_embedding: list[float] | None = None

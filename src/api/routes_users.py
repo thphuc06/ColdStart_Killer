@@ -4,7 +4,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.behavior.schemas import OnboardingState, PrivacySettings, UserDocument
 from src.mongodb import get_synthetic_personas_collection, get_user_profiles_collection, get_users_collection
@@ -16,8 +16,17 @@ router = APIRouter(prefix="/api")
 
 
 class CreateUserRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
     allow_personalization: bool = True
     allow_clickstream_logging: bool = True
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("display_name must not be blank")
+        return normalized
 
 
 def _user_summary(doc: dict[str, Any]) -> dict[str, Any]:
@@ -39,6 +48,7 @@ def _user_summary(doc: dict[str, Any]) -> dict[str, Any]:
             "selected_seed_item_ids": list(onboarding.get("selected_seed_item_ids", [])),
         },
         "has_profile": bool(doc.get("has_profile", False)),
+        "username": doc.get("username") or doc.get("demo_label", ""),
         "demo_label": doc.get("demo_label", ""),
         "demo_source": doc.get("demo_source", "users"),
     }
@@ -88,7 +98,7 @@ def _profile_backed_user_doc(profile_doc: dict[str, Any], user_doc: dict[str, An
     }
     doc["has_profile"] = True
     doc["demo_label"] = doc.get("demo_label") or f"Profile-backed shopper {user_id_hash[-6:]}"
-    doc["demo_source"] = "user_profile"
+    doc["demo_source"] = doc.get("demo_source") or "user_profile"
     return doc
 
 
@@ -99,9 +109,12 @@ def list_demo_users(
     user_profiles_collection: Any | None = None,
     synthetic_personas_collection: Any | None = None,
 ) -> dict[str, Any]:
-    users_collection = users_collection or get_users_collection()
-    user_profiles_collection = user_profiles_collection or get_user_profiles_collection()
-    synthetic_personas_collection = synthetic_personas_collection or get_synthetic_personas_collection()
+    if users_collection is None:
+        users_collection = get_users_collection()
+    if user_profiles_collection is None:
+        user_profiles_collection = get_user_profiles_collection()
+    if synthetic_personas_collection is None:
+        synthetic_personas_collection = get_synthetic_personas_collection()
     user_docs = list(users_collection.find({}, {"_id": 0}).sort("updated_at", -1).limit(100))
     user_docs_by_id = {
         str(doc.get("user_id_hash")): doc for doc in user_docs if str(doc.get("user_id_hash") or "").strip()
@@ -131,7 +144,7 @@ def list_demo_users(
             continue
         user_doc = dict(user_doc)
         user_doc["has_profile"] = False
-        user_doc["demo_source"] = "users"
+        user_doc["demo_source"] = user_doc.get("demo_source") or "users"
         users.append(_user_summary(user_doc))
         if len(users) >= 50:
             break
@@ -156,12 +169,14 @@ def list_demo_users(
 
 @router.post("/users")
 def create_user(payload: CreateUserRequest, *, users_collection: Any | None = None) -> dict[str, Any]:
-    users_collection = users_collection or get_users_collection()
+    if users_collection is None:
+        users_collection = get_users_collection()
     user_id_hash = f"u_api_{uuid4().hex[:16]}"
     now = utc_now_iso()
     doc = UserDocument(
         _id=user_id_hash,
         user_id_hash=user_id_hash,
+        username=payload.display_name,
         profile_status="new",
         privacy=PrivacySettings(
             allow_personalization=payload.allow_personalization,
@@ -172,5 +187,7 @@ def create_user(payload: CreateUserRequest, *, users_collection: Any | None = No
         updated_at=now,
     )
     mongo_doc = to_mongo_dict(doc)
+    mongo_doc["demo_label"] = payload.display_name
+    mongo_doc["demo_source"] = "user_created"
     users_collection.insert_one(mongo_doc)
     return _user_summary(mongo_doc)

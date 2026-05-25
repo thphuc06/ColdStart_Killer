@@ -21,6 +21,7 @@ from src.recommendation.candidate_sources import (
     build_semantic_neighbor_candidates,
     enrich_with_profile_context,
     load_catalog_snapshot,
+    load_item_snapshot,
     load_user_profile,
     load_user_signals,
     merge_candidate_rows,
@@ -85,10 +86,11 @@ def get_similar_products(
     if recommendation_logs_collection is None:
         recommendation_logs_collection = get_recommendation_logs_collection()
 
-    items_by_id, item_stats_by_id, item_profiles_by_id = load_catalog_snapshot(
+    items_by_id, item_stats_by_id, _ = load_catalog_snapshot(
         items_collection=items_collection,
         item_stats_collection=item_stats_collection,
         item_hype_profiles_collection=item_hype_profiles_collection,
+        include_item_profiles=False,
     )
     if source_item_id not in items_by_id:
         return {
@@ -102,11 +104,17 @@ def get_similar_products(
         }
 
     profile = load_user_profile(user_id_hash, user_profiles_collection=user_profiles_collection) if settings.enable_personalization else None
+    _, _, source_profiles_by_id = load_item_snapshot(
+        {source_item_id},
+        items_collection=items_collection,
+        item_stats_collection=item_stats_collection,
+        item_hype_profiles_collection=item_hype_profiles_collection,
+    )
     semantic_rows = build_semantic_neighbor_candidates(
         [source_item_id],
         items_by_id=items_by_id,
         item_stats_by_id=item_stats_by_id,
-        item_profiles_by_id=item_profiles_by_id,
+        item_profiles_by_id=source_profiles_by_id,
         item_semantic_neighbors_collection=item_semantic_neighbors_collection,
         limit_per_source=max(top_k, 8),
     )
@@ -125,6 +133,13 @@ def get_similar_products(
     )
     merged = merge_candidate_rows(semantic_rows, cf_rows, fallback_rows)
     merged = _filter_similar_candidates(merged, profile=profile, source_item_id=source_item_id)
+    profile_item_ids = {str(row.get("item_id") or "") for row in merged if str(row.get("item_id") or "")}
+    _, _, item_profiles_by_id = load_item_snapshot(
+        profile_item_ids,
+        items_collection=items_collection,
+        item_stats_collection=item_stats_collection,
+        item_hype_profiles_collection=item_hype_profiles_collection,
+    )
     merged = enrich_with_profile_context(
         merged,
         profile=profile,

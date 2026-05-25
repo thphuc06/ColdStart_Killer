@@ -31,6 +31,7 @@ type ExperienceContextValue = ExperienceState & {
 };
 
 const STORAGE_KEY = "coldstart-killer/frontend-state/v1";
+const LOGIN_SESSION_KEY = "coldstart-killer/active-login/v1";
 
 const emptySurfaceState = (): SurfaceRequestState => ({ requestId: null, impressionsLogged: [] });
 
@@ -59,8 +60,9 @@ function loadInitialState(): ExperienceState {
         }
         const parsed = JSON.parse(raw) as Partial<ExperienceState>;
         const base = defaultState();
+        const hasActiveLogin = window.sessionStorage.getItem(LOGIN_SESSION_KEY) === "true";
         return {
-            userIdHash: typeof parsed.userIdHash === "string" ? parsed.userIdHash : null,
+            userIdHash: hasActiveLogin && typeof parsed.userIdHash === "string" ? parsed.userIdHash : null,
             sessionId: typeof parsed.sessionId === "string" && parsed.sessionId ? parsed.sessionId : base.sessionId,
             surfaces: {
                 home: parsed.surfaces?.home || base.surfaces.home,
@@ -82,9 +84,15 @@ export function ExperienceProvider({ children }: PropsWithChildren) {
     }, [state]);
 
     const setUserIdHash = useCallback((userIdHash: string | null) => {
+        if (userIdHash) {
+            window.sessionStorage.setItem(LOGIN_SESSION_KEY, "true");
+        } else {
+            window.sessionStorage.removeItem(LOGIN_SESSION_KEY);
+        }
         setState((current) => ({
             ...current,
             userIdHash,
+            sessionId: current.userIdHash === userIdHash ? current.sessionId : createSessionId(),
             surfaces: {
                 home: emptySurfaceState(),
                 search: emptySurfaceState(),

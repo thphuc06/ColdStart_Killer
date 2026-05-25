@@ -80,6 +80,19 @@ class FakeCollection:
 
         return Result()
 
+    def delete_many(self, filter_doc: dict):
+        before = len(self.docs)
+        if not filter_doc:
+            self.docs = []
+        else:
+            retained_ids = set(filter_doc["_id"]["$nin"])
+            self.docs = [doc for doc in self.docs if doc.get("_id") in retained_ids]
+
+        class Result:
+            deleted_count = before - len(self.docs)
+
+        return Result()
+
 
 def _signal(
     user_id_hash: str,
@@ -196,6 +209,54 @@ def test_build_item_item_cf_uses_behavior_signals_without_embeddings_and_skips_m
     assert result["ok"] is True
     assert result["stats"]["missing_items_skipped"] >= 1
     assert result["stats"]["directional_edges_built"] == 2
+
+
+def test_build_item_item_cf_keeps_symmetry_when_neighbor_cap_is_reached() -> None:
+    result = build_item_item_cf_edges(
+        user_item_signals_collection=FakeCollection(
+            [
+                _signal("u1", "A", implicit_score=5.0),
+                _signal("u1", "B", implicit_score=4.0),
+                _signal("u1", "C", implicit_score=3.0),
+                _signal("u2", "A", implicit_score=5.0),
+                _signal("u2", "B", implicit_score=4.0),
+                _signal("u2", "C", implicit_score=3.0),
+            ]
+        ),
+        items_collection=FakeCollection([_item("A"), _item("B"), _item("C")]),
+        min_support=2,
+        top_neighbors_per_item=1,
+        updated_at=FIXED_NOW,
+    )
+
+    edge_keys = {(edge["item_id"], edge["neighbor_item_id"]) for edge in result["sample_edges"]}
+    assert result["stats"]["undirected_pairs_retained"] == 3
+    assert result["stats"]["undirected_pairs_selected"] == 1
+    assert len(edge_keys) == 2
+    assert all((right, left) in edge_keys for left, right in edge_keys)
+
+
+def test_build_item_item_cf_replace_existing_deletes_stale_edges_after_full_write() -> None:
+    edges = FakeCollection([{"_id": "OLD::STALE", "item_id": "OLD", "neighbor_item_id": "STALE"}])
+    result = build_item_item_cf_edges(
+        user_item_signals_collection=FakeCollection(
+            [
+                _signal("u1", "A", implicit_score=3.0),
+                _signal("u1", "B", implicit_score=2.0),
+                _signal("u2", "A", implicit_score=3.0),
+                _signal("u2", "B", implicit_score=2.0),
+            ]
+        ),
+        items_collection=FakeCollection([_item("A"), _item("B")]),
+        item_item_cf_edges_collection=edges,
+        write=True,
+        replace_existing=True,
+        min_support=2,
+        updated_at=FIXED_NOW,
+    )
+
+    assert result["stats"]["stale_edges_deleted"] == 1
+    assert {(doc["item_id"], doc["neighbor_item_id"]) for doc in edges.docs} == {("A", "B"), ("B", "A")}
 
 
 def test_phase7_script_dry_run_does_not_write_edges(monkeypatch, capsys) -> None:

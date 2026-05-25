@@ -36,6 +36,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=50,
         help="Maximum retained CF neighbors per source item.",
     )
+    parser.add_argument(
+        "--replace-existing",
+        action="store_true",
+        help="On a full write rebuild, remove stored CF edges absent from the rebuilt graph.",
+    )
     return parser.parse_args(argv)
 
 
@@ -59,6 +64,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.top_neighbors_per_item <= 0:
         print("ERROR: --top-neighbors-per-item must be positive.", file=sys.stderr)
         return 2
+    if args.replace_existing and args.limit_users is not None:
+        print("ERROR: --replace-existing cannot be combined with --limit-users.", file=sys.stderr)
+        return 2
 
     write = bool(args.write)
     result = build_item_item_cf_edges(
@@ -71,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         min_support=args.min_support,
         max_items_per_user=args.max_items_per_user,
         top_neighbors_per_item=args.top_neighbors_per_item,
+        replace_existing=bool(args.replace_existing),
     )
     result["mode"] = "write" if write else "dry-run"
     print(json.dumps(result, indent=2, default=str))

@@ -62,6 +62,51 @@ def test_demo_users_route_returns_users_and_personas(monkeypatch) -> None:
     assert "intent_embedding" not in payload["personas"][0]
 
 
+def test_create_user_persists_username_for_personal_shopper(monkeypatch) -> None:
+    class FakeUsersCollection:
+        def __init__(self):
+            self.inserted = None
+
+        def insert_one(self, doc):
+            self.inserted = doc
+
+    import src.api.routes_users as routes_users
+
+    users = FakeUsersCollection()
+    monkeypatch.setattr(routes_users, "get_users_collection", lambda: users)
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/users",
+        json={
+            "display_name": "Phuc demo shopper",
+            "allow_personalization": True,
+            "allow_clickstream_logging": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["username"] == "Phuc demo shopper"
+    assert response.json()["demo_label"] == "Phuc demo shopper"
+    assert response.json()["demo_source"] == "user_created"
+    assert users.inserted["username"] == "Phuc demo shopper"
+    assert users.inserted["demo_label"] == "Phuc demo shopper"
+
+
+def test_create_user_rejects_blank_username() -> None:
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/users",
+        json={
+            "display_name": "   ",
+            "allow_personalization": True,
+            "allow_clickstream_logging": True,
+        },
+    )
+
+    assert response.status_code == 422
+
+
 def test_feed_home_route_delegates_to_service(monkeypatch) -> None:
     expected = {
         "request_id": "req_1",
@@ -131,6 +176,48 @@ def test_items_route_returns_404_when_missing(monkeypatch) -> None:
     client = TestClient(create_app())
     response = client.get("/api/items/does-not-exist")
     assert response.status_code == 404
+
+
+def test_items_route_returns_clear_primary_image_and_product_text(monkeypatch) -> None:
+    class FakeItemsCollection:
+        def find_one(self, *_args, **_kwargs):
+            return {
+                "_id": "item_1",
+                "title_en": "Test Product",
+                "brand": "Brand",
+                "source_category": "Electronics",
+                "category_id": "electronics",
+                "category_path": ["electronics"],
+                "price_vnd": 199000,
+                "price_bucket": "100k_300k",
+                "image_url": "https://m.media-amazon.com/images/I/main._AC_SR38,50_.jpg",
+                "image_urls": [
+                    "https://m.media-amazon.com/images/I/main._AC_SR38,50_.jpg",
+                    "https://m.media-amazon.com/images/I/main._AC_.jpg",
+                    "https://m.media-amazon.com/images/I/gallery._AC_US40_.jpg",
+                ],
+                "quality_score": 0.8,
+                "cold_start": {"is_cold_item": False, "interaction_count": 3},
+                "description_enriched": {},
+                "source_text": {
+                    "description_text": "A useful charger.",
+                    "features_text": "Fast charge\nCompact size",
+                    "details_text": "USB-C",
+                },
+            }
+
+    import src.api.routes_items as routes_items
+
+    monkeypatch.setattr(routes_items, "get_items_collection", lambda: FakeItemsCollection())
+    client = TestClient(create_app())
+    response = client.get("/api/items/item_1")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["image_url"].endswith("/main._AC_.jpg")
+    assert payload["image_fallback_url"].endswith("/main._AC_SR38,50_.jpg")
+    assert payload["image_urls"][-1].endswith("/gallery._AC_.jpg")
+    assert payload["source_text"]["features_text"] == "Fast charge\nCompact size"
 
 
 def test_events_route_delegates_to_logger(monkeypatch) -> None:
@@ -275,3 +362,56 @@ def test_demo_status_reports_counts_and_protected_collections(monkeypatch) -> No
     assert payload["counts"]["item_item_cf_edges"] == 8
     assert payload["cf_evidence_available"] is True
     assert payload["protected_collections"] == ["items", "retrieval_units"]
+
+
+def test_process_events_write_rebuild_stats_clears_catalog_cache(monkeypatch) -> None:
+    import src.api.routes_debug as routes_debug
+
+    sentinel = object()
+    build_calls = []
+    cache_clears = []
+
+    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_recommendation_logs_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_user_item_signals_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_item_stats_collection", lambda: sentinel)
+    monkeypatch.setattr(
+        routes_debug,
+        "build_user_item_signals",
+        lambda **kwargs: build_calls.append(kwargs) or {"ok": True},
+    )
+    monkeypatch.setattr(routes_debug, "clear_catalog_snapshot_cache", lambda: cache_clears.append(True))
+
+    client = TestClient(create_app())
+    response = client.post("/api/debug/process-events?limit=25&rebuild_item_stats=true&write=true")
+
+    assert response.status_code == 200
+    assert build_calls[0]["limit_events"] == 25
+    assert build_calls[0]["write"] is True
+    assert build_calls[0]["item_stats_collection"] is sentinel
+    assert cache_clears == [True]
+
+
+def test_rebuild_cf_replaces_existing_edges_only_for_full_write(monkeypatch) -> None:
+    import src.api.routes_debug as routes_debug
+
+    sentinel = object()
+    build_calls = []
+
+    monkeypatch.setattr(routes_debug, "get_user_item_signals_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_items_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_item_item_cf_edges_collection", lambda: sentinel)
+    monkeypatch.setattr(
+        routes_debug,
+        "build_item_item_cf_edges",
+        lambda **kwargs: build_calls.append(kwargs) or {"ok": True},
+    )
+
+    client = TestClient(create_app())
+    full_response = client.post("/api/debug/rebuild-cf?write=true")
+    limited_response = client.post("/api/debug/rebuild-cf?write=true&limit_users=5")
+
+    assert full_response.status_code == 200
+    assert limited_response.status_code == 200
+    assert build_calls[0]["replace_existing"] is True
+    assert build_calls[1]["replace_existing"] is False

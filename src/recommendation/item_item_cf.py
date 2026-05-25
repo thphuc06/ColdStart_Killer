@@ -30,8 +30,10 @@ class CFBuildStats:
     missing_items_skipped: int = 0
     pair_candidates: int = 0
     undirected_pairs_retained: int = 0
+    undirected_pairs_selected: int = 0
     directional_edges_built: int = 0
     directional_edges_written: int = 0
+    stale_edges_deleted: int = 0
     bulk_write_batches: int = 0
     errors: list[str] = field(default_factory=list)
 
@@ -44,8 +46,10 @@ class CFBuildStats:
             "missing_items_skipped": self.missing_items_skipped,
             "pair_candidates": self.pair_candidates,
             "undirected_pairs_retained": self.undirected_pairs_retained,
+            "undirected_pairs_selected": self.undirected_pairs_selected,
             "directional_edges_built": self.directional_edges_built,
             "directional_edges_written": self.directional_edges_written,
+            "stale_edges_deleted": self.stale_edges_deleted,
             "bulk_write_batches": self.bulk_write_batches,
             "errors": list(self.errors),
         }
@@ -206,6 +210,7 @@ def build_item_item_cf_edges(
     min_support: int = DEFAULT_CF_MIN_SUPPORT,
     max_items_per_user: int = DEFAULT_MAX_ITEMS_PER_USER,
     top_neighbors_per_item: int = DEFAULT_TOP_NEIGHBORS_PER_ITEM,
+    replace_existing: bool = False,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
     if limit_users is not None and limit_users <= 0:
@@ -218,6 +223,8 @@ def build_item_item_cf_edges(
         raise ValueError("max_items_per_user must be greater than 1")
     if top_neighbors_per_item <= 0:
         raise ValueError("top_neighbors_per_item must be positive")
+    if replace_existing and limit_users is not None:
+        raise ValueError("replace_existing requires a full rebuild without limit_users")
     if write and item_item_cf_edges_collection is None:
         raise ValueError("item_item_cf_edges_collection is required when write=True")
 
@@ -307,7 +314,7 @@ def build_item_item_cf_edges(
             if len(state["user_hashes"]) < 5 and user_id_hash not in state["user_hashes"]:
                 state["user_hashes"].append(user_id_hash)
 
-    edges_by_item: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    ranked_pairs: list[tuple[float, int, str, str, dict[str, Any], float]] = []
     for pair_key, pair_state in pair_stats.items():
         support = int(pair_state["support"])
         if support < min_support:
@@ -323,7 +330,20 @@ def build_item_item_cf_edges(
             continue
         stats.undirected_pairs_retained += 1
         confidence = min(1.0, support / max(1.0, denominator))
-        edges_by_item[left_item_id].append(
+        ranked_pairs.append((cf_score, support, left_item_id, right_item_id, pair_state, confidence))
+
+    # Select whole pairs so per-item top-K pruning can never leave one-way CF evidence.
+    edge_docs: list[dict[str, Any]] = []
+    neighbor_counts: dict[str, int] = defaultdict(int)
+    for cf_score, support, left_item_id, right_item_id, pair_state, confidence in sorted(
+        ranked_pairs,
+        key=lambda row: (-row[0], -row[1], row[2], row[3]),
+    ):
+        if neighbor_counts[left_item_id] >= top_neighbors_per_item:
+            continue
+        if neighbor_counts[right_item_id] >= top_neighbors_per_item:
+            continue
+        edge_docs.append(
             _build_edge_doc(
                 item_id=left_item_id,
                 neighbor_item_id=right_item_id,
@@ -333,7 +353,7 @@ def build_item_item_cf_edges(
                 updated_at=updated_at,
             )
         )
-        edges_by_item[right_item_id].append(
+        edge_docs.append(
             _build_edge_doc(
                 item_id=right_item_id,
                 neighbor_item_id=left_item_id,
@@ -343,22 +363,23 @@ def build_item_item_cf_edges(
                 updated_at=updated_at,
             )
         )
-
-    edge_docs: list[dict[str, Any]] = []
-    for item_id, docs in edges_by_item.items():
-        ranked_docs = sorted(
-            docs,
-            key=lambda doc: (-_safe_float(doc.get("cf_score"), 0.0), -int(doc.get("support") or 0), str(doc.get("neighbor_item_id") or "")),
-        )[:top_neighbors_per_item]
-        edge_docs.extend(ranked_docs)
+        neighbor_counts[left_item_id] += 1
+        neighbor_counts[right_item_id] += 1
+        stats.undirected_pairs_selected += 1
 
     stats.directional_edges_built = len(edge_docs)
     sample_edges = edge_docs[: min(5, len(edge_docs))]
 
-    if write and edge_docs:
-        summary = _bulk_write_edges(item_item_cf_edges_collection, edge_docs, batch_size)
-        stats.bulk_write_batches = summary["batches"]
-        stats.directional_edges_written = summary["written"]
+    if write:
+        if edge_docs:
+            summary = _bulk_write_edges(item_item_cf_edges_collection, edge_docs, batch_size)
+            stats.bulk_write_batches = summary["batches"]
+            stats.directional_edges_written = summary["written"]
+        if replace_existing:
+            retained_ids = [doc["_id"] for doc in edge_docs]
+            stale_filter = {"_id": {"$nin": retained_ids}} if retained_ids else {}
+            result = item_item_cf_edges_collection.delete_many(stale_filter)
+            stats.stale_edges_deleted = int(getattr(result, "deleted_count", 0))
 
     return {
         "ok": not stats.errors,
@@ -367,6 +388,7 @@ def build_item_item_cf_edges(
         "min_support": min_support,
         "max_items_per_user": max_items_per_user,
         "top_neighbors_per_item": top_neighbors_per_item,
+        "replace_existing": replace_existing,
         "stats": stats.as_dict(),
         "sample_edges": sample_edges,
     }

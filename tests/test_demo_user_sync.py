@@ -52,3 +52,4 @@ def test_build_sync_operations_are_idempotent_upserts() -> None:
     assert operation._upsert is True
     assert operation._doc["$set"]["profile_status"] == "warm"
     assert operation._doc["$setOnInsert"]["user_id_hash"] == "u_syn_1"
+    assert set(operation._doc["$set"]).isdisjoint(operation._doc["$setOnInsert"])

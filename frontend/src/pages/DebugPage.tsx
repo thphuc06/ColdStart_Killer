@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DatabaseBackup, Gauge, RefreshCcw, TestTube2, Wrench } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -28,6 +28,7 @@ function FieldRow({ label, value }: { label: string; value: string | number | nu
 
 export function DebugPage() {
     const { userIdHash } = useExperience();
+    const queryClient = useQueryClient();
     const [resetWrite, setResetWrite] = useState(false);
     const [resetFull, setResetFull] = useState(false);
     const [resetConfirm, setResetConfirm] = useState("");
@@ -56,6 +57,21 @@ export function DebugPage() {
     const processMutation = useMutation({ mutationFn: processEvents });
     const profileMutation = useMutation({ mutationFn: rebuildProfiles });
     const cfMutation = useMutation({ mutationFn: rebuildCf });
+    const applyBehaviorMutation = useMutation({
+        mutationFn: async () => ({
+            signals: await processEvents({ limit: 100000, rebuildItemStats: true, write: true }),
+            profiles: await rebuildProfiles({ write: true }),
+            cf: await rebuildCf({ write: true }),
+        }),
+        onSuccess: async () => {
+            await Promise.all([
+                debugQuery.refetch(),
+                demoStatusQuery.refetch(),
+                queryClient.invalidateQueries({ queryKey: ["demo-users"] }),
+                queryClient.invalidateQueries({ queryKey: ["homepage-feed"] }),
+            ]);
+        },
+    });
 
     const metricSummary = useMemo(
         () => ({
@@ -210,6 +226,29 @@ export function DebugPage() {
             </section>
 
             <section className="grid gap-5 xl:grid-cols-2">
+                <section className="panel p-5 xl:col-span-2">
+                    <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr),320px] lg:items-center">
+                        <div>
+                            <p className="soft-label">Captured UI behavior</p>
+                            <h3 className="mt-1 text-lg font-black text-[var(--ink-strong)]">
+                                Apply interactions to personalization
+                            </h3>
+                            <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
+                                Impressions and actions are written to clickstream immediately. This action processes them into
+                                signals and item stats, rebuilds user profiles, then refreshes collaborative-filtering edges.
+                            </p>
+                        </div>
+                        <button
+                            className="action-button action-button-primary w-full"
+                            disabled={applyBehaviorMutation.isPending}
+                            onClick={() => applyBehaviorMutation.mutate()}
+                        >
+                            <Wrench className="h-4 w-4" />
+                            {applyBehaviorMutation.isPending ? "Applying behavior..." : "Apply captured behavior"}
+                        </button>
+                    </div>
+                </section>
+
                 <section className="panel p-5">
                     <div className="mb-4 flex items-center gap-3">
                         <DatabaseBackup className="h-5 w-5 text-[var(--rose)]" />
@@ -380,6 +419,7 @@ export function DebugPage() {
                 <ActionResult title="Process-events response" data={processMutation.data} />
                 <ActionResult title="Rebuild-profiles response" data={profileMutation.data} />
                 <ActionResult title="Rebuild-cf response" data={cfMutation.data} />
+                <ActionResult title="Applied behavior response" data={applyBehaviorMutation.data} />
             </section>
 
             <section className="grid gap-5 xl:grid-cols-2">

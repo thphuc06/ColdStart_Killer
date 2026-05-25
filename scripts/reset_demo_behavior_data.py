@@ -47,7 +47,7 @@ REBUILD_ORDER_AFTER_FULL_RESET: tuple[str, ...] = (
     "python scripts/build_user_profiles.py --dry-run",
     "python scripts/build_user_profiles.py --write",
     "python scripts/build_item_item_cf.py --dry-run",
-    "python scripts/build_item_item_cf.py --write",
+    "python scripts/build_item_item_cf.py --write --replace-existing",
     "python scripts/build_item_semantic_neighbors.py --dry-run",
 )
 REBUILD_ORDER_AFTER_SOFT_RESET: tuple[str, ...] = (

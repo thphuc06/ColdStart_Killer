@@ -1144,7 +1144,7 @@ Step 7 — Build `item_item_cf_edges`:
 
 ```bash
 python scripts/build_item_item_cf.py --dry-run --limit-users 20
-python scripts/build_item_item_cf.py --write
+python scripts/build_item_item_cf.py --write --replace-existing
 ```
 
 Step 8 — Build `item_semantic_neighbors` optional:

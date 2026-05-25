@@ -1,9 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
-import { BookmarkPlus, CreditCard, ShieldAlert, ShoppingBag, Sparkles } from "lucide-react";
+import { BookmarkPlus, CreditCard, ShieldAlert, ShoppingBag } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { ProductCard } from "../components/ProductCard";
+import { ProductImage } from "../components/ProductImage";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatVnd, getItemDetail, getSimilarProducts, type EventType, type RecommendationCard } from "../lib/api";
@@ -44,6 +45,32 @@ export function ItemDetailPage() {
         queryFn: () => getSimilarProducts({ itemId, userIdHash: userIdHash!, sessionId }),
         enabled: Boolean(itemId && userIdHash),
     });
+    const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
+    const galleryImages = useMemo(() => {
+        const item = itemQuery.data;
+        if (!item) {
+            return [];
+        }
+        return Array.from(
+            new Set(
+                [item.image_url, ...item.image_urls]
+                    .filter((url): url is string => Boolean(url))
+                    .filter((url) => url !== item.image_fallback_url),
+            ),
+        );
+    }, [itemQuery.data]);
+    const featureLines = useMemo(
+        () =>
+            (itemQuery.data?.source_text?.features_text || "")
+                .split(/\r?\n/)
+                .map((line) => line.trim())
+                .filter(Boolean),
+        [itemQuery.data?.source_text?.features_text],
+    );
+
+    useEffect(() => {
+        setSelectedImageUrl(itemQuery.data?.image_url || null);
+    }, [itemQuery.data?.image_url, itemQuery.data?.item_id]);
 
     useImpressionLogger({
         response: similarQuery.data,
@@ -139,14 +166,33 @@ export function ItemDetailPage() {
                     <div className="grid gap-0 lg:grid-cols-[420px,minmax(0,1fr)]">
                         <div className="bg-[var(--surface-muted)] p-5">
                             <div className="aspect-[4/3] overflow-hidden rounded-lg bg-white">
-                                {itemQuery.data.image_url ? (
-                                    <img className="h-full w-full object-cover" src={itemQuery.data.image_url} alt={itemQuery.data.title} />
-                                ) : (
-                                    <div className="flex h-full items-center justify-center text-[var(--ink-muted)]">
-                                        <Sparkles className="h-10 w-10" />
-                                    </div>
-                                )}
+                                <ProductImage
+                                    alt={itemQuery.data.title}
+                                    className="h-full w-full object-contain p-5"
+                                    fallbackSrc={itemQuery.data.image_fallback_url}
+                                    loading="eager"
+                                    src={selectedImageUrl || itemQuery.data.image_url}
+                                />
                             </div>
+                            {galleryImages.length > 1 ? (
+                                <div className="mt-3 grid grid-cols-4 gap-2">
+                                    {galleryImages.slice(0, 8).map((imageUrl, index) => (
+                                        <button
+                                            className={`aspect-square overflow-hidden rounded-md border bg-white p-1 ${
+                                                (selectedImageUrl || itemQuery.data.image_url) === imageUrl
+                                                    ? "border-[var(--mint)]"
+                                                    : "border-[var(--line-soft)]"
+                                            }`}
+                                            key={imageUrl}
+                                            aria-label={`View product image ${index + 1}`}
+                                            onClick={() => setSelectedImageUrl(imageUrl)}
+                                            type="button"
+                                        >
+                                            <ProductImage alt="" className="h-full w-full object-contain" src={imageUrl} />
+                                        </button>
+                                    ))}
+                                </div>
+                            ) : null}
                         </div>
 
                         <div className="space-y-6 p-6">
@@ -220,6 +266,44 @@ export function ItemDetailPage() {
                                     </p>
                                 )}
                             </div>
+
+                            {itemQuery.data.source_text.description_text ||
+                            itemQuery.data.source_text.features_text ||
+                            itemQuery.data.source_text.details_text ? (
+                                <div className="space-y-4 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-4">
+                                    <p className="soft-label">Product information</p>
+                                    {itemQuery.data.source_text.description_text ? (
+                                        <div>
+                                            <h3 className="text-sm font-bold text-[var(--ink-strong)]">Description</h3>
+                                            <p className="mt-2 whitespace-pre-line text-sm leading-6 text-[var(--ink-soft)]">
+                                                {itemQuery.data.source_text.description_text}
+                                            </p>
+                                        </div>
+                                    ) : null}
+                                    {featureLines.length ? (
+                                        <div>
+                                            <h3 className="text-sm font-bold text-[var(--ink-strong)]">Features</h3>
+                                            <ul className="mt-2 space-y-1 text-sm leading-6 text-[var(--ink-soft)]">
+                                                {featureLines.map((line) => (
+                                                    <li key={line}>- {line}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    ) : null}
+                                    {itemQuery.data.source_text.details_text ? (
+                                        <details>
+                                            <summary className="cursor-pointer text-sm font-bold text-[var(--ink-strong)]">
+                                                Technical details
+                                            </summary>
+                                            <p className="mt-2 whitespace-pre-line text-sm leading-6 text-[var(--ink-soft)]">
+                                                {itemQuery.data.source_text.details_text}
+                                            </p>
+                                        </details>
+                                    ) : null}
+                                </div>
+                            ) : (
+                                <p className="text-sm text-[var(--ink-soft)]">No product description is available in the catalog.</p>
+                            )}
                         </div>
                     </div>
                 </section>

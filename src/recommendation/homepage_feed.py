@@ -133,6 +133,11 @@ def get_homepage_feed(
         raise ValueError("top_k must be positive")
 
     settings = get_settings()
+    use_catalog_cache = (
+        items_collection is None
+        and item_stats_collection is None
+        and item_hype_profiles_collection is None
+    )
     if user_profiles_collection is None:
         user_profiles_collection = get_user_profiles_collection()
     if user_item_signals_collection is None:
@@ -165,6 +170,7 @@ def get_homepage_feed(
         items_collection=items_collection,
         item_stats_collection=item_stats_collection,
         item_hype_profiles_collection=item_hype_profiles_collection,
+        use_cache=use_catalog_cache,
     )
     seed_item_ids = _source_item_ids(profile, signals)
 

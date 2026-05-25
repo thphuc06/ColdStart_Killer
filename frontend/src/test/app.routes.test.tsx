@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
@@ -8,6 +8,7 @@ import { ExperienceProvider } from "../state/experience";
 
 
 const STORAGE_KEY = "coldstart-killer/frontend-state/v1";
+const LOGIN_SESSION_KEY = "coldstart-killer/active-login/v1";
 
 const baseRecommendationItem = {
     request_id: "req_test_1",
@@ -86,7 +87,11 @@ const searchResponse = {
     personalized: true,
     query: {
         raw_query: "wireless charger under 300k",
+        language_detected: "vi",
         english_query: "wireless charger under 300k",
+        hype_search_query_en: "user looking for a wireless charger under 300k for everyday use",
+        bm25_search_query_en: "wireless charger under 300k",
+        hard_filters: { max_price_vnd: 300000 },
         query_type: "semantic",
         query_embedding: null,
     },
@@ -102,12 +107,20 @@ const detailResponse = {
     price_vnd: 199000,
     price_bucket: "100k_300k",
     image_url: null,
+    image_fallback_url: null,
+    image_urls: [],
     quality_score: 0.88,
     cold_start: {
         is_cold_item: false,
         interaction_count: 0,
     },
     description_enriched: {},
+    source_text: {
+        description_text: "Compact charging product description.",
+        features_text: "Fast charging\nTravel friendly",
+        details_text: "Input: USB-C",
+    },
+    text_stats: {},
 };
 
 const similarResponse = {
@@ -163,6 +176,8 @@ function jsonResponse(payload: unknown) {
 
 
 function installFetchMock() {
+    let createdUser: Record<string, unknown> | null = null;
+
     return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
         if (url.includes("/api/health")) {
@@ -176,8 +191,25 @@ function installFetchMock() {
         if (url.includes("/api/users/demo")) {
             return jsonResponse({
                 users: [
+                    ...(createdUser ? [createdUser] : []),
                     {
                         user_id_hash: "u_test_user",
+                        demo_label: "Authenticated test shopper",
+                        profile_status: "warm",
+                        has_profile: true,
+                        privacy: {
+                            allow_personalization: true,
+                            allow_clickstream_logging: true,
+                        },
+                        onboarding: {
+                            completed: false,
+                            selected_categories: [],
+                            selected_price_buckets: [],
+                            selected_seed_item_ids: [],
+                        },
+                    },
+                    {
+                        user_id_hash: "u_syn_p_budget_skincare_01",
                         profile_status: "warm",
                         has_profile: true,
                         privacy: {
@@ -192,8 +224,38 @@ function installFetchMock() {
                         },
                     },
                 ],
-                personas: [],
+                personas: [
+                    {
+                        persona_id: "p_budget_skincare",
+                        label: "Budget skincare shopper",
+                        preferred_categories: {},
+                        preferred_price_buckets: {},
+                        intent_keywords: ["cleanser"],
+                        negative_keywords: [],
+                    },
+                ],
             });
+        }
+        if (url.endsWith("/api/users")) {
+            createdUser = {
+                user_id_hash: "u_api_personal_test",
+                username: "Phuc demo shopper",
+                profile_status: "new",
+                demo_label: "Phuc demo shopper",
+                demo_source: "user_created",
+                has_profile: false,
+                privacy: {
+                    allow_personalization: true,
+                    allow_clickstream_logging: true,
+                },
+                onboarding: {
+                    completed: false,
+                    selected_categories: [],
+                    selected_price_buckets: [],
+                    selected_seed_item_ids: [],
+                },
+            };
+            return jsonResponse(createdUser);
         }
         if (url.includes("/api/feed/home")) {
             return jsonResponse(homeResponse);
@@ -213,6 +275,15 @@ function installFetchMock() {
         if (url.includes("/api/demo/status")) {
             return jsonResponse(demoStatusResponse);
         }
+        if (url.includes("/api/debug/process-events")) {
+            return jsonResponse({ ok: true, stage: "signals" });
+        }
+        if (url.includes("/api/debug/rebuild-profiles")) {
+            return jsonResponse({ ok: true, stage: "profiles" });
+        }
+        if (url.includes("/api/debug/rebuild-cf")) {
+            return jsonResponse({ ok: true, stage: "cf" });
+        }
         if (url.includes("/api/events")) {
             return jsonResponse({ ok: true });
         }
@@ -221,7 +292,7 @@ function installFetchMock() {
 }
 
 
-function renderApp(route: string) {
+function renderApp(route: string, authenticated = true) {
     const queryClient = new QueryClient({
         defaultOptions: {
             queries: {
@@ -242,6 +313,9 @@ function renderApp(route: string) {
             },
         }),
     );
+    if (authenticated) {
+        window.sessionStorage.setItem(LOGIN_SESSION_KEY, "true");
+    }
 
     return render(
         <QueryClientProvider client={queryClient}>
@@ -258,6 +332,7 @@ function renderApp(route: string) {
 describe("Phase 11 routes", () => {
     beforeEach(() => {
         window.localStorage.clear();
+        window.sessionStorage.clear();
         installFetchMock();
     });
 
@@ -273,10 +348,64 @@ describe("Phase 11 routes", () => {
         expect(screen.getByText("Recommended for you")).toBeInTheDocument();
     });
 
+    it("requires shopper selection before opening the homepage", async () => {
+        renderApp("/", false);
+
+        expect(await screen.findByText("Start a personalized shopping session")).toBeInTheDocument();
+        expect(screen.queryByText("Recommended for you")).not.toBeInTheDocument();
+    });
+
+    it("enters a persona-backed shopper from sign in with a new session", async () => {
+        renderApp("/login", false);
+
+        const shopperSelect = await screen.findByLabelText("Shopper account or seeded persona");
+        await screen.findByRole("option", { name: /Budget skincare shopper/ });
+        fireEvent.change(shopperSelect, { target: { value: "u_syn_p_budget_skincare_01" } });
+        fireEvent.click(screen.getByRole("button", { name: "Enter as selected shopper" }));
+
+        expect(await screen.findByText("Persona: Budget skincare shopper")).toBeInTheDocument();
+        await waitFor(() => {
+            const state = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}");
+            expect(state.userIdHash).toBe("u_syn_p_budget_skincare_01");
+            expect(state.sessionId).not.toBe("sess_test_ui");
+            expect(window.sessionStorage.getItem(LOGIN_SESSION_KEY)).toBe("true");
+        });
+    });
+
+    it("creates a named personal shopper account", async () => {
+        renderApp("/login", false);
+
+        fireEvent.change(await screen.findByPlaceholderText("Example: Judge live demo"), {
+            target: { value: "Phuc demo shopper" },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Create account and enter" }));
+
+        await waitFor(() => {
+            const call = vi
+                .mocked(globalThis.fetch)
+                .mock.calls.find(([input]) => String(input).endsWith("/api/users"));
+            expect(call).toBeDefined();
+            expect(String(call?.[1]?.body)).toContain('"display_name":"Phuc demo shopper"');
+        });
+        expect(await screen.findByText("Phuc demo shopper")).toBeInTheDocument();
+        expect(screen.getByText("Personal live-learning account")).toBeInTheDocument();
+    });
+
+    it("returns to shopper selection when changing account", async () => {
+        renderApp("/");
+
+        fireEvent.click(await screen.findByRole("button", { name: "Change shopper" }));
+
+        expect(await screen.findByText("Start a personalized shopping session")).toBeInTheDocument();
+        expect(window.sessionStorage.getItem(LOGIN_SESSION_KEY)).toBeNull();
+    });
+
     it("renders the search page results for a query route", async () => {
         renderApp("/search?q=wireless%20charger%20under%20300k");
 
         expect(await screen.findByText("Search Result Charger")).toBeInTheDocument();
+        expect(screen.getByText("HyPE semantic expansion")).toBeInTheDocument();
+        expect(screen.getByText("user looking for a wireless charger under 300k for everyday use")).toBeInTheDocument();
         expect(screen.getByRole("button", { name: /Search/i })).toBeInTheDocument();
     });
 
@@ -284,6 +413,8 @@ describe("Phase 11 routes", () => {
         renderApp("/items/item_1");
 
         expect(await screen.findByText("Detail Product Title")).toBeInTheDocument();
+        expect(await screen.findByText("Compact charging product description.")).toBeInTheDocument();
+        expect(screen.getByText(/Fast charging/)).toBeInTheDocument();
         expect(await screen.findByText("Similar Product Title")).toBeInTheDocument();
     });
 
@@ -294,5 +425,16 @@ describe("Phase 11 routes", () => {
         expect(await screen.findByText("Top signals")).toBeInTheDocument();
         expect(await screen.findByText("Demo Recovery")).toBeInTheDocument();
         expect(await screen.findByText("items")).toBeInTheDocument();
+    });
+
+    it("applies captured behavior through signals profiles and cf", async () => {
+        renderApp("/debug");
+
+        fireEvent.click(await screen.findByRole("button", { name: "Apply captured behavior" }));
+
+        expect(await screen.findByText("Applied behavior response")).toBeInTheDocument();
+        expect(screen.getByText(/"stage": "signals"/)).toBeInTheDocument();
+        expect(screen.getByText(/"stage": "profiles"/)).toBeInTheDocument();
+        expect(screen.getByText(/"stage": "cf"/)).toBeInTheDocument();
     });
 });

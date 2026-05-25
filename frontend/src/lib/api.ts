@@ -23,6 +23,7 @@ export type DemoUser = {
     created_at?: string;
     updated_at?: string;
     has_profile?: boolean;
+    username?: string;
     demo_label?: string;
     demo_source?: string;
     privacy: {
@@ -66,6 +67,7 @@ export type RecommendationCard = {
     price_bucket: string;
     price_vnd?: number | null;
     image_url?: string | null;
+    image_fallback_url?: string | null;
     is_cold_item: boolean;
     interaction_count: number;
     score: number;
@@ -127,7 +129,11 @@ export type SearchResponse = RecommendationResponse & {
     surface: "search";
     query: {
         raw_query: string;
+        language_detected?: string;
         english_query: string;
+        hype_search_query_en?: string;
+        bm25_search_query_en?: string;
+        hard_filters?: Record<string, unknown>;
         query_type: string;
         query_embedding?: number[] | null;
     };
@@ -148,12 +154,20 @@ export type ItemDetailResponse = {
     price_vnd?: number | null;
     price_bucket: string;
     image_url?: string | null;
+    image_fallback_url?: string | null;
+    image_urls: string[];
     quality_score: number;
     cold_start: {
         is_cold_item: boolean;
         interaction_count: number;
     };
     description_enriched: Record<string, unknown>;
+    source_text: {
+        description_text: string;
+        features_text: string;
+        details_text: string;
+    };
+    text_stats: Record<string, unknown>;
 };
 
 export type DebugUserResponse = {
@@ -250,10 +264,14 @@ export function getDemoUsers() {
 }
 
 
-export function createUser(payload: { allow_personalization: boolean; allow_clickstream_logging: boolean }) {
+export function createUser(payload: { displayName: string; allow_personalization: boolean; allow_clickstream_logging: boolean }) {
     return fetchJson<DemoUser>("/api/users", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+            display_name: payload.displayName,
+            allow_personalization: payload.allow_personalization,
+            allow_clickstream_logging: payload.allow_clickstream_logging,
+        }),
     });
 }
 

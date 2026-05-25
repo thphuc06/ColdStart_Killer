@@ -94,6 +94,7 @@ def build_result_card(
         "price_bucket": str(candidate.get("price_bucket") or "unknown"),
         "price_vnd": candidate.get("price_vnd"),
         "image_url": candidate.get("image_url"),
+        "image_fallback_url": candidate.get("image_fallback_url"),
         "is_cold_item": bool(candidate.get("is_cold_item")),
         "interaction_count": candidate.get("interaction_count", 0),
         "score": candidate.get("final_score", 0.0),

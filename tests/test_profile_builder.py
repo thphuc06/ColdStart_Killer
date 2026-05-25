@@ -371,6 +371,7 @@ def test_build_user_profiles_requires_repeated_negative_evidence_for_brand_and_c
     )
 
     profile = result["sample_profiles"][0]
+    assert profile["profile_status"] == "warming"
     assert "BrandA" in profile["negative_preferences"]["brands"]
     assert "all_beauty" in profile["negative_preferences"]["categories"]
 

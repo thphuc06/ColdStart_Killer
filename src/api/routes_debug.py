@@ -28,6 +28,7 @@ from src.mongodb import (
     get_database,
 )
 from src.recommendation.item_item_cf import build_item_item_cf_edges
+from src.recommendation.candidate_sources import clear_catalog_snapshot_cache
 
 
 router = APIRouter(prefix="/api")
@@ -180,7 +181,7 @@ def reset_demo_behavior(write: bool = False, full: bool = False, confirm: str | 
 
 @router.post("/debug/process-events")
 def process_events(limit: int = 500, rebuild_item_stats: bool = True, write: bool = False) -> dict[str, Any]:
-    return build_user_item_signals(
+    result = build_user_item_signals(
         clickstream_events_collection=get_clickstream_events_collection(),
         recommendation_logs_collection=get_recommendation_logs_collection(),
         user_item_signals_collection=get_user_item_signals_collection() if write else None,
@@ -189,6 +190,9 @@ def process_events(limit: int = 500, rebuild_item_stats: bool = True, write: boo
         rebuild_item_stats=rebuild_item_stats,
         limit_events=limit,
     )
+    if write and rebuild_item_stats and result.get("ok"):
+        clear_catalog_snapshot_cache()
+    return result
 
 
 @router.post("/debug/rebuild-profiles")
@@ -223,4 +227,5 @@ def rebuild_cf(
         min_support=min_support,
         max_items_per_user=max_items_per_user,
         top_neighbors_per_item=top_neighbors_per_item,
+        replace_existing=bool(write and limit_users is None),
     )

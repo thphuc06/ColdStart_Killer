@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import re
+from time import monotonic
 from typing import Any
 
 import numpy as np
@@ -18,6 +20,46 @@ from src.recommendation.schemas import EMBEDDING_DIM
 
 
 DEFAULT_CANDIDATE_LIMIT = 60
+CATALOG_SNAPSHOT_CACHE_TTL_SECONDS = 30.0
+AMAZON_THUMBNAIL_TRANSFORM_PATTERN = re.compile(r"\._AC_(?:SR\d+,\d+|US\d+)_", re.IGNORECASE)
+
+ITEM_PROJECTION = {
+    "_id": 1,
+    "title_en": 1,
+    "brand": 1,
+    "category_id": 1,
+    "price_bucket": 1,
+    "price_vnd": 1,
+    "image_url": 1,
+    "image_urls": 1,
+    "quality_score": 1,
+    "cold_start": 1,
+}
+ITEM_STATS_PROJECTION = {
+    "item_id": 1,
+    "quality_score": 1,
+    "cold_start": 1,
+    "ctr": 1,
+    "cart_rate": 1,
+    "purchase_rate": 1,
+}
+ITEM_PROFILE_PROJECTION = {
+    "item_id": 1,
+    "item_semantic_embedding": 1,
+    "top_aspects": 1,
+    "category_id": 1,
+    "price_bucket": 1,
+}
+
+_catalog_snapshot_cache: tuple[
+    float,
+    tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]],
+] | None = None
+
+
+def clear_catalog_snapshot_cache() -> None:
+    global _catalog_snapshot_cache
+    _catalog_snapshot_cache = None
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -35,6 +77,43 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def display_image_url(image_url: str) -> str:
+    return AMAZON_THUMBNAIL_TRANSFORM_PATTERN.sub("._AC_", image_url, count=1)
+
+
+def preferred_image_sources(item_doc: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Return a usable primary image while retaining the seeded URL as fallback."""
+    primary = str(item_doc.get("image_url") or "").strip()
+    alternatives = [
+        str(value).strip()
+        for value in item_doc.get("image_urls", [])
+        if isinstance(value, str) and value.strip()
+    ]
+    if not primary and alternatives:
+        primary = alternatives[0]
+    if not primary:
+        return None, None
+
+    primary_image_id = primary.split("._AC_", 1)[0]
+    same_primary = next(
+        (
+            value
+            for value in alternatives
+            if value != primary
+            and value.split("._AC_", 1)[0] == primary_image_id
+            and not AMAZON_THUMBNAIL_TRANSFORM_PATTERN.search(value)
+        ),
+        None,
+    )
+    if same_primary:
+        return same_primary, primary
+
+    upgraded_primary = display_image_url(primary)
+    if upgraded_primary != primary:
+        return upgraded_primary, primary
+    return primary, None
 
 
 def _project_doc(doc: dict[str, Any], projection: dict[str, int] | None) -> dict[str, Any]:
@@ -157,7 +236,15 @@ def load_catalog_snapshot(
     items_collection: Any | None = None,
     item_stats_collection: Any | None = None,
     item_hype_profiles_collection: Any | None = None,
+    include_item_profiles: bool = True,
+    use_cache: bool = False,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    global _catalog_snapshot_cache
+    if use_cache and include_item_profiles and _catalog_snapshot_cache is not None:
+        cached_at, cached_snapshot = _catalog_snapshot_cache
+        if monotonic() - cached_at <= CATALOG_SNAPSHOT_CACHE_TTL_SECONDS:
+            return cached_snapshot
+
     if items_collection is None:
         items_collection = get_items_collection()
     if item_stats_collection is None:
@@ -165,49 +252,27 @@ def load_catalog_snapshot(
     if item_hype_profiles_collection is None:
         item_hype_profiles_collection = get_item_hype_profiles_collection()
 
-    item_projection = {
-        "_id": 1,
-        "title_en": 1,
-        "brand": 1,
-        "category_id": 1,
-        "price_bucket": 1,
-        "price_vnd": 1,
-        "image_url": 1,
-        "quality_score": 1,
-        "cold_start": 1,
-    }
-    stats_projection = {
-        "item_id": 1,
-        "quality_score": 1,
-        "cold_start": 1,
-        "ctr": 1,
-        "cart_rate": 1,
-        "purchase_rate": 1,
-    }
-    profile_projection = {
-        "item_id": 1,
-        "item_semantic_embedding": 1,
-        "top_aspects": 1,
-        "category_id": 1,
-        "price_bucket": 1,
-    }
-
     items_by_id = {
         str(doc.get("_id") or "").strip(): dict(doc)
-        for doc in items_collection.find({}, item_projection)
+        for doc in items_collection.find({}, ITEM_PROJECTION)
         if str(doc.get("_id") or "").strip()
     }
     item_stats_by_id = {
         str(doc.get("item_id") or doc.get("_id") or "").strip(): dict(doc)
-        for doc in item_stats_collection.find({}, stats_projection)
+        for doc in item_stats_collection.find({}, ITEM_STATS_PROJECTION)
         if str(doc.get("item_id") or doc.get("_id") or "").strip()
     }
-    item_profiles_by_id = {
-        str(doc.get("item_id") or doc.get("_id") or "").strip(): dict(doc)
-        for doc in item_hype_profiles_collection.find({}, profile_projection)
-        if str(doc.get("item_id") or doc.get("_id") or "").strip()
-    }
-    return items_by_id, item_stats_by_id, item_profiles_by_id
+    item_profiles_by_id = {}
+    if include_item_profiles:
+        item_profiles_by_id = {
+            str(doc.get("item_id") or doc.get("_id") or "").strip(): dict(doc)
+            for doc in item_hype_profiles_collection.find({}, ITEM_PROFILE_PROJECTION)
+            if str(doc.get("item_id") or doc.get("_id") or "").strip()
+        }
+    snapshot = (items_by_id, item_stats_by_id, item_profiles_by_id)
+    if use_cache and include_item_profiles:
+        _catalog_snapshot_cache = (monotonic(), snapshot)
+    return snapshot
 
 
 def load_item_snapshot(
@@ -217,18 +282,32 @@ def load_item_snapshot(
     item_stats_collection: Any | None = None,
     item_hype_profiles_collection: Any | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    if not item_ids:
+    normalized_item_ids = sorted({str(item_id).strip() for item_id in item_ids if str(item_id).strip()})
+    if not normalized_item_ids:
         return {}, {}, {}
-    items_by_id, item_stats_by_id, item_profiles_by_id = load_catalog_snapshot(
-        items_collection=items_collection,
-        item_stats_collection=item_stats_collection,
-        item_hype_profiles_collection=item_hype_profiles_collection,
-    )
-    return (
-        {item_id: items_by_id[item_id] for item_id in item_ids if item_id in items_by_id},
-        {item_id: item_stats_by_id[item_id] for item_id in item_ids if item_id in item_stats_by_id},
-        {item_id: item_profiles_by_id[item_id] for item_id in item_ids if item_id in item_profiles_by_id},
-    )
+    if items_collection is None:
+        items_collection = get_items_collection()
+    if item_stats_collection is None:
+        item_stats_collection = get_item_stats_collection()
+    if item_hype_profiles_collection is None:
+        item_hype_profiles_collection = get_item_hype_profiles_collection()
+    item_id_filter = {"$in": normalized_item_ids}
+    items_by_id = {
+        str(doc.get("_id") or "").strip(): dict(doc)
+        for doc in items_collection.find({"_id": item_id_filter}, ITEM_PROJECTION)
+        if str(doc.get("_id") or "").strip()
+    }
+    item_stats_by_id = {
+        str(doc.get("item_id") or doc.get("_id") or "").strip(): dict(doc)
+        for doc in item_stats_collection.find({"item_id": item_id_filter}, ITEM_STATS_PROJECTION)
+        if str(doc.get("item_id") or doc.get("_id") or "").strip()
+    }
+    item_profiles_by_id = {
+        str(doc.get("item_id") or doc.get("_id") or "").strip(): dict(doc)
+        for doc in item_hype_profiles_collection.find({"item_id": item_id_filter}, ITEM_PROFILE_PROJECTION)
+        if str(doc.get("item_id") or doc.get("_id") or "").strip()
+    }
+    return items_by_id, item_stats_by_id, item_profiles_by_id
 
 
 def _base_candidate(
@@ -257,6 +336,7 @@ def _base_candidate(
         _safe_float(item_stats.get("quality_score"), 0.0),
         _safe_float(item_doc.get("quality_score"), 0.0),
     )
+    image_url, image_fallback_url = preferred_image_sources(item_doc)
     return {
         "item_id": item_id,
         "title": str(item_doc.get("title_en") or item_doc.get("title") or ""),
@@ -264,7 +344,8 @@ def _base_candidate(
         "category_id": str(item_doc.get("category_id") or ""),
         "price_bucket": str(item_doc.get("price_bucket") or "unknown"),
         "price_vnd": item_doc.get("price_vnd"),
-        "image_url": item_doc.get("image_url"),
+        "image_url": image_url,
+        "image_fallback_url": image_fallback_url,
         "is_cold_item": is_cold_item,
         "interaction_count": interaction_count,
         "quality_score_raw": round(max(0.0, min(1.0, quality_score)), 6),
@@ -427,6 +508,11 @@ def enrich_with_profile_context(
         penalties = penalty_snapshot(profile, item_doc, item_id, surface=surface)
 
         row = dict(candidate)
+        image_url, image_fallback_url = preferred_image_sources(item_doc)
+        if image_url:
+            row["image_url"] = image_url
+        if image_fallback_url:
+            row["image_fallback_url"] = image_fallback_url
         row["profile_score_raw"] = max(
             _safe_float(row.get("profile_score_raw"), -1.0),
             _safe_float(profile_signal.get("profile_score_raw"), -1.0),

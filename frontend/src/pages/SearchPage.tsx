@@ -73,6 +73,9 @@ export function SearchPage() {
         () => searchQuery.data?.items.filter((item) => !dismissedIds.includes(item.item_id)) ?? [],
         [dismissedIds, searchQuery.data?.items],
     );
+    const hardFilters = Object.entries(searchQuery.data?.query.hard_filters || {}).filter(
+        ([, value]) => value !== null && value !== undefined && value !== "",
+    );
 
     function submitSearch(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
@@ -201,6 +204,42 @@ export function SearchPage() {
                                 <StatusBadge tone="sky">HyPE + BM25</StatusBadge>
                                 {personalized ? <StatusBadge tone="mint">Profile rerank</StatusBadge> : null}
                                 <StatusBadge tone="violet">CF evidence when available</StatusBadge>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section className="panel p-4">
+                        <p className="soft-label">Query processing</p>
+                        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                            <div className="rounded-lg bg-[var(--surface-muted)] p-3">
+                                <p className="text-xs font-bold text-[var(--ink-muted)]">Detected / translated input</p>
+                                <p className="mt-1 text-sm font-semibold text-[var(--ink-strong)]">
+                                    {searchQuery.data?.query.english_query || searchQuery.data?.query.raw_query}
+                                </p>
+                                <p className="mt-1 text-xs text-[var(--ink-soft)]">
+                                    Language: {searchQuery.data?.query.language_detected || "not reported"} / Type:{" "}
+                                    {searchQuery.data?.query.query_type}
+                                </p>
+                            </div>
+                            <div className="rounded-lg bg-[var(--surface-muted)] p-3">
+                                <p className="text-xs font-bold text-[var(--ink-muted)]">HyPE semantic expansion</p>
+                                <p className="mt-1 text-sm text-[var(--ink-soft)]">
+                                    {searchQuery.data?.query.hype_search_query_en || "No semantic expansion returned."}
+                                </p>
+                            </div>
+                            <div className="rounded-lg bg-[var(--surface-muted)] p-3">
+                                <p className="text-xs font-bold text-[var(--ink-muted)]">BM25 keyword query</p>
+                                <p className="mt-1 text-sm text-[var(--ink-soft)]">
+                                    {searchQuery.data?.query.bm25_search_query_en || "No keyword query returned."}
+                                </p>
+                            </div>
+                            <div className="rounded-lg bg-[var(--surface-muted)] p-3">
+                                <p className="text-xs font-bold text-[var(--ink-muted)]">Extracted filters</p>
+                                <p className="mt-1 text-sm text-[var(--ink-soft)]">
+                                    {hardFilters.length
+                                        ? hardFilters.map(([key, value]) => `${key}: ${String(value)}`).join(" / ")
+                                        : "No explicit filters extracted."}
+                                </p>
                             </div>
                         </div>
                     </section>
