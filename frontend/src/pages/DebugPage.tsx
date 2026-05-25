@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 
 import { JsonCard } from "../components/JsonCard";
 import { StatusBadge } from "../components/StatusBadge";
-import { getDebugUser, getDemoStatus, processEvents, rebuildCf, rebuildProfiles, resetDemo, seedDemo } from "../lib/api";
+import { applyPendingBehavior, getDebugUser, getDemoStatus, processEvents, rebuildCf, rebuildProfiles, resetDemo, seedDemo } from "../lib/api";
 import { useExperience } from "../state/experience";
 
 
@@ -70,7 +70,7 @@ export function DebugPage() {
     const [seedItems, setSeedItems] = useState(10);
     const [seedValue, setSeedValue] = useState(42);
     const [processWrite, setProcessWrite] = useState(false);
-    const [processLimit, setProcessLimit] = useState(500);
+    const [processLimit, setProcessLimit] = useState("100");
     const [profileWrite, setProfileWrite] = useState(false);
     const [profileLimitUsers, setProfileLimitUsers] = useState("");
     const [cfWrite, setCfWrite] = useState(false);
@@ -102,11 +102,7 @@ export function DebugPage() {
     const profileMutation = useMutation({ mutationFn: rebuildProfiles, onSuccess: refreshAdminState });
     const cfMutation = useMutation({ mutationFn: rebuildCf, onSuccess: refreshAdminState });
     const applyBehaviorMutation = useMutation({
-        mutationFn: async () => ({
-            signals: await processEvents({ rebuildItemStats: true, write: true }),
-            profiles: await rebuildProfiles({ write: true }),
-            cf: await rebuildCf({ write: true }),
-        }),
+        mutationFn: () => applyPendingBehavior({ maxEvents: Number(processLimit) || 100, rebuildItemStats: true, write: true }),
         onSuccess: refreshAdminState,
     });
 
@@ -127,6 +123,7 @@ export function DebugPage() {
     const staleVersionComponents = freshness?.model_versions?.stale_version_components ?? [];
     const profileWriteBlocked = profileWrite && profileLimitUsers.trim().length > 0;
     const cfWriteBlocked = cfWrite && cfLimitUsers.trim().length > 0;
+    const processWriteBlocked = processWrite && processLimit.trim().length > 0;
 
     return (
         <div className="space-y-8">
@@ -208,6 +205,14 @@ export function DebugPage() {
                                 <FieldRow label="Signals built" value={freshness.signal_built_at ?? "n/a"} />
                                 <FieldRow label="Profile built" value={freshness.profile_built_at ?? "n/a"} />
                                 <FieldRow label="CF built" value={freshness.cf_built_at ?? "n/a"} />
+                                {freshness.components ? (
+                                    <>
+                                        <FieldRow label="Signals state" value={freshness.components.signals.state} />
+                                        <FieldRow label="Profile state" value={freshness.components.profile.state} />
+                                        <FieldRow label="CF state" value={freshness.components.cf.state} />
+                                        <FieldRow label="CF input policy" value={freshness.components.cf.input_policy} />
+                                    </>
+                                ) : null}
                             </div>
                             {configuredVersions ? (
                                 <div className="mt-4 border-t border-[var(--line-soft)] pt-3">
@@ -245,6 +250,11 @@ export function DebugPage() {
                             ) : freshness.stale_components.length ? (
                                 <p className="mt-2 text-xs text-[var(--ink-soft)]">
                                     Rebuild required: {freshness.stale_components.join(", ")}.
+                                </p>
+                            ) : null}
+                            {freshness.components?.cf.state === "refresh_required" ? (
+                                <p className="mt-2 text-xs text-[var(--amber)]">
+                                    Profile updated; CF scheduled refresh required.
                                 </p>
                             ) : null}
                         </div>
@@ -359,8 +369,8 @@ export function DebugPage() {
                                 Apply interactions to personalization
                             </h3>
                             <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
-                                Impressions and actions are written to clickstream immediately. This action processes them into
-                                signals and item stats, rebuilds user profiles, then refreshes collaborative-filtering edges.
+                                Impressions and actions are written to clickstream immediately. This action incrementally refreshes
+                                complete affected signals, item stats and profiles. CF is scheduled separately when its graph is stale.
                             </p>
                         </div>
                         <button
@@ -455,9 +465,11 @@ export function DebugPage() {
                             <h3 className="text-lg font-medium text-[var(--ink-strong)]">Signals and item stats</h3>
                         </div>
                     </div>
-                    <input className="form-input" type="number" placeholder="event limit" value={processLimit} onChange={(event) => setProcessLimit(Number(event.target.value))} />
-                    <p className="text-xs leading-5 text-[var(--ink-soft)]">
-                        Limited processing is for dry-run inspection. A live write is blocked unless the limit covers every event.
+                    <input className="form-input" type="number" placeholder="event limit (dry-run only)" value={processLimit} onChange={(event) => setProcessLimit(event.target.value)} />
+                    <p className={`text-xs leading-5 ${processWriteBlocked ? "text-[var(--rose)]" : "text-[var(--ink-soft)]"}`}>
+                        {processWriteBlocked
+                            ? "Full signal write does not allow an event limit. Clear the limit or use Apply captured behavior."
+                            : "Limited full processing is for dry-run inspection; live behavior uses the incremental action above."}
                     </p>
                     <label className="mt-3 flex items-center gap-3 rounded-lg bg-[var(--surface-muted)] px-4 py-3 text-sm font-semibold">
                         <input checked={processWrite} type="checkbox" onChange={(event) => setProcessWrite(event.target.checked)} />
@@ -465,8 +477,8 @@ export function DebugPage() {
                     </label>
                     <button
                         className="action-button action-button-primary mt-3 w-full"
-                        disabled={processMutation.isPending}
-                        onClick={() => processMutation.mutate({ limit: processLimit, write: processWrite, rebuildItemStats: true })}
+                        disabled={processMutation.isPending || processWriteBlocked}
+                        onClick={() => processMutation.mutate({ limit: processLimit ? Number(processLimit) : undefined, write: processWrite, rebuildItemStats: true })}
                     >
                         <Wrench className="h-4 w-4" />
                         {processMutation.isPending ? "Submitting..." : "Process events"}

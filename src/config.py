@@ -68,6 +68,7 @@ class Settings:
     signal_model_version: str
     profile_model_version: str
     cf_model_version: str
+    cf_runtime_input_policy: str
     explanation_version: str
     reason_min_contribution: float
     profile_reason_min_contribution: float
@@ -115,6 +116,7 @@ def get_settings() -> Settings:
         signal_model_version=os.getenv("SIGNAL_MODEL_VERSION", "signal_v4_boundary_hygiene"),
         profile_model_version=os.getenv("PROFILE_MODEL_VERSION", "profile_v4_negative_guard"),
         cf_model_version=os.getenv("CF_MODEL_VERSION", "cf_v1_supported_edges"),
+        cf_runtime_input_policy=os.getenv("CF_RUNTIME_INPUT_POLICY", "current_supported"),
         explanation_version=os.getenv("EXPLANATION_VERSION", "explain_v3_contribution_faithful"),
         reason_min_contribution=env_float("REASON_MIN_CONTRIBUTION", 0.05),
         profile_reason_min_contribution=env_float("PROFILE_REASON_MIN_CONTRIBUTION", 0.05),

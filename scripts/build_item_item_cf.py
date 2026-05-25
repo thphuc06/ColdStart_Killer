@@ -41,6 +41,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="On a full write rebuild, remove stored CF edges absent from the rebuilt graph.",
     )
+    parser.add_argument(
+        "--input-policy",
+        choices=("current_supported", "qualified_deliberate"),
+        default=None,
+        help="CF signal eligibility policy. Writes are allowed only for the configured runtime policy.",
+    )
     return parser.parse_args(argv)
 
 
@@ -80,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         max_items_per_user=args.max_items_per_user,
         top_neighbors_per_item=args.top_neighbors_per_item,
         replace_existing=bool(args.replace_existing),
+        input_policy=args.input_policy,
     )
     result["mode"] = "write" if write else "dry-run"
     print(json.dumps(result, indent=2, default=str))

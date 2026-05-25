@@ -75,6 +75,32 @@ class FakeClickstreamEventsCollection:
         return FakeBulkResult(matched_count=matched, modified_count=modified)
 
 
+class WatermarkClickstreamCollection(FakeClickstreamEventsCollection):
+    def __init__(self, docs: list[dict], late_event: dict) -> None:
+        super().__init__(docs)
+        self.late_event = dict(late_event)
+        self.inserted_late = False
+
+    def find(self, filter_doc: dict, projection: dict | None = None):
+        if "timestamp" in filter_doc and not self.inserted_late:
+            self.docs.append(dict(self.late_event))
+            self.inserted_late = True
+        rows = [
+            _project(doc, projection)
+            for doc in self.docs
+            if not filter_doc
+            or doc.get("timestamp", "") <= filter_doc.get("timestamp", {}).get("$lte", "")
+        ]
+
+        class SortableCursor(FakeCursor):
+            def sort(self, fields):
+                for field_name, direction in reversed(fields):
+                    self.docs.sort(key=lambda doc: str(doc.get(field_name) or ""), reverse=direction < 0)
+                return self
+
+        return SortableCursor(rows)
+
+
 class FakeRecommendationLogsCollection:
     def __init__(self, docs: list[dict]) -> None:
         self.docs = [dict(doc) for doc in docs]
@@ -407,6 +433,41 @@ def test_write_mode_rejects_limited_event_subset_before_overwriting_aggregates()
 
     assert signals.docs == {}
     assert clickstream.bulk_calls == []
+
+
+def test_write_mode_rejects_limit_even_when_it_matches_current_count() -> None:
+    clickstream = FakeClickstreamEventsCollection([_event("evt_click", "click")])
+
+    with pytest.raises(ValueError, match="unsafe_partial_signal_write"):
+        build_user_item_signals(
+            clickstream_events_collection=clickstream,
+            recommendation_logs_collection=FakeRecommendationLogsCollection([]),
+            user_item_signals_collection=FakeUpsertCollection(("user_id_hash", "item_id")),
+            write=True,
+            limit_events=1,
+            updated_at=FIXED_NOW,
+        )
+
+
+def test_full_write_watermark_leaves_events_arriving_after_cutoff_pending() -> None:
+    clickstream = WatermarkClickstreamCollection(
+        [_event("evt_initial", "click", timestamp="2026-01-01T00:00:00+00:00")],
+        _event("evt_late", "add_to_cart", timestamp="2026-01-01T01:00:00+00:00"),
+    )
+    signals = FakeUpsertCollection(("user_id_hash", "item_id"))
+
+    result = build_user_item_signals(
+        clickstream_events_collection=clickstream,
+        recommendation_logs_collection=FakeRecommendationLogsCollection([]),
+        user_item_signals_collection=signals,
+        write=True,
+        updated_at=FIXED_NOW,
+    )
+
+    assert result["sample_signals"][0]["event_counts"]["click"] == 1
+    assert result["sample_signals"][0]["event_counts"]["add_to_cart"] == 0
+    assert next(doc for doc in clickstream.docs if doc["event_id"] == "evt_initial")["processed"] is True
+    assert next(doc for doc in clickstream.docs if doc["event_id"] == "evt_late")["processed"] is False
 
 
 def test_phase5_script_does_not_request_profile_or_cf_collections(monkeypatch, capsys) -> None:

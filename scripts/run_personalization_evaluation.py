@@ -87,11 +87,15 @@ def _format_baseline_row(row: dict[str, object]) -> str:
         f"hit@10={float(row['hit_rate_at_10']):.4f}, "
         f"recall@20={float(row['recall_at_20']):.4f}, "
         f"map@20={float(row['map_at_20']):.4f}, "
+        f"ndcg@20={float(row['ndcg_at_20']):.4f}, "
+        f"mrr@10={float(row['mrr_at_10']):.4f}, "
         f"deliberate_map@20={float(row['deliberate_map_at_20']):.4f}, "
+        f"deliberate_ndcg@20={float(row['deliberate_ndcg_at_20']):.4f}, "
         f"coverage={float(row['coverage']):.4f}, "
         f"cold@20={float(row['cold_start_exposure_at_20']):.4f}, "
         f"cf_count={int(row['cf_supported_recommendation_count'])}, "
-        f"cf_rate={float(row['cf_supported_recommendation_rate']):.4f}"
+        f"cf_rate={float(row['cf_supported_recommendation_rate']):.4f}, "
+        f"negative_reexposure={float(row['negative_reexposure_rate']):.4f}"
     )
 
 
@@ -145,6 +149,7 @@ def _build_terminal_summary(
             f"hit@10_delta={float(row['hit_rate_at_10_delta']):.4f}, "
             f"recall@20_delta={float(row['recall_at_20_delta']):.4f}, "
             f"map@20_delta={float(row['map_at_20_delta']):.4f}, "
+            f"ndcg@20_delta={float(row['ndcg_at_20_delta']):.4f}, "
             f"cf_supported_delta={int(row['cf_supported_count_delta'])}"
         )
     lines.append(

@@ -319,6 +319,51 @@ def test_debug_version_snapshot_marks_profile_and_cf_stale_when_signal_lineage_i
     assert "cf" in snapshot["stale_version_components"]
 
 
+def test_freshness_snapshot_marks_cf_refresh_required_when_signals_are_newer_than_graph() -> None:
+    import src.api.routes_debug as routes_debug
+
+    snapshot = routes_debug._freshness_snapshot(
+        profile_doc={"updated_at": "2026-01-02T00:00:00+00:00"},
+        signals=[
+            {
+                "updated_at": "2026-01-02T00:00:00+00:00",
+                "derivation": {"built_at": "2026-01-02T00:00:00+00:00"},
+            }
+        ],
+        events=[{"timestamp": "2026-01-01T00:00:00+00:00", "processed": True}],
+        cf_edges=[],
+        cf_lineage_docs=[
+            {
+                "updated_at": "2026-01-01T00:00:00+00:00",
+                "derivation": {
+                    "built_at": "2026-01-01T00:00:00+00:00",
+                    "source_signal_built_at": "2026-01-01T00:00:00+00:00",
+                    "input_policy": "current_supported",
+                },
+            }
+        ],
+        pending_event_count=0,
+    )
+
+    assert snapshot["components"]["cf"]["state"] == "refresh_required"
+    assert snapshot["components"]["cf"]["input_policy"] == "current_supported"
+    assert "cf" in snapshot["stale_components"]
+
+
+def test_freshness_snapshot_does_not_report_cf_current_without_graph_watermark() -> None:
+    import src.api.routes_debug as routes_debug
+
+    snapshot = routes_debug._freshness_snapshot(
+        profile_doc=None,
+        signals=[],
+        events=[],
+        cf_edges=[],
+        pending_event_count=0,
+    )
+
+    assert snapshot["components"]["cf"]["state"] == "unavailable"
+
+
 def test_demo_reset_dry_run_reports_counts(monkeypatch) -> None:
     class FakeCollection:
         def __init__(self, count):
@@ -429,7 +474,7 @@ def test_demo_status_reports_counts_and_protected_collections(monkeypatch) -> No
     assert "seeded/precomputed synthetic behavior" in payload["precomputed_cf_note"]
 
 
-def test_process_events_write_rebuild_stats_clears_catalog_cache(monkeypatch) -> None:
+def test_process_events_full_write_without_limit_clears_catalog_cache(monkeypatch) -> None:
     import src.api.routes_debug as routes_debug
 
     sentinel = object()
@@ -454,16 +499,16 @@ def test_process_events_write_rebuild_stats_clears_catalog_cache(monkeypatch) ->
     monkeypatch.setattr(routes_debug, "clear_catalog_snapshot_cache", lambda: cache_clears.append(True))
 
     client = TestClient(create_app())
-    response = client.post("/api/debug/process-events?limit=25&rebuild_item_stats=true&write=true")
+    response = client.post("/api/debug/process-events?rebuild_item_stats=true&write=true")
 
     assert response.status_code == 200
-    assert build_calls[0]["limit_events"] == 25
+    assert build_calls[0]["limit_events"] is None
     assert build_calls[0]["write"] is True
     assert build_calls[0]["item_stats_collection"] is sentinel
     assert cache_clears == [True]
 
 
-def test_process_events_rejects_partial_write_before_building_derived_data(monkeypatch) -> None:
+def test_process_events_rejects_any_limited_write_before_building_derived_data(monkeypatch) -> None:
     import src.api.routes_debug as routes_debug
 
     build_calls = []
@@ -480,11 +525,48 @@ def test_process_events_rejects_partial_write_before_building_derived_data(monke
     )
 
     client = TestClient(create_app())
-    response = client.post("/api/debug/process-events?limit=25&rebuild_item_stats=true&write=true")
+    response = client.post("/api/debug/process-events?limit=26&rebuild_item_stats=true&write=true")
 
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "partial_signal_write_blocked"
     assert build_calls == []
+
+
+def test_apply_pending_behavior_delegates_to_incremental_processor_and_clears_stats_cache(monkeypatch) -> None:
+    import src.api.routes_debug as routes_debug
+
+    sentinel = object()
+    calls = []
+    cache_clears = []
+
+    monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_recommendation_logs_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_user_item_signals_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_item_stats_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_user_profiles_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_item_hype_profiles_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_items_collection", lambda: sentinel)
+    monkeypatch.setattr(routes_debug, "get_retrieval_units_collection", lambda: sentinel)
+    monkeypatch.setattr(
+        routes_debug,
+        "process_pending_behavior",
+        lambda **kwargs: calls.append(kwargs) or {
+            "ok": True,
+            "processing_mode": "incremental_pending",
+            "cf_refresh_required": True,
+        },
+    )
+    monkeypatch.setattr(routes_debug, "clear_catalog_snapshot_cache", lambda: cache_clears.append(True))
+
+    client = TestClient(create_app())
+    response = client.post("/api/debug/apply-pending-behavior?max_events=40&rebuild_item_stats=true&write=true")
+
+    assert response.status_code == 200
+    assert response.json()["processing_mode"] == "incremental_pending"
+    assert calls[0]["max_events"] == 40
+    assert calls[0]["write"] is True
+    assert calls[0]["user_profiles_collection"] is sentinel
+    assert cache_clears == [True]
 
 
 def test_rebuild_cf_replaces_existing_edges_only_for_full_write(monkeypatch) -> None:

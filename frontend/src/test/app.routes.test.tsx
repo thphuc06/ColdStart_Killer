@@ -169,7 +169,13 @@ const debugResponse = {
         profile_built_at: "2026-01-01T01:00:00+00:00",
         cf_built_at: "2026-01-01T01:30:00+00:00",
         pending_event_count: 1,
-        stale_components: ["signals", "profile"],
+        stale_components: ["signals", "profile", "cf"],
+        components: {
+            signals: { state: "pending", built_at: "2026-01-01T01:00:00+00:00" },
+            profile: { state: "pending", built_at: "2026-01-01T01:00:00+00:00" },
+            cf: { state: "refresh_required", built_at: "2026-01-01T01:30:00+00:00", input_policy: "current_supported" },
+        },
+        next_actions: ["Apply pending behavior to refresh signals and profiles.", "Schedule a full CF refresh after behavior processing."],
         model_versions: {
             configured: {
                 signal_model_version: "signal_v2_reason_hygiene",
@@ -338,6 +344,9 @@ function installFetchMock() {
         }
         if (url.includes("/api/debug/process-events")) {
             return jsonResponse({ ok: true, stage: "signals" });
+        }
+        if (url.includes("/api/debug/apply-pending-behavior")) {
+            return jsonResponse({ ok: true, processing_mode: "incremental_pending", cf_refresh_required: true });
         }
         if (url.includes("/api/debug/rebuild-profiles")) {
             return jsonResponse({ ok: true, stage: "profiles" });
@@ -728,15 +737,17 @@ describe("Phase 11 routes", () => {
         expect(profileScope.getByRole("button", { name: "Rebuild profiles" })).toBeDisabled();
     });
 
-    it("applies captured behavior through signals profiles and cf", async () => {
+    it("applies captured behavior incrementally without rebuilding cf inline", async () => {
         renderApp("/debug");
 
         fireEvent.click(await screen.findByRole("button", { name: "Apply captured behavior" }));
 
         expect(await screen.findByText("Applied behavior response")).toBeInTheDocument();
-        expect(screen.getByText(/"stage": "signals"/)).toBeInTheDocument();
-        expect(screen.getByText(/"stage": "profiles"/)).toBeInTheDocument();
-        expect(screen.getByText(/"stage": "cf"/)).toBeInTheDocument();
+        expect(screen.getByText(/"processing_mode": "incremental_pending"/)).toBeInTheDocument();
+        expect(screen.getByText(/"cf_refresh_required": true/)).toBeInTheDocument();
+        const calls = vi.mocked(globalThis.fetch).mock.calls.map(([input]) => String(input));
+        expect(calls.some((url) => url.includes("/api/debug/apply-pending-behavior"))).toBe(true);
+        expect(calls.some((url) => url.includes("/api/debug/rebuild-cf"))).toBe(false);
     });
 
     it("submits a full reset from the debug route with confirmation", async () => {

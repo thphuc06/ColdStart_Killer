@@ -696,7 +696,10 @@ def _load_collection_docs(
     return [dict(doc) for doc in collection.find(filter_doc, projection)]
 
 
-def _load_user_item_signals(user_item_signals_collection: Any) -> list[dict[str, Any]]:
+def _load_user_item_signals(
+    user_item_signals_collection: Any,
+    user_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
     projection = {
         "_id": 1,
         "user_id_hash": 1,
@@ -715,7 +718,10 @@ def _load_user_item_signals(user_item_signals_collection: Any) -> list[dict[str,
         "derivation": 1,
         "updated_at": 1,
     }
-    return _load_collection_docs(user_item_signals_collection, {}, projection)
+    filter_doc: dict[str, Any] = {}
+    if user_ids is not None:
+        filter_doc = {"user_id_hash": {"$in": sorted(user_ids)}}
+    return _load_collection_docs(user_item_signals_collection, filter_doc, projection)
 
 
 def _load_clickstream_events(clickstream_events_collection: Any, user_ids: set[str]) -> list[dict[str, Any]]:
@@ -1116,6 +1122,7 @@ def build_user_profiles(
     user_profiles_collection: Any | None = None,
     write: bool = False,
     limit_users: int | None = None,
+    user_ids: set[str] | None = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     threshold: float = INTEREST_MERGE_THRESHOLD,
     max_interests: int = MAX_INTERESTS_PER_USER,
@@ -1133,11 +1140,17 @@ def build_user_profiles(
         raise ValueError("user_profiles_collection is required when write=True")
     if write and limit_users is not None:
         raise ValueError("unsafe_partial_profile_write: limit_users may only be used in dry-run mode")
+    if limit_users is not None and user_ids is not None:
+        raise ValueError("limit_users cannot be combined with explicit user_ids")
 
     settings = get_settings()
     updated_at = updated_at or utc_now_iso()
     stats = ProfileBuildStats()
-    signal_docs = _load_user_item_signals(user_item_signals_collection)
+    target_user_ids = {str(user_id).strip() for user_id in (user_ids or set()) if str(user_id).strip()}
+    signal_docs = _load_user_item_signals(
+        user_item_signals_collection,
+        user_ids=target_user_ids if user_ids is not None else None,
+    )
     users: dict[str, list[dict[str, Any]]] = defaultdict(list)
     item_ids: set[str] = set()
     for signal in signal_docs:
@@ -1148,7 +1161,8 @@ def build_user_profiles(
         users[user_id_hash].append(signal)
         item_ids.add(item_id)
 
-    selected_user_ids = sorted(users)
+    selected_user_ids = sorted(target_user_ids if user_ids is not None else users)
+    selected_user_ids = [user_id for user_id in selected_user_ids if user_id in users]
     if limit_users is not None:
         selected_user_ids = selected_user_ids[:limit_users]
     selected_users = {user_id: users[user_id] for user_id in selected_user_ids}
@@ -1224,6 +1238,7 @@ def build_user_profiles(
         "ok": not stats.errors,
         "write": write,
         "limit_users": limit_users,
+        "target_user_ids": sorted(target_user_ids) if user_ids is not None else None,
         "threshold": threshold,
         "max_interests": max_interests,
         "stats": stats.as_dict(),

@@ -196,6 +196,25 @@ export type DebugUserResponse = {
         cf_built_at?: string | null;
         pending_event_count: number;
         stale_components: string[];
+        components?: {
+            signals: {
+                state: "current" | "pending" | "stale_version" | "unknown";
+                built_at?: string | null;
+                source_event_max_timestamp?: string | null;
+            };
+            profile: {
+                state: "current" | "pending" | "stale_version" | "unknown";
+                built_at?: string | null;
+                source_signal_built_at?: string | null;
+            };
+            cf: {
+                state: "current" | "refresh_required" | "stale_version" | "unavailable";
+                built_at?: string | null;
+                source_signal_built_at?: string | null;
+                input_policy: "current_supported" | "qualified_deliberate";
+            };
+        };
+        next_actions?: string[];
         model_versions: {
             configured: {
                 signal_model_version: string;
@@ -435,6 +454,18 @@ export function processEvents(params: { limit?: number; rebuildItemStats?: boole
 }
 
 
+export function applyPendingBehavior(params: { maxEvents?: number; rebuildItemStats?: boolean; write?: boolean }) {
+    return fetchJson<Record<string, unknown>>(
+        `/api/debug/apply-pending-behavior${toQueryString({
+            max_events: params.maxEvents ?? 100,
+            rebuild_item_stats: params.rebuildItemStats ?? true,
+            write: params.write ?? false,
+        })}`,
+        { method: "POST" },
+    );
+}
+
+
 export function rebuildProfiles(params: { limitUsers?: number; write?: boolean }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/rebuild-profiles${toQueryString({
@@ -451,6 +482,7 @@ export function rebuildCf(params: {
     minSupport?: number;
     maxItemsPerUser?: number;
     topNeighborsPerItem?: number;
+    inputPolicy?: "current_supported" | "qualified_deliberate";
     write?: boolean;
 }) {
     return fetchJson<Record<string, unknown>>(
@@ -459,6 +491,7 @@ export function rebuildCf(params: {
             min_support: params.minSupport ?? 2,
             max_items_per_user: params.maxItemsPerUser ?? 30,
             top_neighbors_per_item: params.topNeighborsPerItem ?? 50,
+            input_policy: params.inputPolicy,
             write: params.write ?? false,
         })}`,
         { method: "POST" },

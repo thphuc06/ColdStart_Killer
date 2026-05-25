@@ -511,7 +511,23 @@ def _project_doc(doc: dict[str, Any], projection: dict[str, int] | None) -> dict
     return {key: doc.get(key) for key, enabled in projection.items() if enabled and key in doc}
 
 
-def _load_clickstream_events(clickstream_events_collection: Any, limit_events: int | None = None) -> list[dict[str, Any]]:
+def _capture_source_event_watermark(clickstream_events_collection: Any) -> str | None:
+    cursor = clickstream_events_collection.find({}, {"event_id": 1, "timestamp": 1, "created_at": 1})
+    if not hasattr(cursor, "sort"):
+        return None
+    cursor = cursor.sort([("timestamp", -1), ("event_id", -1)])
+    if hasattr(cursor, "limit"):
+        cursor = cursor.limit(1)
+    rows = list(cursor)
+    return _event_timestamp(rows[0]) if rows else None
+
+
+def _load_clickstream_events(
+    clickstream_events_collection: Any,
+    limit_events: int | None = None,
+    *,
+    source_event_max_timestamp: str | None = None,
+) -> list[dict[str, Any]]:
     projection = {
         "_id": 1,
         "event_id": 1,
@@ -527,7 +543,10 @@ def _load_clickstream_events(clickstream_events_collection: Any, limit_events: i
         "processed": 1,
         "is_synthetic": 1,
     }
-    cursor = clickstream_events_collection.find({}, projection)
+    filter_doc: dict[str, Any] = {}
+    if source_event_max_timestamp is not None:
+        filter_doc = {"timestamp": {"$lte": source_event_max_timestamp}}
+    cursor = clickstream_events_collection.find(filter_doc, projection)
     if limit_events is not None and hasattr(cursor, "limit"):
         cursor = cursor.limit(limit_events)
     events = [_project_doc(doc, projection) for doc in cursor]
@@ -633,17 +652,22 @@ def build_user_item_signals(
     if write and rebuild_item_stats and item_stats_collection is None:
         raise ValueError("item_stats_collection is required when write=True and rebuild_item_stats=True")
     if write and limit_events is not None:
-        if not hasattr(clickstream_events_collection, "count_documents"):
-            raise ValueError("unsafe_partial_signal_write: cannot verify complete clickstream input for limited write")
-        total_events = int(clickstream_events_collection.count_documents({}))
-        if limit_events < total_events:
-            raise ValueError(
-                "unsafe_partial_signal_write: limited write would aggregate "
-                f"{limit_events} of {total_events} clickstream events"
-            )
+        raise ValueError(
+            "unsafe_partial_signal_write: limit_events may only be used in dry-run mode; "
+            "a count-checked limited write can race with newly logged events"
+        )
 
     updated_at = updated_at or utc_now_iso()
-    events = _load_clickstream_events(clickstream_events_collection, limit_events=limit_events)
+    source_event_max_timestamp = (
+        _capture_source_event_watermark(clickstream_events_collection)
+        if write and limit_events is None
+        else None
+    )
+    events = _load_clickstream_events(
+        clickstream_events_collection,
+        limit_events=limit_events,
+        source_event_max_timestamp=source_event_max_timestamp,
+    )
     logs_by_key = _load_recommendation_logs(recommendation_logs_collection, events, batch_size=batch_size)
     artifacts = build_signal_artifacts(
         events=events,

@@ -107,6 +107,8 @@ def _signal(
     views: int = 0,
     carts: int = 0,
     purchases: int = 0,
+    seed_eligible: bool = False,
+    negative_score: float = 0.0,
     last_interaction_at: str = "2026-01-10T00:00:00+00:00",
 ) -> dict:
     return {
@@ -115,6 +117,8 @@ def _signal(
         "implicit_score": implicit_score,
         "positive_score": implicit_score if positive_score is None else positive_score,
         "preference": preference,
+        "seed_eligible": seed_eligible,
+        "negative_score": negative_score,
         "event_counts": {
             "impression": 1,
             "click": clicks,
@@ -305,6 +309,68 @@ def test_build_item_item_cf_rejects_limited_write_mode() -> None:
             item_item_cf_edges_collection=FakeCollection([]),
             write=True,
             limit_users=1,
+            updated_at=FIXED_NOW,
+        )
+
+
+def test_cf_input_policy_keeps_click_only_runtime_edges_but_excludes_them_from_qualified() -> None:
+    signals = FakeCollection(
+        [
+            _signal("u1", "A", implicit_score=0.35, preference=True),
+            _signal("u1", "B", implicit_score=0.35, preference=True),
+            _signal("u2", "A", implicit_score=0.35, preference=True),
+            _signal("u2", "B", implicit_score=0.35, preference=True),
+        ]
+    )
+    items = FakeCollection([_item("A"), _item("B")])
+
+    current = build_item_item_cf_edges(
+        user_item_signals_collection=signals,
+        items_collection=items,
+        input_policy="current_supported",
+        min_support=2,
+        updated_at=FIXED_NOW,
+    )
+    qualified = build_item_item_cf_edges(
+        user_item_signals_collection=signals,
+        items_collection=items,
+        input_policy="qualified_deliberate",
+        min_support=2,
+        updated_at=FIXED_NOW,
+    )
+
+    assert current["stats"]["directional_edges_built"] == 2
+    assert qualified["stats"]["directional_edges_built"] == 0
+
+
+def test_qualified_cf_builds_supported_deliberate_edges_and_cannot_write_under_current_runtime() -> None:
+    signals = FakeCollection(
+        [
+            _signal("u1", "A", implicit_score=4.0, seed_eligible=True, carts=1),
+            _signal("u1", "B", implicit_score=4.0, seed_eligible=True, carts=1),
+            _signal("u2", "A", implicit_score=4.0, seed_eligible=True, carts=1),
+            _signal("u2", "B", implicit_score=4.0, seed_eligible=True, carts=1),
+        ]
+    )
+    items = FakeCollection([_item("A"), _item("B")])
+    qualified = build_item_item_cf_edges(
+        user_item_signals_collection=signals,
+        items_collection=items,
+        input_policy="qualified_deliberate",
+        min_support=2,
+        updated_at=FIXED_NOW,
+    )
+
+    assert qualified["stats"]["directional_edges_built"] == 2
+    assert qualified["sample_edges"][0]["derivation"]["input_policy"] == "qualified_deliberate"
+    with pytest.raises(ValueError, match="unsafe_cf_policy_write"):
+        build_item_item_cf_edges(
+            user_item_signals_collection=signals,
+            items_collection=items,
+            item_item_cf_edges_collection=FakeCollection([]),
+            write=True,
+            input_policy="qualified_deliberate",
+            min_support=2,
             updated_at=FIXED_NOW,
         )
 

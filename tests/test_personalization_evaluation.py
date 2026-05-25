@@ -21,6 +21,7 @@ from src.evaluation.personalization_eval import (
     write_personalization_outputs,
 )
 from scripts.run_personalization_evaluation import _build_terminal_summary, _should_write_artifacts
+from src.recommendation.item_item_cf import compute_item_item_cf_edges
 
 
 BASE_TS = datetime(2026, 5, 24, 9, 0, tzinfo=UTC)
@@ -106,10 +107,27 @@ def test_compute_ranking_metrics_returns_expected_core_metrics() -> None:
     assert metrics["hit_rate_at_10"] == 1.0
     assert metrics["recall_at_20"] == 1.0
     assert metrics["map_at_20"] == 0.5
+    assert metrics["ndcg_at_20"] > 0
+    assert metrics["mrr_at_10"] == 0.5
     assert metrics["cold_start_exposure_at_20"] == 0.25
     assert metrics["cf_supported_recommendation_count"] == 1
     assert 0.0 < metrics["diversity_at_20"] <= 1.0
     assert 0.0 <= metrics["novelty_at_20"] <= 1.0
+
+
+def test_compute_ranking_metrics_reports_negative_reexposure() -> None:
+    metrics = compute_ranking_metrics(
+        recommended_item_ids=["HIDDEN", "OK"],
+        held_out_positive_item_ids=["OK"],
+        items_by_id={
+            "HIDDEN": _item("HIDDEN", title="Hidden", brand="B", category_id="c"),
+            "OK": _item("OK", title="Okay", brand="B", category_id="c"),
+        },
+        negative_item_ids={"HIDDEN"},
+    )
+
+    assert metrics["negative_reexposure_count"] == 1
+    assert metrics["negative_reexposure_rate"] == 0.5
 
 
 def test_evaluate_personalization_compares_required_baselines_and_cf_lift() -> None:
@@ -192,6 +210,8 @@ def test_evaluate_personalization_compares_required_baselines_and_cf_lift() -> N
     assert summary_by_baseline["popularity"]["evaluated_user_count"] >= 2
     assert summary_by_baseline["profile_plus_cf"]["cf_supported_recommendation_count"] > 0
     assert run_data["cf_diagnostics"]["min_support"] == 2
+    assert "current_build_stats" in run_data["cf_diagnostics"]
+    assert summary_by_baseline["profile_plus_cf"]["negative_reexposure_rate"] == 0.0
     assert "profile_plus_qualified_cf_vs_profile_plus_cf" in {
         row["comparison"] for row in run_data["comparisons"]
     }
@@ -326,6 +346,27 @@ def test_evaluator_current_cf_accepts_click_only_but_qualified_cf_requires_delib
     assert "B" in _build_cf_edges(click_only, qualified=False)["A"]
     assert _build_cf_edges(click_only, qualified=True) == {}
     assert "B" in _build_cf_edges(deliberate, qualified=True)["A"]
+
+
+def test_evaluator_cf_edges_match_runtime_computation_on_same_fixture() -> None:
+    train_signals = {
+        "u1": _build_train_signals([_event("u1", "A", "add_to_cart", 10), _event("u1", "B", "add_to_cart", 11)]),
+        "u2": _build_train_signals([_event("u2", "A", "add_to_cart", 12), _event("u2", "B", "add_to_cart", 13)]),
+    }
+    flat_signals = [signal for signals in train_signals.values() for signal in signals]
+    runtime = compute_item_item_cf_edges(
+        signal_docs=flat_signals,
+        existing_item_ids={"A", "B"},
+        input_policy="qualified_deliberate",
+        min_support=2,
+        updated_at=max(str(signal["last_interaction_at"]) for signal in flat_signals),
+    )
+    runtime_edges = {
+        edge["item_id"]: {edge["neighbor_item_id"]: edge["cf_score"]}
+        for edge in runtime["edge_docs"]
+    }
+
+    assert _build_cf_edges(train_signals, qualified=True) == runtime_edges
 
 
 def test_evaluator_uses_production_dwell_tiers_for_seed_eligibility() -> None:

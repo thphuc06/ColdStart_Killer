@@ -20,6 +20,9 @@ DEFAULT_MAX_ITEMS_PER_USER = 30
 DEFAULT_TOP_NEIGHBORS_PER_ITEM = 50
 DEFAULT_BATCH_SIZE = 500
 CF_HALF_LIFE_DAYS = 45.0
+CF_INPUT_POLICY_CURRENT = "current_supported"
+CF_INPUT_POLICY_QUALIFIED = "qualified_deliberate"
+CF_INPUT_POLICIES = frozenset({CF_INPUT_POLICY_CURRENT, CF_INPUT_POLICY_QUALIFIED})
 
 
 @dataclass
@@ -96,8 +99,25 @@ def _positive_signal_value(signal: dict[str, Any]) -> float:
     return max(implicit_score, positive_score, 0.0)
 
 
-def _is_positive_signal(signal: dict[str, Any]) -> bool:
+def _validate_input_policy(input_policy: str) -> str:
+    if input_policy not in CF_INPUT_POLICIES:
+        raise ValueError(f"Unsupported CF input_policy: {input_policy}")
+    return input_policy
+
+
+def _is_signal_eligible(signal: dict[str, Any], *, input_policy: str) -> bool:
+    _validate_input_policy(input_policy)
+    if input_policy == CF_INPUT_POLICY_QUALIFIED:
+        return (
+            bool(signal.get("seed_eligible"))
+            and _safe_float(signal.get("negative_score"), 0.0) <= 0
+            and _positive_signal_value(signal) > 0
+        )
     return _safe_float(signal.get("implicit_score"), 0.0) > 1.0 or bool(signal.get("preference"))
+
+
+def _is_positive_signal(signal: dict[str, Any]) -> bool:
+    return _is_signal_eligible(signal, input_policy=CF_INPUT_POLICY_CURRENT)
 
 
 def _event_count(signal: dict[str, Any], event_type: str) -> int:
@@ -110,27 +130,39 @@ def _event_count(signal: dict[str, Any], event_type: str) -> int:
         return 0
 
 
-def _load_positive_signals(user_item_signals_collection: Any) -> list[dict[str, Any]]:
+def _load_signal_docs(user_item_signals_collection: Any) -> list[dict[str, Any]]:
     projection = {
         "user_id_hash": 1,
         "item_id": 1,
         "implicit_score": 1,
         "positive_score": 1,
+        "negative_score": 1,
         "preference": 1,
+        "seed_eligible": 1,
         "event_counts": 1,
         "last_interaction_at": 1,
         "derivation": 1,
         "updated_at": 1,
     }
-    docs = [dict(doc) for doc in user_item_signals_collection.find({}, projection)]
-    return [doc for doc in docs if _is_positive_signal(doc)]
+    return [dict(doc) for doc in user_item_signals_collection.find({}, projection)]
+
+
+def _load_positive_signals(
+    user_item_signals_collection: Any,
+    *,
+    input_policy: str = CF_INPUT_POLICY_CURRENT,
+) -> list[dict[str, Any]]:
+    return [
+        doc
+        for doc in _load_signal_docs(user_item_signals_collection)
+        if _is_signal_eligible(doc, input_policy=input_policy)
+    ]
 
 
 def _load_existing_item_ids(items_collection: Any, item_ids: set[str]) -> set[str]:
     if not item_ids:
         return set()
-    projection = {"_id": 1}
-    docs = items_collection.find({"_id": {"$in": sorted(item_ids)}}, projection)
+    docs = items_collection.find({"_id": {"$in": sorted(item_ids)}}, {"_id": 1})
     return {str(doc.get("_id") or "").strip() for doc in docs if str(doc.get("_id") or "").strip()}
 
 
@@ -143,7 +175,6 @@ def _sort_positive_signals(signals: list[dict[str, Any]]) -> list[dict[str, Any]
             str(signal.get("last_interaction_at") or ""),
             str(signal.get("item_id") or ""),
         ),
-        reverse=False,
     )
 
 
@@ -185,7 +216,8 @@ def _source_signal_model_version(signal_docs: list[dict[str, Any]]) -> str | Non
         {
             str(signal.get("derivation", {}).get("model_version") or "").strip()
             for signal in signal_docs
-            if isinstance(signal.get("derivation"), dict) and str(signal.get("derivation", {}).get("model_version") or "").strip()
+            if isinstance(signal.get("derivation"), dict)
+            and str(signal.get("derivation", {}).get("model_version") or "").strip()
         }
     )
     if not versions:
@@ -201,9 +233,168 @@ def _latest_signal_built_at(signal_docs: list[dict[str, Any]]) -> str | None:
         for signal in signal_docs
         if str(signal.get("derivation", {}).get("built_at") or signal.get("updated_at") or "").strip()
     ]
-    if not timestamps:
-        return None
-    return max(timestamps)
+    return max(timestamps) if timestamps else None
+
+
+def compute_item_item_cf_edges(
+    *,
+    signal_docs: list[dict[str, Any]],
+    existing_item_ids: set[str],
+    input_policy: str = CF_INPUT_POLICY_CURRENT,
+    limit_users: int | None = None,
+    min_support: int = DEFAULT_CF_MIN_SUPPORT,
+    max_items_per_user: int = DEFAULT_MAX_ITEMS_PER_USER,
+    top_neighbors_per_item: int = DEFAULT_TOP_NEIGHBORS_PER_ITEM,
+    updated_at: str | None = None,
+    cf_model_version: str | None = None,
+    signal_model_version: str | None = None,
+) -> dict[str, Any]:
+    input_policy = _validate_input_policy(input_policy)
+    if limit_users is not None and limit_users <= 0:
+        raise ValueError("limit_users must be positive when provided")
+    if min_support <= 0:
+        raise ValueError("min_support must be positive")
+    if max_items_per_user <= 1:
+        raise ValueError("max_items_per_user must be greater than 1")
+    if top_neighbors_per_item <= 0:
+        raise ValueError("top_neighbors_per_item must be positive")
+
+    settings = get_settings()
+    updated_at = updated_at or utc_now_iso()
+    eligible_docs = [
+        signal for signal in signal_docs if _is_signal_eligible(signal, input_policy=input_policy)
+    ]
+    stats = CFBuildStats(positive_signal_docs=len(eligible_docs))
+    by_user: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for signal in eligible_docs:
+        user_id_hash = str(signal.get("user_id_hash") or "").strip()
+        item_id = str(signal.get("item_id") or "").strip()
+        if user_id_hash and item_id:
+            by_user[user_id_hash].append(signal)
+
+    selected_user_ids = sorted(by_user)
+    if limit_users is not None:
+        selected_user_ids = selected_user_ids[:limit_users]
+    stats.users_seen = len(selected_user_ids)
+
+    positive_items_by_user: dict[str, list[dict[str, Any]]] = {}
+    popularity: dict[str, int] = defaultdict(int)
+    for user_id_hash in selected_user_ids:
+        filtered: list[dict[str, Any]] = []
+        for signal in _sort_positive_signals(by_user[user_id_hash]):
+            item_id = str(signal.get("item_id") or "").strip()
+            if item_id not in existing_item_ids:
+                stats.missing_items_skipped += 1
+                continue
+            filtered.append(signal)
+            if len(filtered) >= max_items_per_user:
+                break
+        if not filtered:
+            stats.users_skipped += 1
+            continue
+        stats.users_with_positive_items += 1
+        positive_items_by_user[user_id_hash] = filtered
+        for signal in filtered:
+            popularity[str(signal.get("item_id") or "").strip()] += 1
+
+    pair_stats: dict[tuple[str, str], dict[str, Any]] = {}
+    for user_id_hash, signals in positive_items_by_user.items():
+        if len(signals) < 2:
+            stats.users_skipped += 1
+            continue
+        for left_signal, right_signal in combinations(signals, 2):
+            left_item_id = str(left_signal.get("item_id") or "").strip()
+            right_item_id = str(right_signal.get("item_id") or "").strip()
+            if not left_item_id or not right_item_id or left_item_id == right_item_id:
+                continue
+            stats.pair_candidates += 1
+            pair_key = _pair_key(left_item_id, right_item_id)
+            state = pair_stats.setdefault(
+                pair_key,
+                {
+                    "pair_score": 0.0,
+                    "support": 0,
+                    "co_view_count": 0,
+                    "co_click_count": 0,
+                    "co_cart_count": 0,
+                    "co_purchase_count": 0,
+                    "user_hashes": [],
+                },
+            )
+            pair_decay = min(
+                _recency_decay(str(left_signal.get("last_interaction_at") or "") or None, updated_at),
+                _recency_decay(str(right_signal.get("last_interaction_at") or "") or None, updated_at),
+            )
+            state["pair_score"] += min(
+                _positive_signal_value(left_signal),
+                _positive_signal_value(right_signal),
+            ) * pair_decay
+            state["support"] += 1
+            if _event_count(left_signal, "view_detail") > 0 and _event_count(right_signal, "view_detail") > 0:
+                state["co_view_count"] += 1
+            if _event_count(left_signal, "click") > 0 and _event_count(right_signal, "click") > 0:
+                state["co_click_count"] += 1
+            if _event_count(left_signal, "add_to_cart") > 0 and _event_count(right_signal, "add_to_cart") > 0:
+                state["co_cart_count"] += 1
+            if _event_count(left_signal, "purchase") > 0 and _event_count(right_signal, "purchase") > 0:
+                state["co_purchase_count"] += 1
+            if len(state["user_hashes"]) < 5 and user_id_hash not in state["user_hashes"]:
+                state["user_hashes"].append(user_id_hash)
+
+    ranked_pairs: list[tuple[float, int, str, str, dict[str, Any], float]] = []
+    for (left_item_id, right_item_id), pair_state in pair_stats.items():
+        support = int(pair_state["support"])
+        if support < min_support:
+            continue
+        denominator = math.sqrt(float(popularity.get(left_item_id, 0) * popularity.get(right_item_id, 0)))
+        if denominator <= 0 or not math.isfinite(denominator):
+            continue
+        cf_score = float(pair_state["pair_score"]) / denominator
+        if not math.isfinite(cf_score) or cf_score <= 0:
+            continue
+        stats.undirected_pairs_retained += 1
+        confidence = min(1.0, support / max(1.0, denominator))
+        ranked_pairs.append((cf_score, support, left_item_id, right_item_id, pair_state, confidence))
+
+    derivation = {
+        "model_version": cf_model_version or settings.cf_model_version,
+        "source_collection": "user_item_signals",
+        "source_signal_model_version": _source_signal_model_version(eligible_docs)
+        or signal_model_version
+        or settings.signal_model_version,
+        "source_signal_count": len(eligible_docs),
+        "source_signal_built_at": _latest_signal_built_at(eligible_docs),
+        "input_policy": input_policy,
+        "partial_build": limit_users is not None,
+        "built_at": updated_at,
+    }
+    edge_docs: list[dict[str, Any]] = []
+    neighbor_counts: dict[str, int] = defaultdict(int)
+    for cf_score, support, left_item_id, right_item_id, pair_state, confidence in sorted(
+        ranked_pairs, key=lambda row: (-row[0], -row[1], row[2], row[3])
+    ):
+        if (
+            neighbor_counts[left_item_id] >= top_neighbors_per_item
+            or neighbor_counts[right_item_id] >= top_neighbors_per_item
+        ):
+            continue
+        for item_id, neighbor_item_id in ((left_item_id, right_item_id), (right_item_id, left_item_id)):
+            edge_docs.append(
+                _build_edge_doc(
+                    item_id=item_id,
+                    neighbor_item_id=neighbor_item_id,
+                    stats=pair_state,
+                    cf_score=cf_score,
+                    confidence=confidence,
+                    updated_at=updated_at,
+                    derivation=derivation,
+                )
+            )
+        neighbor_counts[left_item_id] += 1
+        neighbor_counts[right_item_id] += 1
+        stats.undirected_pairs_selected += 1
+    stats.directional_edges_built = len(edge_docs)
+    return {"stats": stats, "edge_docs": edge_docs, "input_policy": input_policy}
 
 
 def _edge_upsert_operation(doc: dict[str, Any]) -> UpdateOne:
@@ -242,18 +433,11 @@ def build_item_item_cf_edges(
     max_items_per_user: int = DEFAULT_MAX_ITEMS_PER_USER,
     top_neighbors_per_item: int = DEFAULT_TOP_NEIGHBORS_PER_ITEM,
     replace_existing: bool = False,
+    input_policy: str | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
-    if limit_users is not None and limit_users <= 0:
-        raise ValueError("limit_users must be positive when provided")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
-    if min_support <= 0:
-        raise ValueError("min_support must be positive")
-    if max_items_per_user <= 1:
-        raise ValueError("max_items_per_user must be greater than 1")
-    if top_neighbors_per_item <= 0:
-        raise ValueError("top_neighbors_per_item must be positive")
     if replace_existing and limit_users is not None:
         raise ValueError("replace_existing requires a full rebuild without limit_users")
     if write and item_item_cf_edges_collection is None:
@@ -262,159 +446,35 @@ def build_item_item_cf_edges(
         raise ValueError("unsafe_partial_cf_write: limit_users may only be used in dry-run mode")
 
     settings = get_settings()
+    active_policy = _validate_input_policy(input_policy or settings.cf_runtime_input_policy)
+    configured_runtime_policy = _validate_input_policy(settings.cf_runtime_input_policy)
+    if write and active_policy != configured_runtime_policy:
+        raise ValueError(
+            "unsafe_cf_policy_write: write input_policy must match CF_RUNTIME_INPUT_POLICY "
+            f"({configured_runtime_policy})"
+        )
     updated_at = updated_at or utc_now_iso()
-    stats = CFBuildStats()
-    signal_docs = _load_positive_signals(user_item_signals_collection)
-    stats.positive_signal_docs = len(signal_docs)
-
-    by_user: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    candidate_item_ids: set[str] = set()
-    for signal in signal_docs:
-        user_id_hash = str(signal.get("user_id_hash") or "").strip()
-        item_id = str(signal.get("item_id") or "").strip()
-        if not user_id_hash or not item_id:
-            continue
-        by_user[user_id_hash].append(signal)
-        candidate_item_ids.add(item_id)
-
-    selected_user_ids = sorted(by_user)
-    if limit_users is not None:
-        selected_user_ids = selected_user_ids[:limit_users]
-    stats.users_seen = len(selected_user_ids)
-
-    existing_item_ids = _load_existing_item_ids(items_collection, candidate_item_ids)
-
-    positive_items_by_user: dict[str, list[dict[str, Any]]] = {}
-    popularity: dict[str, int] = defaultdict(int)
-    for user_id_hash in selected_user_ids:
-        filtered: list[dict[str, Any]] = []
-        for signal in _sort_positive_signals(by_user[user_id_hash]):
-            item_id = str(signal.get("item_id") or "").strip()
-            if item_id not in existing_item_ids:
-                stats.missing_items_skipped += 1
-                continue
-            filtered.append(signal)
-            if len(filtered) >= max_items_per_user:
-                break
-
-        if not filtered:
-            stats.users_skipped += 1
-            continue
-        stats.users_with_positive_items += 1
-        positive_items_by_user[user_id_hash] = filtered
-        for signal in filtered:
-            popularity[str(signal.get("item_id") or "").strip()] += 1
-
-    pair_stats: dict[tuple[str, str], dict[str, Any]] = {}
-    for user_id_hash, signals in positive_items_by_user.items():
-        if len(signals) < 2:
-            stats.users_skipped += 1
-            continue
-        for left_signal, right_signal in combinations(signals, 2):
-            left_item_id = str(left_signal.get("item_id") or "").strip()
-            right_item_id = str(right_signal.get("item_id") or "").strip()
-            if not left_item_id or not right_item_id or left_item_id == right_item_id:
-                continue
-            stats.pair_candidates += 1
-            pair_key = _pair_key(left_item_id, right_item_id)
-            state = pair_stats.setdefault(
-                pair_key,
-                {
-                    "item_ids": pair_key,
-                    "pair_score": 0.0,
-                    "support": 0,
-                    "co_view_count": 0,
-                    "co_click_count": 0,
-                    "co_cart_count": 0,
-                    "co_purchase_count": 0,
-                    "user_hashes": [],
-                },
-            )
-            pair_decay = min(
-                _recency_decay(str(left_signal.get("last_interaction_at") or "") or None, updated_at),
-                _recency_decay(str(right_signal.get("last_interaction_at") or "") or None, updated_at),
-            )
-            pair_strength = min(_positive_signal_value(left_signal), _positive_signal_value(right_signal)) * pair_decay
-            state["pair_score"] += pair_strength
-            state["support"] += 1
-            if _event_count(left_signal, "view_detail") > 0 and _event_count(right_signal, "view_detail") > 0:
-                state["co_view_count"] += 1
-            if _event_count(left_signal, "click") > 0 and _event_count(right_signal, "click") > 0:
-                state["co_click_count"] += 1
-            if _event_count(left_signal, "add_to_cart") > 0 and _event_count(right_signal, "add_to_cart") > 0:
-                state["co_cart_count"] += 1
-            if _event_count(left_signal, "purchase") > 0 and _event_count(right_signal, "purchase") > 0:
-                state["co_purchase_count"] += 1
-            if len(state["user_hashes"]) < 5 and user_id_hash not in state["user_hashes"]:
-                state["user_hashes"].append(user_id_hash)
-
-    ranked_pairs: list[tuple[float, int, str, str, dict[str, Any], float]] = []
-    for pair_key, pair_state in pair_stats.items():
-        support = int(pair_state["support"])
-        if support < min_support:
-            continue
-        left_item_id, right_item_id = pair_key
-        left_popularity = popularity.get(left_item_id, 0)
-        right_popularity = popularity.get(right_item_id, 0)
-        denominator = math.sqrt(float(left_popularity * right_popularity))
-        if denominator <= 0 or not math.isfinite(denominator):
-            continue
-        cf_score = float(pair_state["pair_score"]) / denominator
-        if not math.isfinite(cf_score) or cf_score <= 0:
-            continue
-        stats.undirected_pairs_retained += 1
-        confidence = min(1.0, support / max(1.0, denominator))
-        ranked_pairs.append((cf_score, support, left_item_id, right_item_id, pair_state, confidence))
-
-    # Select whole pairs so per-item top-K pruning can never leave one-way CF evidence.
-    edge_docs: list[dict[str, Any]] = []
-    neighbor_counts: dict[str, int] = defaultdict(int)
-    derivation = {
-        "model_version": settings.cf_model_version,
-        "source_collection": "user_item_signals",
-        "source_signal_model_version": _source_signal_model_version(signal_docs) or settings.signal_model_version,
-        "source_signal_count": len(signal_docs),
-        "source_signal_built_at": _latest_signal_built_at(signal_docs),
-        "partial_build": limit_users is not None,
-        "built_at": updated_at,
+    signal_docs = _load_signal_docs(user_item_signals_collection)
+    candidate_ids = {
+        str(signal.get("item_id") or "").strip()
+        for signal in signal_docs
+        if _is_signal_eligible(signal, input_policy=active_policy)
+        and str(signal.get("item_id") or "").strip()
     }
-    for cf_score, support, left_item_id, right_item_id, pair_state, confidence in sorted(
-        ranked_pairs,
-        key=lambda row: (-row[0], -row[1], row[2], row[3]),
-    ):
-        if neighbor_counts[left_item_id] >= top_neighbors_per_item:
-            continue
-        if neighbor_counts[right_item_id] >= top_neighbors_per_item:
-            continue
-        edge_docs.append(
-            _build_edge_doc(
-                item_id=left_item_id,
-                neighbor_item_id=right_item_id,
-                stats=pair_state,
-                cf_score=cf_score,
-                confidence=confidence,
-                updated_at=updated_at,
-                derivation=derivation,
-            )
-        )
-        edge_docs.append(
-            _build_edge_doc(
-                item_id=right_item_id,
-                neighbor_item_id=left_item_id,
-                stats=pair_state,
-                cf_score=cf_score,
-                confidence=confidence,
-                updated_at=updated_at,
-                derivation=derivation,
-            )
-        )
-        neighbor_counts[left_item_id] += 1
-        neighbor_counts[right_item_id] += 1
-        stats.undirected_pairs_selected += 1
-
-    stats.directional_edges_built = len(edge_docs)
-    sample_edges = edge_docs[: min(5, len(edge_docs))]
-
+    computed = compute_item_item_cf_edges(
+        signal_docs=signal_docs,
+        existing_item_ids=_load_existing_item_ids(items_collection, candidate_ids),
+        input_policy=active_policy,
+        limit_users=limit_users,
+        min_support=min_support,
+        max_items_per_user=max_items_per_user,
+        top_neighbors_per_item=top_neighbors_per_item,
+        updated_at=updated_at,
+        cf_model_version=settings.cf_model_version,
+        signal_model_version=settings.signal_model_version,
+    )
+    stats: CFBuildStats = computed["stats"]
+    edge_docs: list[dict[str, Any]] = computed["edge_docs"]
     if write:
         if edge_docs:
             summary = _bulk_write_edges(item_item_cf_edges_collection, edge_docs, batch_size)
@@ -422,18 +482,19 @@ def build_item_item_cf_edges(
             stats.directional_edges_written = summary["written"]
         if replace_existing:
             retained_ids = [doc["_id"] for doc in edge_docs]
-            stale_filter = {"_id": {"$nin": retained_ids}} if retained_ids else {}
-            result = item_item_cf_edges_collection.delete_many(stale_filter)
+            result = item_item_cf_edges_collection.delete_many(
+                {"_id": {"$nin": retained_ids}} if retained_ids else {}
+            )
             stats.stale_edges_deleted = int(getattr(result, "deleted_count", 0))
-
     return {
         "ok": not stats.errors,
         "write": write,
+        "input_policy": active_policy,
         "limit_users": limit_users,
         "min_support": min_support,
         "max_items_per_user": max_items_per_user,
         "top_neighbors_per_item": top_neighbors_per_item,
         "replace_existing": replace_existing,
         "stats": stats.as_dict(),
-        "sample_edges": sample_edges,
+        "sample_edges": edge_docs[: min(5, len(edge_docs))],
     }

@@ -44,6 +44,7 @@ class DerivationMetadata(BaseModel):
     source_signal_model_version: str | None = None
     source_signal_count: int | None = None
     source_signal_built_at: str | None = None
+    input_policy: str | None = None
     partial_build: bool = False
     built_at: str = Field(default_factory=utc_now_iso)
 

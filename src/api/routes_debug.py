@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from scripts.reset_demo_behavior_data import CATALOG_COLLECTIONS, execute_reset
+from src.behavior.incremental_processor import CF_RELEVANT_EVENT_TYPES, process_pending_behavior
 from src.behavior.profile_builder import build_user_profiles
 from src.behavior.signal_builder import build_user_item_signals
 from src.config import configured_model_versions, get_settings
@@ -116,6 +117,19 @@ def _source_signal_version_from_docs(docs: list[dict[str, Any]]) -> str | None:
     return "mixed"
 
 
+def _derivation_text(doc: dict[str, Any] | None, field_name: str) -> str | None:
+    if not isinstance(doc, dict):
+        return None
+    derivation = doc.get("derivation") if isinstance(doc.get("derivation"), dict) else {}
+    value = str(derivation.get(field_name) or "").strip()
+    return value or None
+
+
+def _derivation_text_from_docs(docs: list[dict[str, Any]], field_name: str) -> str | None:
+    values = [_derivation_text(doc, field_name) for doc in docs]
+    return _latest_timestamp([value for value in values if value])
+
+
 def _model_versions_snapshot(
     *,
     profile_doc: dict[str, Any] | None,
@@ -156,12 +170,24 @@ def _freshness_snapshot(
     events: list[dict[str, Any]],
     cf_edges: list[dict[str, Any]],
     pending_event_count: int,
+    cf_lineage_docs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    cf_status_docs = cf_lineage_docs if cf_lineage_docs is not None else cf_edges
     latest_event_at = _latest_timestamp([event.get("timestamp") for event in events])
-    signal_built_at = _latest_timestamp([signal.get("updated_at") for signal in signals])
+    signal_built_at = _latest_timestamp(
+        [
+            _derivation_text(signal, "built_at") or signal.get("updated_at")
+            for signal in signals
+        ]
+    )
     profile_built_at = str(profile_doc.get("updated_at") or "") or None if profile_doc else None
-    cf_built_at = _latest_timestamp([edge.get("updated_at") for edge in cf_edges])
-    model_versions = _model_versions_snapshot(profile_doc=profile_doc, signals=signals, cf_edges=cf_edges)
+    cf_built_at = _latest_timestamp(
+        [
+            _derivation_text(edge, "built_at") or edge.get("updated_at")
+            for edge in cf_status_docs
+        ]
+    )
+    model_versions = _model_versions_snapshot(profile_doc=profile_doc, signals=signals, cf_edges=cf_status_docs)
     latest_event_time = _parse_timestamp(latest_event_at)
     stale_components: list[str] = []
     for name, timestamp in (("signals", signal_built_at), ("profile", profile_built_at)):
@@ -170,6 +196,56 @@ def _freshness_snapshot(
             stale_components.append(name)
     if pending_event_count > 0 and "signals" not in stale_components:
         stale_components.append("signals")
+    stale_versions = set(model_versions["stale_version_components"])
+    signal_state = (
+        "stale_version"
+        if "signal" in stale_versions
+        else ("pending" if "signals" in stale_components else ("current" if signal_built_at else "unknown"))
+    )
+    profile_state = (
+        "stale_version"
+        if "profile" in stale_versions
+        else ("pending" if "profile" in stale_components else ("current" if profile_built_at else "unknown"))
+    )
+    cf_source_signal_built_at = _derivation_text_from_docs(cf_status_docs, "source_signal_built_at")
+    cf_input_policy = next(
+        (
+            _derivation_text(edge, "input_policy")
+            for edge in cf_status_docs
+            if _derivation_text(edge, "input_policy")
+        ),
+        get_settings().cf_runtime_input_policy,
+    )
+    pending_cf_relevant = any(
+        event.get("processed") is not True
+        and str(event.get("event_type") or "").strip() in CF_RELEVANT_EVENT_TYPES
+        for event in events
+    )
+    cf_behind_signals = bool(
+        _parse_timestamp(signal_built_at)
+        and (
+            _parse_timestamp(cf_source_signal_built_at)
+            or _parse_timestamp(cf_built_at)
+        )
+        and _parse_timestamp(signal_built_at)
+        > (_parse_timestamp(cf_source_signal_built_at) or _parse_timestamp(cf_built_at))
+    )
+    if "cf" in stale_versions:
+        cf_state = "stale_version"
+    elif not cf_built_at:
+        cf_state = "unavailable"
+    elif pending_cf_relevant or cf_behind_signals:
+        cf_state = "refresh_required"
+        stale_components.append("cf")
+    else:
+        cf_state = "current"
+    next_actions: list[str] = []
+    if signal_state == "pending" or profile_state == "pending":
+        next_actions.append("Apply pending behavior to refresh signals and profiles.")
+    if cf_state == "refresh_required":
+        next_actions.append("Schedule a full CF refresh after behavior processing.")
+    if cf_state == "unavailable":
+        next_actions.append("CF graph lineage is unavailable for this status check.")
     state = (
         "stale_version"
         if model_versions["stale_version_components"]
@@ -184,6 +260,25 @@ def _freshness_snapshot(
         "pending_event_count": pending_event_count,
         "stale_components": stale_components,
         "model_versions": model_versions,
+        "components": {
+            "signals": {
+                "state": signal_state,
+                "built_at": signal_built_at,
+                "source_event_max_timestamp": _derivation_text_from_docs(signals, "source_event_max_timestamp"),
+            },
+            "profile": {
+                "state": profile_state,
+                "built_at": profile_built_at,
+                "source_signal_built_at": _derivation_text(profile_doc, "source_signal_built_at"),
+            },
+            "cf": {
+                "state": cf_state,
+                "built_at": cf_built_at,
+                "source_signal_built_at": cf_source_signal_built_at,
+                "input_policy": cf_input_policy,
+            },
+        },
+        "next_actions": next_actions,
     }
 
 
@@ -194,9 +289,14 @@ def get_debug_user(user_id: str) -> dict[str, Any]:
     if not user_doc and not profile_doc:
         raise HTTPException(status_code=404, detail="user not found")
 
+    user_item_signals_collection = get_user_item_signals_collection()
     signals = _safe_list(
-        get_user_item_signals_collection().find({"user_id_hash": user_id}, {"_id": 0}).sort("implicit_score", -1),
+        user_item_signals_collection.find({"user_id_hash": user_id}, {"_id": 0}).sort("implicit_score", -1),
         20,
+    )
+    signal_lineage_docs = _safe_list(
+        user_item_signals_collection.find({"user_id_hash": user_id}, {"_id": 0}).sort("updated_at", -1),
+        1,
     )
     logs = _safe_list(
         get_recommendation_logs_collection().find({"user_id_hash": user_id}, {"_id": 0}).sort("shown_at", -1),
@@ -220,6 +320,10 @@ def get_debug_user(user_id: str) -> dict[str, Any]:
             .sort("cf_score", -1),
             20,
         )
+    cf_lineage_docs = _safe_list(
+        get_item_item_cf_edges_collection().find({}, {"_id": 0, "derivation": 1, "updated_at": 1}).sort("updated_at", -1),
+        1,
+    )
 
     return {
         "user": user_doc,
@@ -230,10 +334,11 @@ def get_debug_user(user_id: str) -> dict[str, Any]:
         "cf_edges": cf_edges,
         "freshness": _freshness_snapshot(
             profile_doc=profile_doc,
-            signals=signals,
+            signals=signals + signal_lineage_docs,
             events=events,
             cf_edges=cf_edges,
             pending_event_count=pending_event_count,
+            cf_lineage_docs=cf_lineage_docs,
         ),
     }
 
@@ -323,17 +428,14 @@ def reset_demo_behavior(write: bool = False, full: bool = False, confirm: str | 
 def process_events(limit: int | None = None, rebuild_item_stats: bool = True, write: bool = False) -> dict[str, Any]:
     clickstream_events_collection = get_clickstream_events_collection()
     if write and limit is not None:
-        total_events = int(clickstream_events_collection.count_documents({}))
-        if limit < total_events:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "partial_signal_write_blocked",
-                    "message": "Writing signals from a limited event subset would overwrite complete aggregates.",
-                    "limit_events": limit,
-                    "total_events": total_events,
-                },
-            )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "partial_signal_write_blocked",
+                "message": "Writing full signals with a limit is unsafe because new events can arrive during rebuild.",
+                "limit_events": limit,
+            },
+        )
     result = build_user_item_signals(
         clickstream_events_collection=clickstream_events_collection,
         recommendation_logs_collection=get_recommendation_logs_collection(),
@@ -343,6 +445,33 @@ def process_events(limit: int | None = None, rebuild_item_stats: bool = True, wr
         rebuild_item_stats=rebuild_item_stats,
         limit_events=limit,
     )
+    if write and rebuild_item_stats and result.get("ok"):
+        clear_catalog_snapshot_cache()
+    return result
+
+
+@router.post("/debug/apply-pending-behavior")
+def apply_pending_behavior(
+    max_events: int = 100,
+    rebuild_item_stats: bool = True,
+    write: bool = False,
+) -> dict[str, Any]:
+    try:
+        result = process_pending_behavior(
+            clickstream_events_collection=get_clickstream_events_collection(),
+            recommendation_logs_collection=get_recommendation_logs_collection(),
+            user_item_signals_collection=get_user_item_signals_collection() if write else None,
+            item_stats_collection=get_item_stats_collection() if write and rebuild_item_stats else None,
+            user_profiles_collection=get_user_profiles_collection() if write else None,
+            item_hype_profiles_collection=get_item_hype_profiles_collection() if write else None,
+            items_collection=get_items_collection() if write else None,
+            retrieval_units_collection=get_retrieval_units_collection() if write else None,
+            write=write,
+            rebuild_item_stats=rebuild_item_stats,
+            max_events=max_events,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if write and rebuild_item_stats and result.get("ok"):
         clear_catalog_snapshot_cache()
     return result
@@ -378,6 +507,7 @@ def rebuild_cf(
     min_support: int = 2,
     max_items_per_user: int = 30,
     top_neighbors_per_item: int = 50,
+    input_policy: str | None = None,
     write: bool = False,
 ) -> dict[str, Any]:
     if write and limit_users is not None:
@@ -389,14 +519,18 @@ def rebuild_cf(
                 "limit_users": limit_users,
             },
         )
-    return build_item_item_cf_edges(
-        user_item_signals_collection=get_user_item_signals_collection(),
-        items_collection=get_items_collection(),
-        item_item_cf_edges_collection=get_item_item_cf_edges_collection() if write else None,
-        write=write,
-        limit_users=limit_users,
-        min_support=min_support,
-        max_items_per_user=max_items_per_user,
-        top_neighbors_per_item=top_neighbors_per_item,
-        replace_existing=bool(write and limit_users is None),
-    )
+    try:
+        return build_item_item_cf_edges(
+            user_item_signals_collection=get_user_item_signals_collection(),
+            items_collection=get_items_collection(),
+            item_item_cf_edges_collection=get_item_item_cf_edges_collection() if write else None,
+            write=write,
+            limit_users=limit_users,
+            min_support=min_support,
+            max_items_per_user=max_items_per_user,
+            top_neighbors_per_item=top_neighbors_per_item,
+            input_policy=input_policy,
+            replace_existing=bool(write and limit_users is None),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

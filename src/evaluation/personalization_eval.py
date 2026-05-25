@@ -16,7 +16,6 @@ import time
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
-from itertools import combinations
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +31,12 @@ from src.mongodb import (
     get_user_item_signals_collection,
     get_user_profiles_collection,
 )
-from src.recommendation.item_item_cf import DEFAULT_CF_MIN_SUPPORT, _is_positive_signal, _positive_signal_value
+from src.recommendation.item_item_cf import (
+    CF_INPUT_POLICY_CURRENT,
+    CF_INPUT_POLICY_QUALIFIED,
+    DEFAULT_CF_MIN_SUPPORT,
+    compute_item_item_cf_edges,
+)
 
 
 BASELINE_NAMES = (
@@ -69,6 +73,7 @@ class TemporalSplit:
     train_positive_item_ids: list[str]
     held_out_positive_item_ids: list[str]
     held_out_deliberate_item_ids: list[str]
+    train_negative_item_ids: list[str]
 
 
 def _now_iso() -> str:
@@ -165,7 +170,7 @@ def temporal_split_events(
 
     ordered_events = sorted(events, key=lambda event: _parse_timestamp(event.get("timestamp")))
     if not ordered_events:
-        return TemporalSplit([], [], [], [], [])
+        return TemporalSplit([], [], [], [], [], [])
 
     cut_index = max(1, int(len(ordered_events) * train_ratio))
     cut_index = min(cut_index, len(ordered_events))
@@ -190,6 +195,11 @@ def temporal_split_events(
         if bool(signal.get("seed_eligible"))
         and str(signal.get("item_id") or "") not in train_positive_set
     ])
+    train_negative_item_ids = _dedupe_preserve_order([
+        str(signal.get("item_id") or "")
+        for signal in _build_train_signals(train_events)
+        if _safe_float(signal.get("negative_score"), 0.0) > 0
+    ])
 
     return TemporalSplit(
         train_events=train_events,
@@ -197,6 +207,7 @@ def temporal_split_events(
         train_positive_item_ids=train_positive_item_ids,
         held_out_positive_item_ids=held_out_positive_item_ids,
         held_out_deliberate_item_ids=held_out_deliberate_item_ids,
+        train_negative_item_ids=train_negative_item_ids,
     )
 
 
@@ -272,16 +283,54 @@ def _build_train_popularity(train_signals_by_user: dict[str, list[dict[str, Any]
     return dict(popularity)
 
 
-def _eligible_cf_signal(signal: dict[str, Any], *, qualified: bool) -> bool:
-    return bool(signal.get("seed_eligible")) if qualified else _is_positive_signal(signal)
-
-
 def _cf_source_item_ids(signals: list[dict[str, Any]], *, qualified: bool) -> list[str]:
     return _dedupe_preserve_order([
         str(signal.get("item_id") or "")
         for signal in signals
-        if _eligible_cf_signal(signal, qualified=qualified)
+        if (
+            bool(signal.get("seed_eligible"))
+            and _safe_float(signal.get("negative_score"), 0.0) <= 0
+            if qualified
+            else (_safe_float(signal.get("implicit_score"), 0.0) > 1.0 or bool(signal.get("preference")))
+        )
     ])
+
+
+def _compute_eval_cf_edges(
+    train_signals_by_user: dict[str, list[dict[str, Any]]],
+    *,
+    qualified: bool,
+    min_support: int = DEFAULT_CF_MIN_SUPPORT,
+) -> tuple[dict[str, dict[str, float]], dict[str, Any]]:
+    signal_docs = [
+        signal
+        for signals in train_signals_by_user.values()
+        for signal in signals
+    ]
+    existing_item_ids = {
+        str(signal.get("item_id") or "").strip()
+        for signal in signal_docs
+        if str(signal.get("item_id") or "").strip()
+    }
+    updated_at = max(
+        (
+            str(signal.get("last_interaction_at") or signal.get("updated_at") or "")
+            for signal in signal_docs
+            if str(signal.get("last_interaction_at") or signal.get("updated_at") or "")
+        ),
+        default=_now_iso(),
+    )
+    computed = compute_item_item_cf_edges(
+        signal_docs=signal_docs,
+        existing_item_ids=existing_item_ids,
+        input_policy=CF_INPUT_POLICY_QUALIFIED if qualified else CF_INPUT_POLICY_CURRENT,
+        min_support=min_support,
+        updated_at=updated_at,
+    )
+    edges: defaultdict[str, dict[str, float]] = defaultdict(dict)
+    for edge in computed["edge_docs"]:
+        edges[str(edge["item_id"])][str(edge["neighbor_item_id"])] = _safe_float(edge.get("cf_score"), 0.0)
+    return {item_id: dict(neighbors) for item_id, neighbors in edges.items()}, computed["stats"].as_dict()
 
 
 def _build_cf_edges(
@@ -290,49 +339,12 @@ def _build_cf_edges(
     qualified: bool,
     min_support: int = DEFAULT_CF_MIN_SUPPORT,
 ) -> dict[str, dict[str, float]]:
-    per_user_item_scores: dict[str, dict[str, float]] = {}
-    popularity: defaultdict[str, float] = defaultdict(float)
-
-    for user_id, signals in train_signals_by_user.items():
-        item_scores: defaultdict[str, float] = defaultdict(float)
-        for signal in signals:
-            if not _eligible_cf_signal(signal, qualified=qualified):
-                continue
-            item_id = str(signal.get("item_id") or "")
-            weight = _positive_signal_value(signal)
-            if not item_id or weight <= 0:
-                continue
-            item_scores[item_id] += weight
-        if item_scores:
-            per_user_item_scores[user_id] = dict(item_scores)
-            for item_id, score in item_scores.items():
-                popularity[item_id] += score
-
-    pair_weight: defaultdict[tuple[str, str], float] = defaultdict(float)
-    pair_support: Counter[tuple[str, str]] = Counter()
-
-    for item_scores in per_user_item_scores.values():
-        positive_items = sorted(item_scores)
-        if len(positive_items) < 2:
-            continue
-        for left, right in combinations(positive_items, 2):
-            pair = (left, right)
-            pair_support[pair] += 1
-            pair_weight[pair] += min(item_scores[left], item_scores[right])
-
-    edges: defaultdict[str, dict[str, float]] = defaultdict(dict)
-    for (left, right), support in pair_support.items():
-        if support < min_support:
-            continue
-        left_pop = popularity.get(left, 0.0)
-        right_pop = popularity.get(right, 0.0)
-        if left_pop <= 0 or right_pop <= 0:
-            continue
-        score = pair_weight[(left, right)] / math.sqrt(left_pop * right_pop)
-        rounded = round(score, 6)
-        edges[left][right] = rounded
-        edges[right][left] = rounded
-    return {item_id: dict(neighbors) for item_id, neighbors in edges.items()}
+    edges, _stats = _compute_eval_cf_edges(
+        train_signals_by_user,
+        qualified=qualified,
+        min_support=min_support,
+    )
+    return edges
 
 
 def _rank_content_only(
@@ -437,12 +449,16 @@ def compute_ranking_metrics(
     items_by_id: dict[str, dict[str, Any]],
     popularity_by_item: dict[str, float] | None = None,
     cf_supported_item_ids: set[str] | None = None,
+    negative_item_ids: set[str] | None = None,
     hit_rate_k: int = 10,
     recall_k: int = 20,
     map_k: int = 20,
+    ndcg_k: int = 20,
+    mrr_k: int = 10,
 ) -> dict[str, Any]:
     popularity_by_item = popularity_by_item or {}
     cf_supported_item_ids = cf_supported_item_ids or set()
+    negative_item_ids = negative_item_ids or set()
     held_out_set = set(held_out_positive_item_ids)
     hit_slice = recommended_item_ids[:hit_rate_k]
     recall_slice = recommended_item_ids[:recall_k]
@@ -460,6 +476,25 @@ def compute_ranking_metrics(
             hit_count += 1
             precision_sum += hit_count / index
     average_precision = precision_sum / len(held_out_set) if held_out_set else 0.0
+    ndcg_slice = recommended_item_ids[:ndcg_k]
+    discounted_gain = sum(
+        1.0 / math.log2(index + 1)
+        for index, item_id in enumerate(ndcg_slice, start=1)
+        if item_id in held_out_set
+    )
+    ideal_gain = sum(
+        1.0 / math.log2(index + 1)
+        for index in range(1, min(len(held_out_set), ndcg_k) + 1)
+    )
+    ndcg = discounted_gain / ideal_gain if ideal_gain else 0.0
+    reciprocal_rank = next(
+        (
+            1.0 / index
+            for index, item_id in enumerate(recommended_item_ids[:mrr_k], start=1)
+            if item_id in held_out_set
+        ),
+        0.0,
+    )
 
     inspected = recall_slice
     inspected_items = []
@@ -487,15 +522,20 @@ def compute_ranking_metrics(
     cold_items = [item for item in inspected_items if item.get("is_cold_item")]
     cold_exposure = len(cold_items) / len(inspected_items) if inspected_items else 0.0
     cf_supported_count = sum(1 for item_id in recall_slice if item_id in cf_supported_item_ids)
+    negative_reexposure_count = sum(1 for item_id in recall_slice if item_id in negative_item_ids)
 
     return {
         "hit_rate_at_10": round(hit_rate, 6),
         "recall_at_20": round(recall, 6),
         "map_at_20": round(average_precision, 6),
+        "ndcg_at_20": round(ndcg, 6),
+        "mrr_at_10": round(reciprocal_rank, 6),
         "diversity_at_20": round(diversity, 6),
         "novelty_at_20": round(novelty, 6),
         "cold_start_exposure_at_20": round(cold_exposure, 6),
         "cf_supported_recommendation_count": cf_supported_count,
+        "negative_reexposure_count": negative_reexposure_count,
+        "negative_reexposure_rate": round(negative_reexposure_count / len(recall_slice), 6) if recall_slice else 0.0,
     }
 
 
@@ -523,16 +563,22 @@ def _summary_row(
             "hit_rate_at_10": 0.0,
             "recall_at_20": 0.0,
             "map_at_20": 0.0,
+            "ndcg_at_20": 0.0,
+            "mrr_at_10": 0.0,
             "coverage": 0.0,
             "diversity_at_20": 0.0,
             "novelty_at_20": 0.0,
             "cold_start_exposure_at_20": 0.0,
             "cf_supported_recommendation_count": 0,
             "cf_supported_recommendation_rate": 0.0,
+            "negative_reexposure_count": 0,
+            "negative_reexposure_rate": 0.0,
             "deliberate_evaluated_user_count": 0,
             "deliberate_hit_rate_at_10": 0.0,
             "deliberate_recall_at_20": 0.0,
             "deliberate_map_at_20": 0.0,
+            "deliberate_ndcg_at_20": 0.0,
+            "deliberate_mrr_at_10": 0.0,
         }
 
     unique_recommended_items = {
@@ -541,6 +587,7 @@ def _summary_row(
         for item_id in row.get("recommended_item_ids", [])[:top_k]
     }
     total_cf_supported = sum(int(row.get("cf_supported_recommendation_count", 0)) for row in rows)
+    total_negative_reexposure = sum(int(row.get("negative_reexposure_count", 0)) for row in rows)
     denominator = max(sum(min(len(row.get("recommended_item_ids", [])), top_k) for row in rows), 1)
     deliberate_rows = [row for row in rows if row.get("has_deliberate_target")]
     deliberate_denominator = len(deliberate_rows) or 1
@@ -550,16 +597,22 @@ def _summary_row(
         "hit_rate_at_10": round(sum(_safe_float(row.get("hit_rate_at_10"), 0.0) for row in rows) / len(rows), 6),
         "recall_at_20": round(sum(_safe_float(row.get("recall_at_20"), 0.0) for row in rows) / len(rows), 6),
         "map_at_20": round(sum(_safe_float(row.get("map_at_20"), 0.0) for row in rows) / len(rows), 6),
+        "ndcg_at_20": round(sum(_safe_float(row.get("ndcg_at_20"), 0.0) for row in rows) / len(rows), 6),
+        "mrr_at_10": round(sum(_safe_float(row.get("mrr_at_10"), 0.0) for row in rows) / len(rows), 6),
         "coverage": round(len(unique_recommended_items) / catalog_size, 6) if catalog_size else 0.0,
         "diversity_at_20": round(sum(_safe_float(row.get("diversity_at_20"), 0.0) for row in rows) / len(rows), 6),
         "novelty_at_20": round(sum(_safe_float(row.get("novelty_at_20"), 0.0) for row in rows) / len(rows), 6),
         "cold_start_exposure_at_20": round(sum(_safe_float(row.get("cold_start_exposure_at_20"), 0.0) for row in rows) / len(rows), 6),
         "cf_supported_recommendation_count": total_cf_supported,
         "cf_supported_recommendation_rate": round(total_cf_supported / denominator, 6),
+        "negative_reexposure_count": total_negative_reexposure,
+        "negative_reexposure_rate": round(total_negative_reexposure / denominator, 6),
         "deliberate_evaluated_user_count": len(deliberate_rows),
         "deliberate_hit_rate_at_10": round(sum(_safe_float(row.get("deliberate_hit_rate_at_10"), 0.0) for row in deliberate_rows) / deliberate_denominator, 6),
         "deliberate_recall_at_20": round(sum(_safe_float(row.get("deliberate_recall_at_20"), 0.0) for row in deliberate_rows) / deliberate_denominator, 6),
         "deliberate_map_at_20": round(sum(_safe_float(row.get("deliberate_map_at_20"), 0.0) for row in deliberate_rows) / deliberate_denominator, 6),
+        "deliberate_ndcg_at_20": round(sum(_safe_float(row.get("deliberate_ndcg_at_20"), 0.0) for row in deliberate_rows) / deliberate_denominator, 6),
+        "deliberate_mrr_at_10": round(sum(_safe_float(row.get("deliberate_mrr_at_10"), 0.0) for row in deliberate_rows) / deliberate_denominator, 6),
     }
 
 
@@ -571,21 +624,41 @@ def _comparison_row(summary_by_baseline: dict[str, dict[str, Any]], left: str, r
         "hit_rate_at_10_delta": round(_safe_float(left_row.get("hit_rate_at_10"), 0.0) - _safe_float(right_row.get("hit_rate_at_10"), 0.0), 6),
         "recall_at_20_delta": round(_safe_float(left_row.get("recall_at_20"), 0.0) - _safe_float(right_row.get("recall_at_20"), 0.0), 6),
         "map_at_20_delta": round(_safe_float(left_row.get("map_at_20"), 0.0) - _safe_float(right_row.get("map_at_20"), 0.0), 6),
+        "ndcg_at_20_delta": round(_safe_float(left_row.get("ndcg_at_20"), 0.0) - _safe_float(right_row.get("ndcg_at_20"), 0.0), 6),
+        "mrr_at_10_delta": round(_safe_float(left_row.get("mrr_at_10"), 0.0) - _safe_float(right_row.get("mrr_at_10"), 0.0), 6),
         "deliberate_hit_rate_at_10_delta": round(_safe_float(left_row.get("deliberate_hit_rate_at_10"), 0.0) - _safe_float(right_row.get("deliberate_hit_rate_at_10"), 0.0), 6),
         "deliberate_recall_at_20_delta": round(_safe_float(left_row.get("deliberate_recall_at_20"), 0.0) - _safe_float(right_row.get("deliberate_recall_at_20"), 0.0), 6),
         "deliberate_map_at_20_delta": round(_safe_float(left_row.get("deliberate_map_at_20"), 0.0) - _safe_float(right_row.get("deliberate_map_at_20"), 0.0), 6),
+        "deliberate_ndcg_at_20_delta": round(_safe_float(left_row.get("deliberate_ndcg_at_20"), 0.0) - _safe_float(right_row.get("deliberate_ndcg_at_20"), 0.0), 6),
+        "deliberate_mrr_at_10_delta": round(_safe_float(left_row.get("deliberate_mrr_at_10"), 0.0) - _safe_float(right_row.get("deliberate_mrr_at_10"), 0.0), 6),
         "cf_supported_count_delta": int(left_row.get("cf_supported_recommendation_count", 0)) - int(right_row.get("cf_supported_recommendation_count", 0)),
+        "negative_reexposure_rate_delta": round(_safe_float(left_row.get("negative_reexposure_rate"), 0.0) - _safe_float(right_row.get("negative_reexposure_rate"), 0.0), 6),
     }
 
 
-def _qualified_cf_gate(summary_by_baseline: dict[str, dict[str, Any]]) -> dict[str, str]:
+def _qualified_cf_gate(
+    summary_by_baseline: dict[str, dict[str, Any]],
+    *,
+    qualified_directional_edge_count: int,
+) -> dict[str, str]:
     current = summary_by_baseline["profile_plus_cf"]
     qualified = summary_by_baseline["profile_plus_qualified_cf"]
     if int(qualified.get("deliberate_evaluated_user_count", 0)) == 0:
         return {"decision": "needs_more_evidence", "reason": "No deliberate held-out targets were available for the qualified CF comparison."}
+    if qualified_directional_edge_count <= 0:
+        return {"decision": "needs_more_evidence", "reason": "Qualified CF produced no supported edges under min_support=2."}
     if int(qualified.get("cf_supported_recommendation_count", 0)) == 0:
         return {"decision": "needs_more_evidence", "reason": "Qualified CF produced no supported recommendations under min_support=2."}
-    guarded_metrics = ("recall_at_20", "map_at_20", "deliberate_recall_at_20", "deliberate_map_at_20")
+    if _safe_float(qualified.get("negative_reexposure_rate"), 0.0) > 0:
+        return {"decision": "reject", "reason": "Qualified CF re-exposed items with negative evidence."}
+    guarded_metrics = (
+        "recall_at_20",
+        "map_at_20",
+        "ndcg_at_20",
+        "deliberate_recall_at_20",
+        "deliberate_ndcg_at_20",
+        "deliberate_mrr_at_10",
+    )
     degraded = [metric for metric in guarded_metrics if _safe_float(qualified.get(metric)) < _safe_float(current.get(metric))]
     if degraded:
         return {"decision": "reject", "reason": f"Qualified CF reduced protected metrics: {', '.join(degraded)}."}
@@ -641,8 +714,8 @@ def evaluate_personalization(
         if split.train_events
     }
     popularity_by_item = _build_train_popularity(train_signals_by_user)
-    cf_edges = _build_cf_edges(train_signals_by_user, qualified=False)
-    qualified_cf_edges = _build_cf_edges(train_signals_by_user, qualified=True)
+    cf_edges, cf_stats = _compute_eval_cf_edges(train_signals_by_user, qualified=False)
+    qualified_cf_edges, qualified_cf_stats = _compute_eval_cf_edges(train_signals_by_user, qualified=True)
 
     per_user_metrics: list[dict[str, Any]] = []
     evaluated_users = 0
@@ -654,7 +727,8 @@ def evaluate_personalization(
         user_profile = _build_user_profile(user_signals, items_by_id)
         current_cf_source_item_ids = _cf_source_item_ids(user_signals, qualified=False)
         qualified_cf_source_item_ids = _cf_source_item_ids(user_signals, qualified=True)
-        excluded_item_ids = set(split.train_positive_item_ids)
+        negative_item_ids = set(split.train_negative_item_ids)
+        excluded_item_ids = set(split.train_positive_item_ids) | negative_item_ids
 
         baseline_rankers = {
             "content_only": lambda: _rank_content_only(
@@ -708,6 +782,7 @@ def evaluate_personalization(
                 items_by_id=items_by_id,
                 popularity_by_item=popularity_by_item,
                 cf_supported_item_ids=cf_supported_item_ids,
+                negative_item_ids=negative_item_ids,
                 hit_rate_k=config.hit_rate_k,
                 recall_k=config.recall_k,
                 map_k=config.map_k,
@@ -718,6 +793,7 @@ def evaluate_personalization(
                 items_by_id=items_by_id,
                 popularity_by_item=popularity_by_item,
                 cf_supported_item_ids=cf_supported_item_ids,
+                negative_item_ids=negative_item_ids,
                 hit_rate_k=config.hit_rate_k,
                 recall_k=config.recall_k,
                 map_k=config.map_k,
@@ -728,12 +804,15 @@ def evaluate_personalization(
                 "train_positive_item_ids": list(split.train_positive_item_ids),
                 "held_out_positive_item_ids": list(split.held_out_positive_item_ids),
                 "held_out_deliberate_item_ids": list(split.held_out_deliberate_item_ids),
+                "train_negative_item_ids": list(split.train_negative_item_ids),
                 "has_deliberate_target": bool(split.held_out_deliberate_item_ids),
                 "recommended_item_ids": list(recommended_item_ids),
                 **metric_row,
                 "deliberate_hit_rate_at_10": deliberate_metrics["hit_rate_at_10"],
                 "deliberate_recall_at_20": deliberate_metrics["recall_at_20"],
                 "deliberate_map_at_20": deliberate_metrics["map_at_20"],
+                "deliberate_ndcg_at_20": deliberate_metrics["ndcg_at_20"],
+                "deliberate_mrr_at_10": deliberate_metrics["mrr_at_10"],
             })
 
     summary_by_baseline = {
@@ -783,8 +862,13 @@ def evaluate_personalization(
             "min_support": DEFAULT_CF_MIN_SUPPORT,
             "current_directional_edge_count": sum(len(neighbors) for neighbors in cf_edges.values()),
             "qualified_directional_edge_count": sum(len(neighbors) for neighbors in qualified_cf_edges.values()),
+            "current_build_stats": cf_stats,
+            "qualified_build_stats": qualified_cf_stats,
         },
-        "cf_qualified_gate": _qualified_cf_gate(summary_by_baseline),
+        "cf_qualified_gate": _qualified_cf_gate(
+            summary_by_baseline,
+            qualified_directional_edge_count=sum(len(neighbors) for neighbors in qualified_cf_edges.values()),
+        ),
     }
 
 
@@ -832,14 +916,19 @@ def generate_personalization_summary_md(run_data: dict[str, Any]) -> str:
             ("hit_rate_at_10", "HitRate@10"),
             ("recall_at_20", "Recall@20"),
             ("map_at_20", "MAP@20"),
+            ("ndcg_at_20", "NDCG@20"),
+            ("mrr_at_10", "MRR@10"),
             ("deliberate_hit_rate_at_10", "Deliberate Hit@10"),
             ("deliberate_recall_at_20", "Deliberate Recall@20"),
             ("deliberate_map_at_20", "Deliberate MAP@20"),
+            ("deliberate_ndcg_at_20", "Deliberate NDCG@20"),
+            ("deliberate_mrr_at_10", "Deliberate MRR@10"),
             ("coverage", "Coverage"),
             ("diversity_at_20", "Diversity"),
             ("novelty_at_20", "Novelty"),
             ("cold_start_exposure_at_20", "Cold-start Exposure"),
             ("cf_supported_recommendation_count", "CF-supported Count"),
+            ("negative_reexposure_rate", "Negative Re-exposure"),
         ],
     ))
     lines.extend([
@@ -854,6 +943,7 @@ def generate_personalization_summary_md(run_data: dict[str, Any]) -> str:
             ("hit_rate_at_10_delta", "HitRate@10 Delta"),
             ("recall_at_20_delta", "Recall@20 Delta"),
             ("map_at_20_delta", "MAP@20 Delta"),
+            ("ndcg_at_20_delta", "NDCG@20 Delta"),
             ("deliberate_map_at_20_delta", "Deliberate MAP@20 Delta"),
             ("cf_supported_count_delta", "CF-supported Delta"),
         ],
@@ -872,6 +962,8 @@ def generate_personalization_summary_md(run_data: dict[str, Any]) -> str:
         "- Temporal split uses the first 70% of each user's event history for training and the final 30% for held-out positives.",
         "- The evaluator builds production-policy signals, popularity, and CF in memory from train-only data to avoid future leakage and MongoDB writes.",
         "- Both current-policy and qualified-policy CF variants enforce min_support=2.",
+        "- Both CF variants use the runtime pair computation, caps, recency decay, and symmetric edge selection.",
+        "- Hidden or disliked train-time items are removed before recommendation metrics and counted by negative re-exposure checks.",
         "- CF evidence in this report is behavior-derived from train-time co-interactions, not semantic similarity.",
     ])
     return "\n".join(lines) + "\n"
@@ -904,16 +996,23 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
         "hit_rate_at_10",
         "recall_at_20",
         "map_at_20",
+        "ndcg_at_20",
+        "mrr_at_10",
         "diversity_at_20",
         "novelty_at_20",
         "cold_start_exposure_at_20",
         "cf_supported_recommendation_count",
+        "negative_reexposure_count",
+        "negative_reexposure_rate",
         "deliberate_hit_rate_at_10",
         "deliberate_recall_at_20",
         "deliberate_map_at_20",
+        "deliberate_ndcg_at_20",
+        "deliberate_mrr_at_10",
         "train_positive_item_ids",
         "held_out_positive_item_ids",
         "held_out_deliberate_item_ids",
+        "train_negative_item_ids",
         "recommended_item_ids",
     ]
     with per_user_csv_path.open("w", encoding="utf-8", newline="") as handle:
@@ -921,7 +1020,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
         writer.writeheader()
         for row in per_user_rows:
             csv_row = dict(row)
-            for key in ("train_positive_item_ids", "held_out_positive_item_ids", "held_out_deliberate_item_ids", "recommended_item_ids"):
+            for key in ("train_positive_item_ids", "held_out_positive_item_ids", "held_out_deliberate_item_ids", "train_negative_item_ids", "recommended_item_ids"):
                 csv_row[key] = "|".join(csv_row.get(key, []))
             writer.writerow({key: csv_row.get(key, "") for key in csv_columns})
 
