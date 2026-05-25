@@ -6,6 +6,8 @@ from typing import Any
 
 from pymongo import UpdateOne
 
+from src.behavior.intent_hygiene import sanitize_interest_labels
+from src.config import get_settings
 from src.behavior.schemas import UserItemSignalDocument
 from src.recommendation.schemas import ItemStatsDocument
 from src.schemas import to_mongo_dict
@@ -22,19 +24,10 @@ EVENT_TYPES = (
     "hide",
     "dislike",
 )
-POSITIVE_EVENT_WEIGHTS = {
-    "click": 1.0,
-    "view_detail": 1.0,
-    "wishlist": 2.0,
-    "add_to_cart": 3.0,
-    "purchase": 5.0,
-}
 NEGATIVE_EVENT_WEIGHTS = {
     "hide": 2.0,
     "dislike": 3.0,
 }
-VIEW_DETAIL_DWELL_BONUS_MS = 60_000
-VIEW_DETAIL_DWELL_BONUS_CAP = 1.0
 COLD_ITEM_INTERACTION_THRESHOLD = 20
 DEFAULT_BATCH_SIZE = 500
 
@@ -52,6 +45,7 @@ class SignalBuildStats:
     signals_written: int = 0
     item_stats_written: int = 0
     events_marked_processed: int = 0
+    invalid_reason_intents_dropped: int = 0
     errors: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -67,6 +61,7 @@ class SignalBuildStats:
             "signals_written": self.signals_written,
             "item_stats_written": self.item_stats_written,
             "events_marked_processed": self.events_marked_processed,
+            "invalid_reason_intents_dropped": self.invalid_reason_intents_dropped,
             "errors": list(self.errors),
         }
 
@@ -77,6 +72,20 @@ class SignalBuildArtifacts:
     item_stats_docs: list[dict[str, Any]]
     processed_event_ids: list[str]
     stats: SignalBuildStats
+
+
+def _signal_derivation(*, updated_at: str, events: list[dict[str, Any]], partial_build: bool) -> dict[str, Any]:
+    settings = get_settings()
+    timestamps = [_event_timestamp(event) for event in events]
+    valid_timestamps = [timestamp for timestamp in timestamps if timestamp]
+    return {
+        "model_version": settings.signal_model_version,
+        "source_collection": "clickstream_events",
+        "source_event_max_timestamp": max(valid_timestamps) if valid_timestamps else None,
+        "source_event_count": len(events),
+        "partial_build": partial_build,
+        "built_at": updated_at,
+    }
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -128,6 +137,10 @@ def _empty_event_counts() -> dict[str, int]:
     return {event_type: 0 for event_type in EVENT_TYPES}
 
 
+def _empty_contributions() -> dict[str, float]:
+    return {"exploratory": 0.0, "engaged": 0.0, "conversion": 0.0}
+
+
 def _as_string_list(value: Any) -> list[str]:
     if value is None:
         return []
@@ -140,18 +153,83 @@ def _as_string_list(value: Any) -> list[str]:
     return []
 
 
-def _positive_weight(event: dict[str, Any]) -> float:
-    event_type = event.get("event_type")
-    if event_type != "view_detail":
-        return POSITIVE_EVENT_WEIGHTS.get(str(event_type), 0.0)
-
-    dwell_time_ms = max(_safe_int(event.get("dwell_time_ms"), 0), 0)
-    dwell_bonus = min(dwell_time_ms / VIEW_DETAIL_DWELL_BONUS_MS, VIEW_DETAIL_DWELL_BONUS_CAP)
-    return POSITIVE_EVENT_WEIGHTS["view_detail"] + dwell_bonus
+def _positive_weight(event: dict[str, Any], settings: Any) -> tuple[float, str | None]:
+    event_type = str(event.get("event_type") or "").strip()
+    if event_type == "click":
+        return settings.signal_click_weight, "exploratory"
+    if event_type == "view_detail":
+        dwell_time_ms = max(_safe_int(event.get("dwell_time_ms"), 0), 0)
+        if dwell_time_ms >= settings.signal_detail_meaningful_ms:
+            return settings.signal_detail_long_weight, "engaged"
+        if dwell_time_ms >= settings.signal_detail_short_ms:
+            return settings.signal_detail_medium_weight, "engaged"
+        return settings.signal_detail_short_weight, "exploratory"
+    if event_type == "wishlist":
+        return settings.signal_wishlist_weight, "engaged"
+    if event_type == "add_to_cart":
+        return settings.signal_add_to_cart_weight, "conversion"
+    if event_type == "purchase":
+        return settings.signal_purchase_weight, "conversion"
+    return 0.0, None
 
 
 def _negative_weight(event: dict[str, Any]) -> float:
     return NEGATIVE_EVENT_WEIGHTS.get(str(event.get("event_type")), 0.0)
+
+
+def _apply_repeat_positive_bonus(state: dict[str, Any], *, settings: Any) -> None:
+    counts = state["event_counts"]
+    total_positive_events = sum(
+        counts[event_type]
+        for event_type in ("click", "view_detail", "wishlist", "add_to_cart", "purchase")
+    )
+    if total_positive_events <= 1:
+        return
+    bonus = min(
+        settings.signal_repeat_positive_bonus_cap,
+        max(0.0, total_positive_events - 1) * settings.signal_repeat_positive_bonus,
+    )
+    if bonus <= 0:
+        return
+    state["positive_score"] += bonus
+    state["contributions"]["engaged"] += bonus
+
+
+def _deliberate_score(contributions: dict[str, Any]) -> float:
+    return _safe_float(contributions.get("engaged"), 0.0) + _safe_float(contributions.get("conversion"), 0.0)
+
+
+def _intent_tier(
+    *,
+    contributions: dict[str, Any],
+    positive_score: float,
+    negative_score: float,
+    event_counts: dict[str, int],
+) -> str:
+    if _safe_float(contributions.get("conversion"), 0.0) > 0:
+        return "conversion"
+    if _safe_float(contributions.get("engaged"), 0.0) > 0:
+        return "engaged"
+    if _safe_float(contributions.get("exploratory"), 0.0) > 0:
+        return "exploratory"
+    if negative_score > 0 and positive_score <= 0:
+        return "negative"
+    if _safe_int(event_counts.get("impression"), 0) > 0:
+        return "exposure"
+    return "negative"
+
+
+def _is_preference(*, implicit_score: float, contributions: dict[str, Any], settings: Any) -> bool:
+    return implicit_score > 0 and (
+        _safe_float(contributions.get("exploratory"), 0.0)
+        + _deliberate_score(contributions)
+        >= settings.signal_click_weight
+        or _deliberate_score(contributions) >= settings.signal_preference_min_deliberate_score
+    )
+
+
+def _is_seed_eligible(*, negative_score: float, contributions: dict[str, Any], settings: Any) -> bool:
+    return negative_score <= 0 and _deliberate_score(contributions) >= settings.signal_seed_eligible_min_deliberate_score
 
 
 def _recommendation_score(log: dict[str, Any] | None) -> float:
@@ -182,8 +260,12 @@ def _reason_source(attribution: dict[str, Any]) -> str:
     return "recommendation_log"
 
 
-def _reason_intents(attribution: dict[str, Any]) -> list[str]:
-    return _as_string_list(attribution.get("matched_intents"))[:5]
+def _reason_intents(attribution: dict[str, Any], *, max_label_length: int) -> tuple[list[str], int]:
+    return sanitize_interest_labels(
+        attribution.get("matched_intents"),
+        max_length=max_label_length,
+        limit=5,
+    )
 
 
 def _merge_reason_scores(
@@ -192,6 +274,8 @@ def _merge_reason_scores(
     event: dict[str, Any],
     log: dict[str, Any] | None,
     event_weight: float,
+    max_label_length: int,
+    stats: SignalBuildStats,
 ) -> None:
     if not log:
         return
@@ -199,7 +283,8 @@ def _merge_reason_scores(
     if not isinstance(attribution, dict):
         return
 
-    intents = _reason_intents(attribution)
+    intents, dropped_intents = _reason_intents(attribution, max_label_length=max_label_length)
+    stats.invalid_reason_intents_dropped += dropped_intents
     if not intents:
         return
 
@@ -224,17 +309,29 @@ def _signal_doc_from_state(
     item_id: str,
     state: dict[str, Any],
     updated_at: str,
+    derivation: dict[str, Any],
 ) -> dict[str, Any]:
+    settings = get_settings()
     positive_score = _round_score(state["positive_score"])
     negative_score = _round_score(state["negative_score"])
     implicit_score = _round_score(positive_score - negative_score)
     confidence = _round_score(
         state["event_counts"]["impression"] * 0.1 + positive_score + negative_score
     )
+    contributions = {
+        key: _round_score(value)
+        for key, value in state["contributions"].items()
+    }
     reason_scores = sorted(
         state["reason_scores"].values(),
         key=lambda reason: (-float(reason["score"]), reason["intent"], reason["source"]),
     )[:10]
+    preference = _is_preference(implicit_score=implicit_score, contributions=contributions, settings=settings)
+    seed_eligible = _is_seed_eligible(
+        negative_score=negative_score,
+        contributions=contributions,
+        settings=settings,
+    )
 
     doc = UserItemSignalDocument(
         _id={"user_id_hash": user_id_hash, "item_id": item_id},
@@ -244,11 +341,20 @@ def _signal_doc_from_state(
         confidence=confidence,
         positive_score=positive_score,
         negative_score=negative_score,
-        preference=implicit_score > 0 and positive_score >= 1.0,
+        preference=preference,
+        seed_eligible=seed_eligible,
+        intent_tier=_intent_tier(
+            contributions=contributions,
+            positive_score=positive_score,
+            negative_score=negative_score,
+            event_counts=state["event_counts"],
+        ),
+        contributions=contributions,
         event_counts=state["event_counts"],
         reason_scores=reason_scores,
         first_interaction_at=state["first_interaction_at"],
         last_interaction_at=state["last_interaction_at"],
+        derivation=derivation,
         updated_at=updated_at,
     )
     return to_mongo_dict(doc)
@@ -299,7 +405,9 @@ def build_signal_artifacts(
     updated_at: str | None = None,
 ) -> SignalBuildArtifacts:
     updated_at = updated_at or utc_now_iso()
+    settings = get_settings()
     recommendation_logs_by_key = recommendation_logs_by_key or {}
+    derivation = _signal_derivation(updated_at=updated_at, events=events, partial_build=False)
     stats = SignalBuildStats(events_seen=len(events))
     signal_states: dict[tuple[str, str], dict[str, Any]] = {}
     item_states: dict[str, dict[str, Any]] = {}
@@ -321,7 +429,7 @@ def build_signal_artifacts(
         processed_event_ids.append(event_id)
 
         timestamp = _event_timestamp(event)
-        positive_weight = _positive_weight(event)
+        positive_weight, positive_tier = _positive_weight(event, settings)
         negative_weight = _negative_weight(event)
         event_weight = positive_weight - negative_weight
         log_key = (str(event.get("request_id") or "").strip(), item_id)
@@ -336,6 +444,7 @@ def build_signal_artifacts(
                 "event_counts": _empty_event_counts(),
                 "positive_score": 0.0,
                 "negative_score": 0.0,
+                "contributions": _empty_contributions(),
                 "first_interaction_at": None,
                 "last_interaction_at": None,
                 "reason_scores": {},
@@ -344,9 +453,18 @@ def build_signal_artifacts(
         signal_state["event_counts"][event_type] += 1
         signal_state["positive_score"] += positive_weight
         signal_state["negative_score"] += negative_weight
+        if positive_tier is not None:
+            signal_state["contributions"][positive_tier] += positive_weight
         signal_state["first_interaction_at"] = _min_timestamp(signal_state["first_interaction_at"], timestamp)
         signal_state["last_interaction_at"] = _max_timestamp(signal_state["last_interaction_at"], timestamp)
-        _merge_reason_scores(signal_state["reason_scores"], event=event, log=log, event_weight=event_weight)
+        _merge_reason_scores(
+            signal_state["reason_scores"],
+            event=event,
+            log=log,
+            event_weight=event_weight,
+            max_label_length=settings.profile_label_max_length,
+            stats=stats,
+        )
 
         item_state = item_states.setdefault(
             item_id,
@@ -360,8 +478,17 @@ def build_signal_artifacts(
         item_state["first_seen_at"] = _min_timestamp(item_state["first_seen_at"], timestamp)
         item_state["last_interaction_at"] = _max_timestamp(item_state["last_interaction_at"], timestamp)
 
+    for state in signal_states.values():
+        _apply_repeat_positive_bonus(state, settings=settings)
+
     signal_docs = [
-        _signal_doc_from_state(user_id_hash=user_id_hash, item_id=item_id, state=state, updated_at=updated_at)
+        _signal_doc_from_state(
+            user_id_hash=user_id_hash,
+            item_id=item_id,
+            state=state,
+            updated_at=updated_at,
+            derivation=derivation,
+        )
         for (user_id_hash, item_id), state in sorted(signal_states.items())
     ]
     item_stats_docs = [
@@ -523,6 +650,9 @@ def build_user_item_signals(
         recommendation_logs_by_key=logs_by_key,
         updated_at=updated_at,
     )
+    derivation = _signal_derivation(updated_at=updated_at, events=events, partial_build=limit_events is not None)
+    for signal_doc in artifacts.signal_docs:
+        signal_doc["derivation"] = dict(derivation)
     stats = artifacts.stats
 
     if write:

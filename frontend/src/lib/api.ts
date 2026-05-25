@@ -179,12 +179,28 @@ export type DebugUserResponse = {
     recent_events: Record<string, unknown>[];
     cf_edges: Record<string, unknown>[];
     freshness: {
-        state: "current" | "stale" | "unknown";
+        state: "current" | "stale" | "stale_version" | "unknown";
         latest_event_at?: string | null;
         signal_built_at?: string | null;
         profile_built_at?: string | null;
+        cf_built_at?: string | null;
         pending_event_count: number;
         stale_components: string[];
+        model_versions: {
+            configured: {
+                signal_model_version: string;
+                profile_model_version: string;
+                cf_model_version: string;
+                explanation_version: string;
+            };
+            stored: {
+                signal_model_version?: string | null;
+                profile_model_version?: string | null;
+                cf_model_version?: string | null;
+                explanation_version?: string | null;
+            };
+            stale_version_components: string[];
+        };
     };
 };
 
@@ -192,6 +208,12 @@ export type DemoStatusResponse = {
     ok: boolean;
     protected_collections: string[];
     counts: Record<string, number>;
+    model_versions: {
+        signal_model_version: string;
+        profile_model_version: string;
+        cf_model_version: string;
+        explanation_version: string;
+    };
     cf_evidence_available: boolean;
     precomputed_cf_note: string;
 };

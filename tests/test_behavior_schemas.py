@@ -83,8 +83,10 @@ def test_user_item_signal_and_profile_contracts_are_behavior_derived_shapes() ->
     profile = UserProfileDocument(user_id_hash="u_demo", profile_status="warming")
     assert signal.preference is False
     assert signal.event_counts.click == 0
+    assert signal.derivation.model_version == ""
     assert profile.profile_quality.num_events == 0
     assert profile.interest_vectors == []
+    assert profile.derivation.partial_build is False
 
 
 def test_item_hype_profile_validates_embedding_dimension_and_finiteness() -> None:
@@ -119,3 +121,4 @@ def test_recommendation_neighbor_and_cf_edge_contracts_are_distinct() -> None:
     assert semantic_neighbors.neighbors[0].source == "hype_unit_vector_search"
     assert cf_edge.support == 3
     assert "Users who interacted" in cf_edge.explanation
+    assert cf_edge.derivation.model_version == ""

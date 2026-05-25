@@ -2,6 +2,22 @@
 **Last updated:** May 2026  
 **Based on:** Actual codebase as implemented
 
+## Status Update - 2026-05-25
+
+This v3.4 report should now be read as a baseline snapshot, not the latest closeout summary.
+
+Important current-state notes:
+
+- The repo now includes the shipped API, React frontend, Phase 12 evaluation flow, and Phase 13 demo reset/recovery flow.
+- Bundle A and Bundle B personalization fixes have been implemented, rebuilt on live demo data, and re-validated.
+- Fresh post-closeout evidence lives under `.runtime/evaluation/bundle_ab_closeout_20260525/`.
+- The backlog table below has been normalized so delivered items are marked as historical completions and remaining gaps stay visible as open backlog.
+
+For current closeout evidence and latest personalization status, prefer:
+
+- `RECOMMENDATION_ENHANCEMENT_PLAN_AFTER_AUDIT.md`
+- `.runtime/evaluation/bundle_ab_closeout_20260525/`
+
 > ⚠️ Note: The original spec below (v3.3) represents the 
 > initial target architecture. This section documents what 
 > was actually built and any deviations from the original plan.
@@ -40,17 +56,17 @@
 
 ---
 
-## ❌ Not yet implemented
+## Backlog And Historical Gaps
 
 | Component | Spec Said | Status | Priority |
 |-----------|-----------|--------|----------|
-| CRAG reliability layer | `accept` / `corrected` / `fallback_broad` | Not built | Medium |
-| Query negation detection | `exclude_categories` from query | Not built | Medium |
-| Dynamic fusion weights | By `query_type` | Not built | Low |
-| Diversity cap | 3 items/category | Not built | Low |
-| Recency/seller/metadata scoring | Additional score signals | Not built | Low |
-| Buyer UI | Query inspector + result cards | Not built | High |
-| Additional categories beyond All_Beauty + Cell_Phones_and_Accessories | Broader multi-category dataset | Not built | Low |
+| CRAG reliability layer | `accept` / `corrected` / `fallback_broad` | Open backlog | Medium |
+| Query negation detection | `exclude_categories` from query | Open backlog | Medium |
+| Dynamic fusion weights | By `query_type` | Open backlog | Low |
+| Diversity cap | 3 items/category | Open backlog | Low |
+| Recency/seller/metadata scoring | Additional score signals | Open backlog | Low |
+| Buyer UI | Query inspector + result cards | Shipped later in Phase 11 React frontend work | Done |
+| Additional categories beyond All_Beauty + Cell_Phones_and_Accessories | Broader multi-category dataset | Open backlog | Low |
 
 ---
 
@@ -853,7 +869,7 @@ Total indexing for 3,000 items (with precomputed LLM): ~2.5–4 giờ offline
 | **P4** | **$rankFusion Compatibility Issue** | `$rankFusion` requires MongoDB 8.1+, Atlas M10+ ($57/mo). Atlas M0 (free tier) không support. Preview feature có thể thay đổi behavior. | **✅ ĐÃ XỬ LÝ:** `$unionWith` fallback pipeline hoàn chỉnh. Fallback quality is comparable for demo, but should be validated against $rankFusion. Thiết kế dual-mode: detect MongoDB version, auto-select implementation. Documentation rõ ràng cho cả hai mode. |
 | **P5** | **Agentic Web Enrichment Instability** | Live Tavily web search trong demo: (1) chậm (network latency), (2) nguồn không đồng nhất (dữ liệu thay đổi), (3) hallucination từ LLM synthesis, (4) có thể gây demo fail. | **✅ ĐÃ XỬ LÝ (strategy adjustment):** MVP 3,000 items đã được lọc content-rich nên không cần enrichment trong core insert path. Demo có thể pre-compute Tavily enrichment offline cho 50–100 sản phẩm showcase, lưu với `source: "tavily_web_search"`, `seller_confirmed: false`. Live enrichment là **optional showcase**, không phải core path. |
 | **P6** | **Seller Spam / Metadata Noise** | Nhà bán hàng nhồi từ khóa không liên quan vào description để "hack" HyPE generation, tạo ra vector rác ô nhiễm semantic space. | **🔄 PARTIALLY ADDRESSED:** `content_richness` contributes a small score bonus and generation is grounded in source text. **NEXT:** content quality gate, max retrieval_units per item, seller reputation signal, and gated cold-start boost threshold. |
-| **P7** | **Diversity Collapse** | Top-10 results có thể đều là cùng một category (ví dụ: 10 phone cases). | **🔄 NOT YET IMPLEMENTED:** Current pipeline sorts by score and returns `top_k`. Category diversity cap is planned for the next ranking iteration. |
+| **P7** | **Diversity Collapse** | Top-10 results có thể đều là cùng một category (ví dụ: 10 phone cases). | **🔄 OPEN BACKLOG:** Current pipeline still sorts by score and returns `top_k`. Category diversity cap remains a later ranking improvement, not part of the current closeout bundle. |
 | **P8** | **Cold-Start Boost gây Irrelevant Results** | Cold boost không có điều kiện → items mới nhưng không liên quan bị đẩy lên cao, gây friction với user. | **🔄 PARTIALLY ADDRESSED:** boost is small (`0.03`) and comes after vector/BM25 relevance. **NEXT:** gate boost by minimum `fusion_score` / quality threshold. |
 | **P9** | **$vectorSearch Pipeline Placement** | MongoDB docs: `$vectorSearch` không được dùng trong `$facet` hoặc `$lookup`. Đặt sai position trong pipeline gây build failure. | **✅ ĐÃ XỬ LÝ:** `$vectorSearch` luôn ở stage đầu tiên của pipeline (hoặc trong sub-pipeline của `$rankFusion`). Không bao giờ nest trong `$facet`/`$lookup`. |
 | **P10** | **LLM at Query Time (latency bomb)** | Bất kỳ LLM call đồng bộ nào trong query path — dù model nhỏ — thêm 200–1000ms, phá vỡ latency budget. | **🔄 PARTIALLY ADDRESSED:** `run_search()` itself has no LLM calls, but `process_query()` currently uses Qwen translation for Vietnamese queries. **NEXT:** cache translations and add a rule/dictionary fast path for common Vietnamese shopping queries. |

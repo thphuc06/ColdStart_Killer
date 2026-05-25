@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.schemas import DerivationMetadata
 from src.utils import utc_now_iso
 
 
@@ -93,6 +94,7 @@ class ItemItemCFEdgeDocument(BaseModel):
     confidence: float = 0.0
     top_common_user_hashes_sample: list[str] = Field(default_factory=list)
     explanation: str = "Users who interacted with this item also interacted with this recommendation."
+    derivation: DerivationMetadata = Field(default_factory=DerivationMetadata)
     updated_at: str = Field(default_factory=utc_now_iso)
 
     model_config = {"populate_by_name": True}

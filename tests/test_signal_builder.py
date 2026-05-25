@@ -194,15 +194,26 @@ def test_positive_events_create_positive_signal_and_preserve_recommendation_attr
     assert signal["event_counts"]["impression"] == 1
     assert signal["event_counts"]["click"] == 1
     assert signal["event_counts"]["view_detail"] == 1
-    assert signal["positive_score"] == 2.5
+    assert signal["positive_score"] == 1.85
     assert signal["negative_score"] == 0.0
-    assert signal["implicit_score"] == 2.5
+    assert signal["implicit_score"] == 1.85
     assert signal["preference"] is True
+    assert signal["seed_eligible"] is True
+    assert signal["intent_tier"] == "engaged"
+    assert signal["contributions"] == {
+        "exploratory": 0.35,
+        "engaged": 1.5,
+        "conversion": 0.0,
+    }
     assert signal["first_interaction_at"] == "2026-01-01T00:00:00+00:00"
     assert signal["last_interaction_at"] == "2026-01-01T00:02:00+00:00"
     assert signal["reason_scores"][0]["intent"] == "oil-control sunscreen"
     assert signal["reason_scores"][0]["source"] == "profile_seed"
     assert signal["reason_scores"][0]["score"] > 0.0
+    assert signal["derivation"]["model_version"]
+    assert signal["derivation"]["source_collection"] == "clickstream_events"
+    assert signal["derivation"]["source_event_count"] == 3
+    assert signal["derivation"]["built_at"] == FIXED_NOW
 
 
 def test_product_facts_and_unit_ids_do_not_become_interest_reasons() -> None:
@@ -220,6 +231,19 @@ def test_product_facts_and_unit_ids_do_not_become_interest_reasons() -> None:
     assert result["sample_signals"][0]["reason_scores"] == []
 
 
+def test_invalid_reason_intents_are_dropped_and_counted() -> None:
+    uuid_like_intent = "550e8400-e29b-41d4-a716-446655440000"
+    product_fact = "The smartphone has a 6.4-inch Super AMOLED capacitive touchscreen with 16M colors."
+    result = _run_builder(
+        [_event("evt_click", "click")],
+        [_recommendation_log(intents=[uuid_like_intent, product_fact, "oil-control sunscreen"])],
+    )
+
+    signal = result["sample_signals"][0]
+    assert [reason["intent"] for reason in signal["reason_scores"]] == ["oil-control sunscreen"]
+    assert result["stats"]["invalid_reason_intents_dropped"] == 2
+
+
 def test_hide_and_dislike_create_negative_signal() -> None:
     result = _run_builder(
         [
@@ -233,8 +257,46 @@ def test_hide_and_dislike_create_negative_signal() -> None:
     assert signal["negative_score"] == 5.0
     assert signal["implicit_score"] == -5.0
     assert signal["preference"] is False
+    assert signal["seed_eligible"] is False
+    assert signal["intent_tier"] == "negative"
     assert signal["event_counts"]["hide"] == 1
     assert signal["event_counts"]["dislike"] == 1
+
+
+def test_short_detail_only_stays_exploratory_and_cannot_seed() -> None:
+    result = _run_builder(
+        [
+            _event("evt_imp", "impression", timestamp="2026-01-01T00:00:00+00:00"),
+            _event("evt_view", "view_detail", dwell_time_ms=4_000, timestamp="2026-01-01T00:01:00+00:00"),
+        ],
+        [_recommendation_log()],
+    )
+
+    signal = result["sample_signals"][0]
+    assert signal["positive_score"] == 0.1
+    assert signal["preference"] is False
+    assert signal["seed_eligible"] is False
+    assert signal["intent_tier"] == "exploratory"
+    assert signal["contributions"] == {
+        "exploratory": 0.1,
+        "engaged": 0.0,
+        "conversion": 0.0,
+    }
+
+
+def test_single_click_stays_preference_but_not_seed_eligible() -> None:
+    result = _run_builder(
+        [
+            _event("evt_click", "click", timestamp="2026-01-01T00:01:00+00:00"),
+        ],
+        [_recommendation_log()],
+    )
+
+    signal = result["sample_signals"][0]
+    assert signal["positive_score"] == 0.35
+    assert signal["preference"] is True
+    assert signal["seed_eligible"] is False
+    assert signal["intent_tier"] == "exploratory"
 
 
 def test_item_stats_counts_and_rates_are_deterministic() -> None:
@@ -309,7 +371,10 @@ def test_write_mode_is_idempotent_and_marks_events_processed_after_write() -> No
     assert signal_after_first["event_counts"]["impression"] == 1
     assert signal_after_first["event_counts"]["click"] == 1
     assert signal_after_first["event_counts"]["add_to_cart"] == 1
-    assert signal_after_first["positive_score"] == 4.0
+    assert signal_after_first["positive_score"] == 4.6
+    assert signal_after_first["seed_eligible"] is True
+    assert signal_after_first["intent_tier"] == "conversion"
+    assert signal_after_first["derivation"]["partial_build"] is False
     assert all(doc["processed"] is True for doc in clickstream.docs)
     assert all(doc["processed_at"] == FIXED_NOW for doc in clickstream.docs)
 

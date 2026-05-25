@@ -214,14 +214,25 @@ def load_user_signals(
         "item_id": 1,
         "implicit_score": 1,
         "positive_score": 1,
+        "negative_score": 1,
+        "seed_eligible": 1,
+        "intent_tier": 1,
+        "contributions": 1,
         "event_counts": 1,
         "last_interaction_at": 1,
         "preference": 1,
     }
     docs = _collection_docs(user_item_signals_collection, {"user_id_hash": user_id_hash}, projection)
+
+    def deliberate_score(doc: dict[str, Any]) -> float:
+        contributions = doc.get("contributions") if isinstance(doc.get("contributions"), dict) else {}
+        return _safe_float(contributions.get("engaged"), 0.0) + _safe_float(contributions.get("conversion"), 0.0)
+
     ranked = sorted(
         docs,
         key=lambda doc: (
+            bool(doc.get("seed_eligible")),
+            deliberate_score(doc),
             _safe_float(doc.get("implicit_score"), 0.0),
             _safe_float(doc.get("positive_score"), 0.0),
             str(doc.get("last_interaction_at") or ""),

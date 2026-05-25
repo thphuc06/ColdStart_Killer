@@ -7,6 +7,22 @@
 **Primary stack:** React + Vite + TypeScript + Tailwind/shadcn UI, Core Required HTTP API layer, Python service modules, FastAPI recommended but replaceable, PyMongo, MongoDB Atlas  
 **Core rule:** keep the existing HyPE + BM25 + `$unionWith` RRF retrieval core intact.
 
+## Status Update - 2026-05-25
+
+This file remains the canonical product/architecture plan, but its execution status has advanced significantly since the original planning pass.
+
+Current execution snapshot:
+
+- Core implementation phases through Phase 13 have been delivered for the demo branch.
+- The behavior pipeline, API layer, React frontend, evaluation flow, and demo reset/recovery workflow are live in the repo.
+- Bundle A and Bundle B recommendation enhancements have been implemented, rebuilt on the live demo database, and re-validated.
+- Remaining forward-looking scope is primarily Phase 14 and later improvement batches.
+
+Latest execution evidence:
+
+- `RECOMMENDATION_ENHANCEMENT_PLAN_AFTER_AUDIT.md`
+- `.runtime/evaluation/bundle_ab_closeout_20260525/`
+
 This document replaces the planning role of the two earlier plan files. It is a ready-to-implement canonical plan for upgrading ColdStart Killer from a cold-start hybrid retrieval engine into a personalized recommendation engine with behavior logging, user profiles, item-item collaborative filtering, React demo UI, explainability, and evaluation.
 
 ---

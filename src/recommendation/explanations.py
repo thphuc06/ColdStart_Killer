@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.config import get_settings
 from src.retrieval_output import cold_start_note
 
 
@@ -12,21 +13,36 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _positive_contribution(candidate: dict[str, Any], channel: str, raw_field: str) -> bool:
+def _channel_contribution(candidate: dict[str, Any], channel: str, raw_field: str) -> float:
     contributions = candidate.get("contributions")
     if isinstance(contributions, dict):
-        return _safe_float(contributions.get(channel), 0.0) > 0
-    return _safe_float(candidate.get(raw_field), 0.0) > 0
+        return _safe_float(contributions.get(channel), 0.0)
+    return _safe_float(candidate.get(raw_field), 0.0)
 
 
-def build_reason_badges(candidate: dict[str, Any]) -> list[str]:
+def _positive_contribution(
+    candidate: dict[str, Any],
+    channel: str,
+    raw_field: str,
+    *,
+    min_contribution: float = 0.0,
+) -> bool:
+    return _channel_contribution(candidate, channel, raw_field) >= min_contribution
+
+
+def build_reason_badges(candidate: dict[str, Any], *, profile_reason_min_contribution: float = 0.0) -> list[str]:
     badges: list[str] = []
     matched_channels = {str(value) for value in candidate.get("matched_channels", [])}
     if candidate.get("matched_intent") or "vector" in matched_channels or "semantic_neighbor" in matched_channels:
         badges.append("HyPE semantic")
     if candidate.get("matched_fact") or "bm25" in matched_channels:
         badges.append("BM25 fact")
-    if _positive_contribution(candidate, "profile", "profile_score_raw"):
+    if _positive_contribution(
+        candidate,
+        "profile",
+        "profile_score_raw",
+        min_contribution=profile_reason_min_contribution,
+    ):
         badges.append("Profile")
     if _safe_float(candidate.get("item_item_cf_score_raw"), 0.0) > 0:
         badges.append("Collaborative Filtering")
@@ -37,7 +53,12 @@ def build_reason_badges(candidate: dict[str, Any]) -> list[str]:
     return badges
 
 
-def build_explanations(candidate: dict[str, Any], *, surface: str) -> list[str]:
+def build_explanations(
+    candidate: dict[str, Any],
+    *,
+    surface: str,
+    profile_reason_min_contribution: float = 0.0,
+) -> list[str]:
     explanations: list[str] = []
 
     cf_evidence = candidate.get("cf_evidence") if isinstance(candidate.get("cf_evidence"), dict) else None
@@ -60,7 +81,15 @@ def build_explanations(candidate: dict[str, Any], *, surface: str) -> list[str]:
         explanations.append(f"Matched product fact: {matched_fact}.")
 
     profile_label = str(candidate.get("profile_interest_label") or "").strip()
-    if _positive_contribution(candidate, "profile", "profile_score_raw") and profile_label:
+    if (
+        _positive_contribution(
+            candidate,
+            "profile",
+            "profile_score_raw",
+            min_contribution=profile_reason_min_contribution,
+        )
+        and profile_label
+    ):
         explanations.append(f"Boosted because it matches your {profile_label} interest.")
 
     if _safe_float(candidate.get("exploration_score_raw"), 0.0) > 0 and surface == "home":
@@ -82,13 +111,24 @@ def build_result_card(
     algorithm_version: str,
     ranking_version: str,
 ) -> dict[str, Any]:
-    explanations = build_explanations(candidate, surface=surface)
+    settings = get_settings()
+    profile_reason_min_contribution = max(0.0, settings.profile_reason_min_contribution)
+    explanations = build_explanations(
+        candidate,
+        surface=surface,
+        profile_reason_min_contribution=profile_reason_min_contribution,
+    )
     matched_channels = list(candidate.get("matched_channels", []))
     candidate_sources = list(candidate.get("candidate_sources", []))
     matched_intent = str(candidate.get("matched_intent") or "")
     matched_fact = str(candidate.get("matched_fact") or "")
 
-    profile_contributes = _positive_contribution(candidate, "profile", "profile_score_raw")
+    profile_contributes = _positive_contribution(
+        candidate,
+        "profile",
+        "profile_score_raw",
+        min_contribution=profile_reason_min_contribution,
+    )
     return {
         "request_id": request_id,
         "surface": surface,
@@ -113,7 +153,10 @@ def build_result_card(
         "scores": dict(candidate.get("scores") or candidate.get("score_breakdown") or {}),
         "score_breakdown": dict(candidate.get("score_breakdown") or candidate.get("scores") or {}),
         "contributions": dict(candidate.get("contributions") or {}),
-        "reason_badges": build_reason_badges(candidate),
+        "reason_badges": build_reason_badges(
+            candidate,
+            profile_reason_min_contribution=profile_reason_min_contribution,
+        ),
         "explanations": explanations,
         "candidate_sources": candidate_sources,
         "attribution": {

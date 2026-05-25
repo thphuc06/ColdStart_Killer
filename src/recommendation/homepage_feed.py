@@ -76,15 +76,31 @@ def _user_state(profile: dict[str, Any] | None) -> str:
     return "new"
 
 
-def _source_item_ids(profile: dict[str, Any] | None, signals: list[dict[str, Any]]) -> list[str]:
-    ordered = []
-    if profile and isinstance(profile.get("recent_item_ids"), list):
-        ordered.extend(profile.get("recent_item_ids", []))
-    ordered.extend(signal.get("item_id") for signal in signals)
+def _seed_signal_score(signal: dict[str, Any]) -> float:
+    contributions = signal.get("contributions") if isinstance(signal.get("contributions"), dict) else {}
+    return float(contributions.get("engaged") or 0.0) + float(contributions.get("conversion") or 0.0)
+
+
+def _source_item_ids(signals: list[dict[str, Any]]) -> list[str]:
+    ordered = [
+        signal
+        for signal in sorted(
+            signals,
+            key=lambda signal: (
+                bool(signal.get("seed_eligible")),
+                _seed_signal_score(signal),
+                float(signal.get("positive_score") or 0.0),
+                str(signal.get("last_interaction_at") or ""),
+            ),
+            reverse=True,
+        )
+        if bool(signal.get("seed_eligible"))
+    ]
 
     result: list[str] = []
     seen: set[str] = set()
-    for item_id in ordered:
+    for signal in ordered:
+        item_id = signal.get("item_id")
         normalized = str(item_id or "").strip()
         if not normalized or normalized in seen:
             continue
@@ -172,7 +188,7 @@ def get_homepage_feed(
         item_hype_profiles_collection=item_hype_profiles_collection,
         use_cache=use_catalog_cache,
     )
-    seed_item_ids = _source_item_ids(profile, signals)
+    seed_item_ids = _source_item_ids(signals)
 
     profile_rows = build_profile_candidates(
         profile,

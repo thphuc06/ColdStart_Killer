@@ -26,6 +26,20 @@ function FieldRow({ label, value }: { label: string; value: string | number | nu
 }
 
 
+function formatVersionStatus(stored: string | null | undefined, configured: string | null | undefined) {
+    if (!stored && !configured) {
+        return "n/a";
+    }
+    if (!stored) {
+        return `stored: n/a | expected: ${configured ?? "n/a"}`;
+    }
+    if (!configured || stored === configured) {
+        return stored;
+    }
+    return `stored: ${stored} | expected: ${configured}`;
+}
+
+
 const SOFT_RESET_RECOVERY_STEPS = [
     "Re-seed recommendation logs and clickstream events.",
     "Build user_item_signals and rebuild item_stats.",
@@ -108,6 +122,11 @@ export function DebugPage() {
 
     const profileQuality = debugQuery.data?.profile?.profile_quality as Record<string, unknown> | undefined;
     const freshness = debugQuery.data?.freshness;
+    const configuredVersions = freshness?.model_versions?.configured ?? demoStatusQuery.data?.model_versions;
+    const storedVersions = freshness?.model_versions?.stored;
+    const staleVersionComponents = freshness?.model_versions?.stale_version_components ?? [];
+    const profileWriteBlocked = profileWrite && profileLimitUsers.trim().length > 0;
+    const cfWriteBlocked = cfWrite && cfLimitUsers.trim().length > 0;
 
     return (
         <div className="space-y-8">
@@ -164,16 +183,66 @@ export function DebugPage() {
                     </div>
                     {freshness ? (
                         <div className="mt-5 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-3">
-                            <StatusBadge tone={freshness.state === "stale" ? "amber" : freshness.state === "current" ? "mint" : "sky"}>
-                                {freshness.state === "stale" ? "Derived data stale" : freshness.state === "current" ? "Derived data current" : "Freshness unknown"}
+                            <StatusBadge
+                                tone={
+                                    freshness.state === "stale_version"
+                                        ? "rose"
+                                        : freshness.state === "stale"
+                                            ? "amber"
+                                            : freshness.state === "current"
+                                                ? "mint"
+                                                : "sky"
+                                }
+                            >
+                                {freshness.state === "stale_version"
+                                    ? "Derived version mismatch"
+                                    : freshness.state === "stale"
+                                        ? "Derived data stale"
+                                        : freshness.state === "current"
+                                            ? "Derived data current"
+                                            : "Freshness unknown"}
                             </StatusBadge>
                             <div className="mt-3">
                                 <FieldRow label="Pending events" value={freshness.pending_event_count} />
                                 <FieldRow label="Latest event" value={freshness.latest_event_at ?? "n/a"} />
                                 <FieldRow label="Signals built" value={freshness.signal_built_at ?? "n/a"} />
                                 <FieldRow label="Profile built" value={freshness.profile_built_at ?? "n/a"} />
+                                <FieldRow label="CF built" value={freshness.cf_built_at ?? "n/a"} />
                             </div>
-                            {freshness.stale_components.length ? (
+                            {configuredVersions ? (
+                                <div className="mt-4 border-t border-[var(--line-soft)] pt-3">
+                                    <p className="soft-label">Model versions</p>
+                                    <div className="mt-2">
+                                        <FieldRow
+                                            label="Signals"
+                                            value={formatVersionStatus(
+                                                storedVersions?.signal_model_version,
+                                                configuredVersions.signal_model_version,
+                                            )}
+                                        />
+                                        <FieldRow
+                                            label="Profiles"
+                                            value={formatVersionStatus(
+                                                storedVersions?.profile_model_version,
+                                                configuredVersions.profile_model_version,
+                                            )}
+                                        />
+                                        <FieldRow
+                                            label="CF"
+                                            value={formatVersionStatus(
+                                                storedVersions?.cf_model_version,
+                                                configuredVersions.cf_model_version,
+                                            )}
+                                        />
+                                        <FieldRow label="Explanations" value={configuredVersions.explanation_version} />
+                                    </div>
+                                </div>
+                            ) : null}
+                            {staleVersionComponents.length ? (
+                                <p className="mt-2 text-xs text-[var(--rose)]">
+                                    Version rebuild required: {staleVersionComponents.join(", ")}.
+                                </p>
+                            ) : freshness.stale_components.length ? (
                                 <p className="mt-2 text-xs text-[var(--ink-soft)]">
                                     Rebuild required: {freshness.stale_components.join(", ")}.
                                 </p>
@@ -251,6 +320,17 @@ export function DebugPage() {
                                     <FieldRow key={name} label={name} value={demoStatusQuery.data?.counts?.[name] ?? "n/a"} />
                                 ))}
                             </div>
+                            {demoStatusQuery.data?.model_versions ? (
+                                <div className="mt-4 border-t border-[var(--line-soft)] pt-3">
+                                    <p className="soft-label">Configured versions</p>
+                                    <div className="mt-2 space-y-2">
+                                        <FieldRow label="Signals" value={demoStatusQuery.data.model_versions.signal_model_version} />
+                                        <FieldRow label="Profiles" value={demoStatusQuery.data.model_versions.profile_model_version} />
+                                        <FieldRow label="CF" value={demoStatusQuery.data.model_versions.cf_model_version} />
+                                        <FieldRow label="Explanations" value={demoStatusQuery.data.model_versions.explanation_version} />
+                                    </div>
+                                </div>
+                            ) : null}
                         </div>
                     </div>
                 </div>
@@ -415,9 +495,14 @@ export function DebugPage() {
                                 <input checked={profileWrite} type="checkbox" onChange={(event) => setProfileWrite(event.target.checked)} />
                                 write mode
                             </label>
+                            <p className={`mt-2 text-xs leading-5 ${profileWriteBlocked ? "text-[var(--rose)]" : "text-[var(--ink-soft)]"}`}>
+                                {profileWriteBlocked
+                                    ? "Write mode requires a full rebuild. Clear the user limit first."
+                                    : "Use limit users for dry-run inspection only."}
+                            </p>
                             <button
                                 className="action-button action-button-secondary mt-3 w-full"
-                                disabled={profileMutation.isPending}
+                                disabled={profileMutation.isPending || profileWriteBlocked}
                                 onClick={() =>
                                     profileMutation.mutate({
                                         limitUsers: profileLimitUsers ? Number(profileLimitUsers) : undefined,
@@ -444,9 +529,14 @@ export function DebugPage() {
                                 <input checked={cfWrite} type="checkbox" onChange={(event) => setCfWrite(event.target.checked)} />
                                 write mode
                             </label>
+                            <p className={`mt-2 text-xs leading-5 ${cfWriteBlocked ? "text-[var(--rose)]" : "text-[var(--ink-soft)]"}`}>
+                                {cfWriteBlocked
+                                    ? "Write mode requires a full rebuild. Clear the user limit first."
+                                    : "Use limit users for dry-run inspection only."}
+                            </p>
                             <button
                                 className="action-button action-button-secondary mt-3 w-full"
-                                disabled={cfMutation.isPending}
+                                disabled={cfMutation.isPending || cfWriteBlocked}
                                 onClick={() =>
                                     cfMutation.mutate({
                                         limitUsers: cfLimitUsers ? Number(cfLimitUsers) : undefined,

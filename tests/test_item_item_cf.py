@@ -4,6 +4,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -123,6 +125,12 @@ def _signal(
             "hide": 0,
             "dislike": 0,
         },
+        "derivation": {
+            "model_version": "signal_test_v1",
+            "source_collection": "clickstream_events",
+            "source_event_count": 2,
+            "built_at": last_interaction_at,
+        },
         "last_interaction_at": last_interaction_at,
     }
 
@@ -162,6 +170,9 @@ def test_build_item_item_cf_creates_symmetric_edges_with_support_and_event_evide
     assert edge_ab["co_purchase_count"] == 1
     assert math.isclose(edge_ab["cf_score"], 3.0)
     assert math.isclose(edge_ba["cf_score"], 3.0)
+    assert edge_ab["derivation"]["model_version"]
+    assert edge_ab["derivation"]["source_signal_model_version"] == "signal_test_v1"
+    assert edge_ab["derivation"]["source_signal_count"] == 4
 
 
 def test_build_item_item_cf_applies_support_threshold_and_caps_items_per_user() -> None:
@@ -257,6 +268,21 @@ def test_build_item_item_cf_replace_existing_deletes_stale_edges_after_full_writ
 
     assert result["stats"]["stale_edges_deleted"] == 1
     assert {(doc["item_id"], doc["neighbor_item_id"]) for doc in edges.docs} == {("A", "B"), ("B", "A")}
+
+
+def test_build_item_item_cf_rejects_limited_write_mode() -> None:
+    with pytest.raises(ValueError, match="unsafe_partial_cf_write"):
+        build_item_item_cf_edges(
+            user_item_signals_collection=FakeCollection([
+                _signal("u1", "A", implicit_score=3.0),
+                _signal("u1", "B", implicit_score=2.0),
+            ]),
+            items_collection=FakeCollection([_item("A"), _item("B")]),
+            item_item_cf_edges_collection=FakeCollection([]),
+            write=True,
+            limit_users=1,
+            updated_at=FIXED_NOW,
+        )
 
 
 def test_phase7_script_dry_run_does_not_write_edges(monkeypatch, capsys) -> None:

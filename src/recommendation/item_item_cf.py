@@ -9,6 +9,7 @@ from typing import Any
 
 from pymongo import UpdateOne
 
+from src.config import get_settings
 from src.recommendation.schemas import ItemItemCFEdgeDocument
 from src.schemas import to_mongo_dict
 from src.utils import utc_now_iso
@@ -118,6 +119,8 @@ def _load_positive_signals(user_item_signals_collection: Any) -> list[dict[str, 
         "preference": 1,
         "event_counts": 1,
         "last_interaction_at": 1,
+        "derivation": 1,
+        "updated_at": 1,
     }
     docs = [dict(doc) for doc in user_item_signals_collection.find({}, projection)]
     return [doc for doc in docs if _is_positive_signal(doc)]
@@ -156,6 +159,7 @@ def _build_edge_doc(
     cf_score: float,
     confidence: float,
     updated_at: str,
+    derivation: dict[str, Any],
 ) -> dict[str, Any]:
     doc = ItemItemCFEdgeDocument(
         _id=f"{item_id}::{neighbor_item_id}",
@@ -170,9 +174,36 @@ def _build_edge_doc(
         confidence=round(confidence, 6),
         top_common_user_hashes_sample=list(stats.get("user_hashes", []))[:5],
         explanation="Users who interacted with this item also interacted with this recommendation.",
+        derivation=derivation,
         updated_at=updated_at,
     )
     return to_mongo_dict(doc)
+
+
+def _source_signal_model_version(signal_docs: list[dict[str, Any]]) -> str | None:
+    versions = sorted(
+        {
+            str(signal.get("derivation", {}).get("model_version") or "").strip()
+            for signal in signal_docs
+            if isinstance(signal.get("derivation"), dict) and str(signal.get("derivation", {}).get("model_version") or "").strip()
+        }
+    )
+    if not versions:
+        return None
+    if len(versions) == 1:
+        return versions[0]
+    return "mixed"
+
+
+def _latest_signal_built_at(signal_docs: list[dict[str, Any]]) -> str | None:
+    timestamps = [
+        str(signal.get("derivation", {}).get("built_at") or signal.get("updated_at") or "").strip()
+        for signal in signal_docs
+        if str(signal.get("derivation", {}).get("built_at") or signal.get("updated_at") or "").strip()
+    ]
+    if not timestamps:
+        return None
+    return max(timestamps)
 
 
 def _edge_upsert_operation(doc: dict[str, Any]) -> UpdateOne:
@@ -227,7 +258,10 @@ def build_item_item_cf_edges(
         raise ValueError("replace_existing requires a full rebuild without limit_users")
     if write and item_item_cf_edges_collection is None:
         raise ValueError("item_item_cf_edges_collection is required when write=True")
+    if write and limit_users is not None:
+        raise ValueError("unsafe_partial_cf_write: limit_users may only be used in dry-run mode")
 
+    settings = get_settings()
     updated_at = updated_at or utc_now_iso()
     stats = CFBuildStats()
     signal_docs = _load_positive_signals(user_item_signals_collection)
@@ -335,6 +369,15 @@ def build_item_item_cf_edges(
     # Select whole pairs so per-item top-K pruning can never leave one-way CF evidence.
     edge_docs: list[dict[str, Any]] = []
     neighbor_counts: dict[str, int] = defaultdict(int)
+    derivation = {
+        "model_version": settings.cf_model_version,
+        "source_collection": "user_item_signals",
+        "source_signal_model_version": _source_signal_model_version(signal_docs) or settings.signal_model_version,
+        "source_signal_count": len(signal_docs),
+        "source_signal_built_at": _latest_signal_built_at(signal_docs),
+        "partial_build": limit_users is not None,
+        "built_at": updated_at,
+    }
     for cf_score, support, left_item_id, right_item_id, pair_state, confidence in sorted(
         ranked_pairs,
         key=lambda row: (-row[0], -row[1], row[2], row[3]),
@@ -351,6 +394,7 @@ def build_item_item_cf_edges(
                 cf_score=cf_score,
                 confidence=confidence,
                 updated_at=updated_at,
+                derivation=derivation,
             )
         )
         edge_docs.append(
@@ -361,6 +405,7 @@ def build_item_item_cf_edges(
                 cf_score=cf_score,
                 confidence=confidence,
                 updated_at=updated_at,
+                derivation=derivation,
             )
         )
         neighbor_counts[left_item_id] += 1

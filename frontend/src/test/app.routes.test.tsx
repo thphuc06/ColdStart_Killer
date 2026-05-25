@@ -158,6 +158,30 @@ const debugResponse = {
     recent_logs: [{ request_id: "req_home_1" }],
     recent_events: [{ event_type: "impression" }],
     cf_edges: [{ source_item_id: "item_1", neighbor_item_id: "item_2" }],
+    freshness: {
+        state: "stale_version",
+        latest_event_at: "2026-01-01T02:00:00+00:00",
+        signal_built_at: "2026-01-01T01:00:00+00:00",
+        profile_built_at: "2026-01-01T01:00:00+00:00",
+        cf_built_at: "2026-01-01T01:30:00+00:00",
+        pending_event_count: 1,
+        stale_components: ["signals", "profile"],
+        model_versions: {
+            configured: {
+                signal_model_version: "signal_v2_reason_hygiene",
+                profile_model_version: "profile_v2_clean_category_guard",
+                cf_model_version: "cf_v1_supported_edges",
+                explanation_version: "explain_v2_profile_threshold",
+            },
+            stored: {
+                signal_model_version: "signal_v1_legacy",
+                profile_model_version: "profile_v1_legacy",
+                cf_model_version: "cf_v1_supported_edges",
+                explanation_version: null,
+            },
+            stale_version_components: ["signal", "profile"],
+        },
+    },
 };
 
 const demoStatusResponse = {
@@ -170,6 +194,12 @@ const demoStatusResponse = {
         user_profiles: 4,
         item_stats: 7,
         item_item_cf_edges: 6,
+    },
+    model_versions: {
+        signal_model_version: "signal_v2_reason_hygiene",
+        profile_model_version: "profile_v2_clean_category_guard",
+        cf_model_version: "cf_v1_supported_edges",
+        explanation_version: "explain_v2_profile_threshold",
     },
     cf_evidence_available: true,
     precomputed_cf_note: "Existing CF edges may come from seeded/precomputed synthetic behavior.",
@@ -623,6 +653,22 @@ describe("Phase 11 routes", () => {
         expect(await screen.findByText("Top signals")).toBeInTheDocument();
         expect(await screen.findByText("Demo Recovery")).toBeInTheDocument();
         expect(await screen.findByText("items")).toBeInTheDocument();
+        expect(await screen.findByText("Derived version mismatch")).toBeInTheDocument();
+        expect(await screen.findByText("Version rebuild required: signal, profile.")).toBeInTheDocument();
+    });
+
+    it("disables authoritative profile rebuild when a user limit is present", async () => {
+        renderApp("/debug");
+
+        const profilesPanel = (await screen.findByText("Profiles")).closest("section");
+        expect(profilesPanel).not.toBeNull();
+        const profileScope = within(profilesPanel as HTMLElement);
+
+        fireEvent.change(profileScope.getByPlaceholderText("limit users (optional)"), { target: { value: "5" } });
+        fireEvent.click(profileScope.getAllByRole("checkbox", { name: "write mode" })[0]);
+
+        expect(profileScope.getByText("Write mode requires a full rebuild. Clear the user limit first.")).toBeInTheDocument();
+        expect(profileScope.getByRole("button", { name: "Rebuild profiles" })).toBeDisabled();
     });
 
     it("applies captured behavior through signals profiles and cf", async () => {

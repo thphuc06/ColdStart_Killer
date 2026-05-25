@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 from scripts.reset_demo_behavior_data import CATALOG_COLLECTIONS, execute_reset
 from src.behavior.profile_builder import build_user_profiles
 from src.behavior.signal_builder import build_user_item_signals
+from src.config import configured_model_versions, get_settings
 from src.behavior.synthetic_generator import (
     build_synthetic_behavior_plan,
     load_candidates_from_collections,
@@ -81,16 +82,62 @@ def _latest_timestamp(values: list[Any]) -> str | None:
     return str(max(valid, key=lambda row: row[1])[0])
 
 
+def _model_version_from_doc(doc: dict[str, Any] | None) -> str | None:
+    if not isinstance(doc, dict):
+        return None
+    derivation = doc.get("derivation") if isinstance(doc.get("derivation"), dict) else {}
+    version = str(derivation.get("model_version") or "").strip()
+    return version or None
+
+
+def _model_version_from_docs(docs: list[dict[str, Any]]) -> str | None:
+    versions = sorted({version for version in (_model_version_from_doc(doc) for doc in docs) if version})
+    if not versions:
+        return None
+    if len(versions) == 1:
+        return versions[0]
+    return "mixed"
+
+
+def _model_versions_snapshot(
+    *,
+    profile_doc: dict[str, Any] | None,
+    signals: list[dict[str, Any]],
+    cf_edges: list[dict[str, Any]],
+) -> dict[str, Any]:
+    configured = configured_model_versions(get_settings())
+    stored = {
+        "signal_model_version": _model_version_from_docs(signals),
+        "profile_model_version": _model_version_from_doc(profile_doc),
+        "cf_model_version": _model_version_from_docs(cf_edges),
+        "explanation_version": None,
+    }
+    stale_version_components = [
+        component_name.replace("_model_version", "")
+        for component_name, configured_version in configured.items()
+        if component_name != "explanation_version"
+        and stored.get(component_name) not in {None, configured_version}
+    ]
+    return {
+        "configured": configured,
+        "stored": stored,
+        "stale_version_components": stale_version_components,
+    }
+
+
 def _freshness_snapshot(
     *,
     profile_doc: dict[str, Any] | None,
     signals: list[dict[str, Any]],
     events: list[dict[str, Any]],
+    cf_edges: list[dict[str, Any]],
     pending_event_count: int,
 ) -> dict[str, Any]:
     latest_event_at = _latest_timestamp([event.get("timestamp") for event in events])
     signal_built_at = _latest_timestamp([signal.get("updated_at") for signal in signals])
     profile_built_at = str(profile_doc.get("updated_at") or "") or None if profile_doc else None
+    cf_built_at = _latest_timestamp([edge.get("updated_at") for edge in cf_edges])
+    model_versions = _model_versions_snapshot(profile_doc=profile_doc, signals=signals, cf_edges=cf_edges)
     latest_event_time = _parse_timestamp(latest_event_at)
     stale_components: list[str] = []
     for name, timestamp in (("signals", signal_built_at), ("profile", profile_built_at)):
@@ -99,14 +146,20 @@ def _freshness_snapshot(
             stale_components.append(name)
     if pending_event_count > 0 and "signals" not in stale_components:
         stale_components.append("signals")
-    state = "stale" if stale_components else ("current" if latest_event_at else "unknown")
+    state = (
+        "stale_version"
+        if model_versions["stale_version_components"]
+        else ("stale" if stale_components else ("current" if latest_event_at else "unknown"))
+    )
     return {
         "state": state,
         "latest_event_at": latest_event_at,
         "signal_built_at": signal_built_at,
         "profile_built_at": profile_built_at,
+        "cf_built_at": cf_built_at,
         "pending_event_count": pending_event_count,
         "stale_components": stale_components,
+        "model_versions": model_versions,
     }
 
 
@@ -155,6 +208,7 @@ def get_debug_user(user_id: str) -> dict[str, Any]:
             profile_doc=profile_doc,
             signals=signals,
             events=events,
+            cf_edges=cf_edges,
             pending_event_count=pending_event_count,
         ),
     }
@@ -212,6 +266,7 @@ def get_demo_status() -> dict[str, Any]:
         "ok": True,
         "protected_collections": sorted(CATALOG_COLLECTIONS),
         "counts": counts,
+        "model_versions": configured_model_versions(get_settings()),
         "cf_evidence_available": counts["item_item_cf_edges"] > 0,
         "precomputed_cf_note": (
             "Existing item_item_cf_edges may come from seeded/precomputed synthetic behavior. "
@@ -271,6 +326,15 @@ def process_events(limit: int | None = None, rebuild_item_stats: bool = True, wr
 
 @router.post("/debug/rebuild-profiles")
 def rebuild_profiles(limit_users: int | None = None, write: bool = False) -> dict[str, Any]:
+    if write and limit_users is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "partial_profile_write_blocked",
+                "message": "Writing profiles for a limited user subset would leave mixed derived state.",
+                "limit_users": limit_users,
+            },
+        )
     return build_user_profiles(
         user_item_signals_collection=get_user_item_signals_collection(),
         clickstream_events_collection=get_clickstream_events_collection(),
@@ -292,6 +356,15 @@ def rebuild_cf(
     top_neighbors_per_item: int = 50,
     write: bool = False,
 ) -> dict[str, Any]:
+    if write and limit_users is not None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "partial_cf_write_blocked",
+                "message": "Writing CF edges for a limited user subset would leave mixed derived state.",
+                "limit_users": limit_users,
+            },
+        )
     return build_item_item_cf_edges(
         user_item_signals_collection=get_user_item_signals_collection(),
         items_collection=get_items_collection(),

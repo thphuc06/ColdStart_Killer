@@ -288,6 +288,9 @@ def test_debug_user_route_returns_joined_debug_payload(monkeypatch) -> None:
     assert payload["freshness"]["state"] == "stale"
     assert payload["freshness"]["pending_event_count"] == 1
     assert payload["freshness"]["stale_components"] == ["signals", "profile"]
+    assert payload["freshness"]["cf_built_at"] is None
+    assert payload["freshness"]["model_versions"]["configured"]["signal_model_version"]
+    assert payload["freshness"]["model_versions"]["stored"]["signal_model_version"] is None
 
 
 def test_demo_reset_dry_run_reports_counts(monkeypatch) -> None:
@@ -478,6 +481,25 @@ def test_rebuild_cf_replaces_existing_edges_only_for_full_write(monkeypatch) -> 
     limited_response = client.post("/api/debug/rebuild-cf?write=true&limit_users=5")
 
     assert full_response.status_code == 200
-    assert limited_response.status_code == 200
+    assert limited_response.status_code == 400
     assert build_calls[0]["replace_existing"] is True
-    assert build_calls[1]["replace_existing"] is False
+    assert len(build_calls) == 1
+    assert limited_response.json()["detail"]["error"] == "partial_cf_write_blocked"
+
+
+def test_rebuild_profiles_rejects_limited_write(monkeypatch) -> None:
+    import src.api.routes_debug as routes_debug
+
+    build_calls = []
+    monkeypatch.setattr(
+        routes_debug,
+        "build_user_profiles",
+        lambda **kwargs: build_calls.append(kwargs) or {"ok": True},
+    )
+
+    client = TestClient(create_app())
+    response = client.post("/api/debug/rebuild-profiles?write=true&limit_users=5")
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "partial_profile_write_blocked"
+    assert build_calls == []

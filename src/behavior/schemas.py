@@ -6,12 +6,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from src.recommendation.schemas import EMBEDDING_DIM
+from src.schemas import DerivationMetadata
 from src.utils import utc_now_iso
 
 
 ProfileStatus = Literal["new", "onboarded", "warming", "warm"]
 RecommendationSurface = Literal["search", "home", "detail_similar", "seller_preview"]
 EventSurface = Literal["search", "home", "detail_similar", "cart", "onboarding", "debug"]
+SignalIntentTier = Literal["exposure", "exploratory", "engaged", "conversion", "negative"]
 EventType = Literal[
     "impression",
     "click",
@@ -232,6 +234,12 @@ class ReasonScore(BaseModel):
     last_seen_at: str | None = None
 
 
+class SignalTierContributions(BaseModel):
+    exploratory: float = 0.0
+    engaged: float = 0.0
+    conversion: float = 0.0
+
+
 class UserItemSignalDocument(BaseModel):
     id: UserItemSignalKey | None = Field(default=None, alias="_id")
     user_id_hash: str
@@ -241,10 +249,14 @@ class UserItemSignalDocument(BaseModel):
     positive_score: float = 0.0
     negative_score: float = 0.0
     preference: bool = False
+    seed_eligible: bool = False
+    intent_tier: SignalIntentTier = "exposure"
+    contributions: SignalTierContributions = Field(default_factory=SignalTierContributions)
     event_counts: EventCounts = Field(default_factory=EventCounts)
     reason_scores: list[ReasonScore] = Field(default_factory=list)
     last_interaction_at: str | None = None
     first_interaction_at: str | None = None
+    derivation: DerivationMetadata = Field(default_factory=DerivationMetadata)
     updated_at: str = Field(default_factory=utc_now_iso)
 
     model_config = {"populate_by_name": True}
@@ -331,6 +343,7 @@ class UserProfileDocument(BaseModel):
     negative_preferences: NegativePreferences = Field(default_factory=NegativePreferences)
     recent_item_ids: list[str] = Field(default_factory=list)
     purchased_item_ids: list[str] = Field(default_factory=list)
+    derivation: DerivationMetadata = Field(default_factory=DerivationMetadata)
     updated_at: str = Field(default_factory=utc_now_iso)
 
     model_config = {"populate_by_name": True}

@@ -4,6 +4,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -127,6 +129,12 @@ def _signal(
         ),
         "first_interaction_at": last_interaction_at,
         "last_interaction_at": last_interaction_at,
+        "derivation": {
+            "model_version": "signal_test_v1",
+            "source_collection": "clickstream_events",
+            "source_event_count": 2,
+            "built_at": last_interaction_at,
+        },
         "updated_at": last_interaction_at,
     }
 
@@ -273,6 +281,10 @@ def test_build_user_profiles_derives_embeddings_affinities_and_recent_items() ->
     assert len(profile["interest_vectors"]) >= 1
     assert len(profile["short_term_embedding_preview"]) == 5
     assert len(profile["long_term_embedding_preview"]) == 5
+    assert profile["derivation"]["model_version"]
+    assert profile["derivation"]["source_signal_model_version"] == "signal_test_v1"
+    assert profile["derivation"]["source_signal_count"] == 3
+    assert profile["derivation"]["built_at"] == FIXED_NOW
 
 
 def test_build_user_profiles_creates_multiple_interests_for_dissimilar_positive_items() -> None:
@@ -347,6 +359,35 @@ def test_build_user_profiles_does_not_label_an_interest_with_a_product_fact() ->
     interest = result["sample_profiles"][0]["interest_vectors"][0]
     assert interest["label"] == "cell phones and accessories"
     assert product_fact not in interest["top_intents"]
+    assert product_fact not in [entry["intent"] for entry in result["sample_profiles"][0]["intent_affinity"]]
+    assert result["stats"]["invalid_interest_labels_dropped"] == 1
+
+
+def test_build_user_profiles_rejects_uuid_like_intents_and_uses_category_fallback() -> None:
+    uuid_like_intent = "550e8400-e29b-41d4-a716-446655440000"
+    result = build_user_profiles(
+        user_item_signals_collection=FakeCollection(
+            [_signal("u_uuid", "PHONE", positive_score=2.0, reason_intent="legacy skincare")]
+        ),
+        clickstream_events_collection=FakeCollection(
+            [_event("u_uuid", "PHONE", event_type="click", request_id="req_uuid")]
+        ),
+        recommendation_logs_collection=FakeCollection(
+            [_log("req_uuid", "PHONE", intent=uuid_like_intent)]
+        ),
+        item_hype_profiles_collection=FakeCollection(
+            [_item_profile("PHONE", 0, category_id="cell_phones_and_accessories")]
+        ),
+        items_collection=FakeCollection(
+            [_item("PHONE", brand="BrandP", category_id="cell_phones_and_accessories")]
+        ),
+        updated_at=FIXED_NOW,
+    )
+
+    interest = result["sample_profiles"][0]["interest_vectors"][0]
+    assert interest["label"] == "cell phones and accessories"
+    assert uuid_like_intent not in interest["top_intents"]
+    assert result["stats"]["invalid_interest_labels_dropped"] == 1
 
 
 def test_build_user_profiles_caps_interests_and_merges_when_limit_reached() -> None:
@@ -415,6 +456,21 @@ def test_build_user_profiles_requires_repeated_negative_evidence_for_brand_and_c
     assert "all_beauty" in profile["negative_preferences"]["categories"]
 
 
+def test_build_user_profiles_rejects_limited_write_mode() -> None:
+    with pytest.raises(ValueError, match="unsafe_partial_profile_write"):
+        build_user_profiles(
+            user_item_signals_collection=FakeCollection([_signal("u_guard", "B001", positive_score=2.0)]),
+            clickstream_events_collection=FakeCollection([_event("u_guard", "B001", event_type="click")]),
+            recommendation_logs_collection=FakeCollection([]),
+            item_hype_profiles_collection=FakeCollection([_item_profile("B001", 0, category_id="all_beauty")]),
+            items_collection=FakeCollection([_item("B001", brand="BrandA", category_id="all_beauty")]),
+            user_profiles_collection=FakeCollection([]),
+            write=True,
+            limit_users=1,
+            updated_at=FIXED_NOW,
+        )
+
+
 def test_build_user_profiles_uses_surface_context_for_search_event_vector() -> None:
     result = build_user_profiles(
         user_item_signals_collection=FakeCollection(
@@ -454,6 +510,61 @@ def test_build_user_profiles_uses_surface_context_for_search_event_vector() -> N
         item_hype_profiles_collection=FakeCollection([_item_profile("B010", 0, category_id="all_beauty")]),
         items_collection=FakeCollection([_item("B010", brand="BrandX", category_id="all_beauty")]),
         retrieval_units_collection=FakeCollection([_retrieval_unit("ru_1", "B010", 600)]),
+        updated_at=FIXED_NOW,
+    )
+
+    profile = result["sample_profiles"][0]
+    interest_embedding = profile["interest_vectors"][0]["embedding"]
+    assert interest_embedding[600] > interest_embedding[0]
+    assert interest_embedding[900] > 0.0
+
+
+def test_build_user_profiles_keeps_stronger_older_purchase_context_when_newer_click_exists() -> None:
+    result = build_user_profiles(
+        user_item_signals_collection=FakeCollection(
+            [
+                _signal(
+                    "u_bundle_b",
+                    "B020",
+                    positive_score=7.35,
+                    reason_intent="purchase intent",
+                    last_interaction_at="2026-01-01T01:20:00+00:00",
+                    clicks=1,
+                    purchases=1,
+                )
+            ]
+        ),
+        clickstream_events_collection=FakeCollection(
+            [
+                _event(
+                    "u_bundle_b",
+                    "B020",
+                    event_type="click",
+                    request_id=None,
+                    timestamp="2026-01-01T01:20:00+00:00",
+                ),
+                _event(
+                    "u_bundle_b",
+                    "B020",
+                    event_type="purchase",
+                    request_id="req_purchase",
+                    timestamp="2026-01-01T01:10:00+00:00",
+                ),
+            ]
+        ),
+        recommendation_logs_collection=FakeCollection(
+            [
+                _log_with_matched_unit(
+                    "req_purchase",
+                    "B020",
+                    unit_id="ru_purchase",
+                    query_type="specific",
+                )
+            ]
+        ),
+        item_hype_profiles_collection=FakeCollection([_item_profile("B020", 0, category_id="all_beauty")]),
+        items_collection=FakeCollection([_item("B020", brand="BrandY", category_id="all_beauty")]),
+        retrieval_units_collection=FakeCollection([_retrieval_unit("ru_purchase", "B020", 600)]),
         updated_at=FIXED_NOW,
     )
 

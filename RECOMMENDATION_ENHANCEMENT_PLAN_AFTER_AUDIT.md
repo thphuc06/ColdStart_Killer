@@ -2,8 +2,33 @@
 
 **Version:** v1.0  
 **Date:** 2026-05-25  
-**Status:** Implementation-ready enhancement plan; no database mutation was performed during the audit  
+**Status:** Historical audit plan plus executed Bundle A/B closeout addendum. The original audit pass was read-only; later implementation, live rebuild, and evidence capture are summarized below.  
 **Purpose:** Turn verified audit findings into a phased plan for correcting personalization, explanations, implicit feedback handling, collaborative filtering, and operational freshness.
+
+## Status Update - 2026-05-25 Bundle A/B Closeout
+
+Bundle A and Bundle B have now been implemented, rebuilt on the live demo database, and re-validated against the acceptance criteria used in this plan.
+
+Evidence artifacts were written to:
+
+- `.runtime/evaluation/bundle_ab_closeout_20260525/baseline_phuc_demo/personalization_baseline.md`
+- `.runtime/evaluation/bundle_ab_closeout_20260525/baseline_phuc_demo/personalization_baseline.json`
+- `.runtime/evaluation/bundle_ab_closeout_20260525/personalization_eval/metrics_summary.md`
+- `.runtime/evaluation/bundle_ab_closeout_20260525/personalization_eval/baseline_summaries.json`
+- `.runtime/evaluation/bundle_ab_closeout_20260525/personalization_eval/comparisons.json`
+
+Verified post-closeout state:
+
+- Shared intent hygiene now rejects UUID-like, fact-like, and generic labels during signal/profile derivation.
+- Live signal rebuild completed with `invalid_reason_intents_dropped = 6`, proving malformed intent audit visibility now exists in production-like execution.
+- Post-rebuild baseline report for `phuc_demo` / `u_api_5ea7eb5ac87d4abe` returned `freshness.state = current`, `pending_event_count = 0`, `uuid_label_count = 0`, `fact_label_count = 0`, `generic_label_count = 0`, and `profile_explanation_audit_failures = 0`.
+- Post-rebuild profile state remained clean with labels `cell phones and accessories` and `sensitive skin person looking for natural soap`.
+- Post-rebuild CF remained healthy at `514` directional edges.
+- Offline personalization smoke remained favorable after the hygiene fixes: `profile_plus_cf` vs `profile_only` improved from `hit@10 0.0488` to `0.3659`, `recall@20 0.0618` to `0.1809`, and `MAP@20 0.0056` to `0.0527`.
+
+Evaluation caveat:
+
+- The stored evaluation artifacts remain synthetic/demo evidence and should not be presented as human-judged ground truth.
 
 ---
 

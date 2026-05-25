@@ -137,6 +137,36 @@ def _profile(user_id_hash: str, *, embedding_index: int, status: str = "warm") -
     }
 
 
+def _signal(
+    item_id: str,
+    *,
+    positive_score: float = 4.6,
+    implicit_score: float | None = None,
+    seed_eligible: bool = True,
+    engaged: float = 0.25,
+    conversion: float = 4.0,
+    exploratory: float = 0.35,
+    last_interaction_at: str = "2026-01-01T00:05:00+00:00",
+) -> dict:
+    return {
+        "user_id_hash": "u_phone",
+        "item_id": item_id,
+        "implicit_score": positive_score if implicit_score is None else implicit_score,
+        "positive_score": positive_score,
+        "negative_score": 0.0,
+        "seed_eligible": seed_eligible,
+        "intent_tier": "conversion" if conversion > 0 else ("engaged" if engaged > 0 else "exploratory"),
+        "contributions": {
+            "exploratory": exploratory,
+            "engaged": engaged,
+            "conversion": conversion,
+        },
+        "event_counts": {"click": 1, "view_detail": 0, "add_to_cart": 1, "purchase": 0, "wishlist": 0},
+        "last_interaction_at": last_interaction_at,
+        "preference": True,
+    }
+
+
 def test_homepage_feed_never_empty_logs_snapshot_and_keeps_cold_item_exposure() -> None:
     items = FakeCollection(
         [
@@ -163,7 +193,7 @@ def test_homepage_feed_never_empty_logs_snapshot_and_keeps_cold_item_exposure() 
         ]
     )
     profiles = FakeCollection([_profile("u_phone", embedding_index=0)])
-    signals = FakeCollection([{"user_id_hash": "u_phone", "item_id": "PHONE_SEED", "implicit_score": 3.0, "positive_score": 3.0}])
+    signals = FakeCollection([_signal("PHONE_SEED")])
     semantic = FakeCollection([
         {
             "item_id": "PHONE_SEED",
@@ -341,3 +371,80 @@ def test_homepage_does_not_apply_cross_category_profile_reason_without_matching_
     assert "Profile" not in card["reason_badges"]
     assert card["debug"]["profile_interest_label"] == ""
     assert all("phone accessories" not in explanation for explanation in card["explanations"])
+
+
+def test_homepage_seed_selection_ignores_recent_items_without_seed_eligible_signal() -> None:
+    items = FakeCollection(
+        [
+            _item("RECENT_ONLY", category_id="cell_phones_and_accessories", brand="PhoneBrand", price_bucket="100k_300k", cold=False, quality=0.7),
+            _item("STRONG_SEED", category_id="cell_phones_and_accessories", brand="PhoneBrand", price_bucket="100k_300k", cold=False, quality=0.8),
+            _item("MATCH_FROM_STRONG", category_id="cell_phones_and_accessories", brand="PhoneBrand", price_bucket="100k_300k", cold=False, quality=0.85),
+            _item("CF_FROM_STRONG", category_id="cell_phones_and_accessories", brand="PhoneBrand", price_bucket="100k_300k", cold=False, quality=0.82),
+        ]
+    )
+    item_stats = FakeCollection(
+        [
+            _item_stats("RECENT_ONLY", cold=False, quality=0.7, interaction_count=20),
+            _item_stats("STRONG_SEED", cold=False, quality=0.8, interaction_count=25),
+            _item_stats("MATCH_FROM_STRONG", cold=False, quality=0.85, interaction_count=30),
+            _item_stats("CF_FROM_STRONG", cold=False, quality=0.82, interaction_count=24),
+        ]
+    )
+    item_profiles = FakeCollection(
+        [
+            _item_profile("RECENT_ONLY", 0, "cell_phones_and_accessories", "100k_300k"),
+            _item_profile("STRONG_SEED", 0, "cell_phones_and_accessories", "100k_300k"),
+            _item_profile("MATCH_FROM_STRONG", 0, "cell_phones_and_accessories", "100k_300k"),
+            _item_profile("CF_FROM_STRONG", 1, "cell_phones_and_accessories", "100k_300k"),
+        ]
+    )
+    profile = _profile("u_phone", embedding_index=0)
+    profile["recent_item_ids"] = ["RECENT_ONLY"]
+    signals = FakeCollection(
+        [
+            {
+                **_signal(
+                    "RECENT_ONLY",
+                    positive_score=0.35,
+                    implicit_score=0.35,
+                    seed_eligible=False,
+                    engaged=0.0,
+                    conversion=0.0,
+                    exploratory=0.35,
+                    last_interaction_at="2026-01-01T00:06:00+00:00",
+                ),
+                "preference": False,
+            },
+            _signal("STRONG_SEED", last_interaction_at="2026-01-01T00:05:00+00:00"),
+        ]
+    )
+    semantic = FakeCollection(
+        [
+            {"item_id": "RECENT_ONLY", "neighbors": [{"neighbor_item_id": "RECENT_ONLY", "neighbor_score": 0.99}]},
+            {"item_id": "STRONG_SEED", "neighbors": [{"neighbor_item_id": "MATCH_FROM_STRONG", "neighbor_score": 0.95}]},
+        ]
+    )
+    cf = FakeCollection(
+        [
+            {"item_id": "RECENT_ONLY", "neighbor_item_id": "RECENT_ONLY", "cf_score": 0.95, "support": 3, "co_click_count": 3, "co_cart_count": 1},
+            {"item_id": "STRONG_SEED", "neighbor_item_id": "CF_FROM_STRONG", "cf_score": 0.9, "support": 4, "co_click_count": 3, "co_cart_count": 2},
+        ]
+    )
+
+    payload = get_homepage_feed(
+        "u_phone",
+        "sess_seed_guard",
+        top_k=4,
+        user_profiles_collection=FakeCollection([profile]),
+        user_item_signals_collection=signals,
+        items_collection=items,
+        item_stats_collection=item_stats,
+        item_hype_profiles_collection=item_profiles,
+        item_semantic_neighbors_collection=semantic,
+        item_item_cf_edges_collection=cf,
+        recommendation_logs_collection=FakeCollection([]),
+    )
+
+    item_ids = {item["item_id"] for item in payload["items"]}
+    assert "MATCH_FROM_STRONG" in item_ids
+    assert "CF_FROM_STRONG" in item_ids

@@ -34,6 +34,16 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+def env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 @dataclass(frozen=True)
 class Settings:
     mongodb_uri: str
@@ -55,6 +65,26 @@ class Settings:
     enable_event_logging: bool
     algorithm_version: str
     ranking_version: str
+    signal_model_version: str
+    profile_model_version: str
+    cf_model_version: str
+    explanation_version: str
+    profile_reason_min_contribution: float
+    signal_click_weight: float
+    signal_detail_short_ms: int
+    signal_detail_meaningful_ms: int
+    signal_detail_short_weight: float
+    signal_detail_medium_weight: float
+    signal_detail_long_weight: float
+    signal_wishlist_weight: float
+    signal_add_to_cart_weight: float
+    signal_purchase_weight: float
+    signal_repeat_positive_bonus: float
+    signal_repeat_positive_bonus_cap: float
+    signal_preference_min_deliberate_score: float
+    signal_seed_eligible_min_deliberate_score: float
+    profile_exploratory_weight: float
+    profile_label_max_length: int
     event_ttl_days: int
     cors_allow_origins: str
 
@@ -81,9 +111,39 @@ def get_settings() -> Settings:
         enable_event_logging=env_bool("ENABLE_EVENT_LOGGING", True),
         algorithm_version=os.getenv("ALGORITHM_VERSION", "rec_v1_profile_cf_hype"),
         ranking_version=os.getenv("RANKING_VERSION", "rank_v1_default_weights"),
+        signal_model_version=os.getenv("SIGNAL_MODEL_VERSION", "signal_v3_intent_hierarchy"),
+        profile_model_version=os.getenv("PROFILE_MODEL_VERSION", "profile_v3_deliberate_weighting"),
+        cf_model_version=os.getenv("CF_MODEL_VERSION", "cf_v1_supported_edges"),
+        explanation_version=os.getenv("EXPLANATION_VERSION", "explain_v2_profile_threshold"),
+        profile_reason_min_contribution=env_float("PROFILE_REASON_MIN_CONTRIBUTION", 0.05),
+        signal_click_weight=env_float("SIGNAL_CLICK_WEIGHT", 0.35),
+        signal_detail_short_ms=env_int("SIGNAL_DETAIL_SHORT_MS", 5_000),
+        signal_detail_meaningful_ms=env_int("SIGNAL_DETAIL_MEANINGFUL_MS", 20_000),
+        signal_detail_short_weight=env_float("SIGNAL_DETAIL_SHORT_WEIGHT", 0.10),
+        signal_detail_medium_weight=env_float("SIGNAL_DETAIL_MEDIUM_WEIGHT", 0.50),
+        signal_detail_long_weight=env_float("SIGNAL_DETAIL_LONG_WEIGHT", 1.25),
+        signal_wishlist_weight=env_float("SIGNAL_WISHLIST_WEIGHT", 2.50),
+        signal_add_to_cart_weight=env_float("SIGNAL_ADD_TO_CART_WEIGHT", 4.00),
+        signal_purchase_weight=env_float("SIGNAL_PURCHASE_WEIGHT", 7.00),
+        signal_repeat_positive_bonus=env_float("SIGNAL_REPEAT_POSITIVE_BONUS", 0.25),
+        signal_repeat_positive_bonus_cap=env_float("SIGNAL_REPEAT_POSITIVE_BONUS_CAP", 1.50),
+        signal_preference_min_deliberate_score=env_float("SIGNAL_PREFERENCE_MIN_DELIBERATE_SCORE", 0.50),
+        signal_seed_eligible_min_deliberate_score=env_float("SIGNAL_SEED_ELIGIBLE_MIN_DELIBERATE_SCORE", 0.75),
+        profile_exploratory_weight=env_float("PROFILE_EXPLORATORY_WEIGHT", 0.25),
+        profile_label_max_length=env_int("PROFILE_LABEL_MAX_LENGTH", 80),
         event_ttl_days=env_int("EVENT_TTL_DAYS", 0),
         cors_allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:5173"),
     )
+
+
+def configured_model_versions(settings: Settings | None = None) -> dict[str, str]:
+    active_settings = settings or get_settings()
+    return {
+        "signal_model_version": active_settings.signal_model_version,
+        "profile_model_version": active_settings.profile_model_version,
+        "cf_model_version": active_settings.cf_model_version,
+        "explanation_version": active_settings.explanation_version,
+    }
 
 
 def require_mongodb_uri() -> str:

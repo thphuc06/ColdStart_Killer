@@ -108,3 +108,29 @@ def test_profile_reason_requires_weighted_contribution_to_rank() -> None:
     assert "Profile" not in card["reason_badges"]
     assert all("gentle skincare interest" not in reason for reason in card["explanations"])
     assert card["debug"]["profile_interest_label"] == ""
+
+
+def test_profile_reason_requires_material_contribution_threshold() -> None:
+    candidate = score_candidate_batch(
+        [
+            {
+                "item_id": "BEAUTY_LOW_SIGNAL",
+                "profile_score_raw": 0.04,
+                "profile_interest_label": "gentle skincare",
+            }
+        ],
+        {"profile": 1.0},
+    )[0]
+
+    card = build_result_card(
+        candidate,
+        request_id="req_profile_threshold",
+        rank_position=1,
+        surface="home",
+        algorithm_version="algorithm_test",
+        ranking_version="ranking_test",
+    )
+
+    assert candidate["contributions"]["profile"] == 0.04
+    assert "Profile" not in card["reason_badges"]
+    assert all("gentle skincare interest" not in reason for reason in card["explanations"])

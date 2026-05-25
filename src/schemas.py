@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from src.utils import utc_now_iso
+
 
 class TextStats(BaseModel):
     title_words: int = 0
@@ -32,6 +34,18 @@ class SourceText(BaseModel):
     description_text: str = ""
     features_text: str = ""
     details_text: str = ""
+
+
+class DerivationMetadata(BaseModel):
+    model_version: str = ""
+    source_collection: str = ""
+    source_event_max_timestamp: str | None = None
+    source_event_count: int | None = None
+    source_signal_model_version: str | None = None
+    source_signal_count: int | None = None
+    source_signal_built_at: str | None = None
+    partial_build: bool = False
+    built_at: str = Field(default_factory=utc_now_iso)
 
 
 class ItemDocument(BaseModel):

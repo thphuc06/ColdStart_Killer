@@ -9,7 +9,13 @@ from typing import Any
 import numpy as np
 from pymongo import UpdateOne
 
+from src.behavior.intent_hygiene import (
+    is_valid_interest_label,
+    normalize_interest_label,
+    sanitize_interest_labels,
+)
 from src.behavior.schemas import InterestVector, UserProfileDocument
+from src.config import get_settings
 from src.recommendation.schemas import EMBEDDING_DIM
 from src.schemas import to_mongo_dict
 from src.utils import utc_now_iso
@@ -18,19 +24,12 @@ from src.utils import utc_now_iso
 INTEREST_MERGE_THRESHOLD = 0.72
 MAX_INTERESTS_PER_USER = 8
 MAX_INTEREST_WEIGHT = 20.0
-POSITIVE_SIGNAL_THRESHOLD = 1.0
+POSITIVE_SIGNAL_THRESHOLD = 0.5
 RECENT_ITEM_LIMIT = 20
 PURCHASED_ITEM_LIMIT = 20
 NEGATIVE_ENTITY_THRESHOLD = 2
 DEFAULT_BATCH_SIZE = 500
 POSITIVE_EVENT_TYPES = {"click", "view_detail", "wishlist", "add_to_cart", "purchase"}
-BASE_EVENT_WEIGHTS = {
-    "click": 1.0,
-    "view_detail": 1.0,
-    "wishlist": 2.0,
-    "add_to_cart": 3.0,
-    "purchase": 5.0,
-}
 SURFACE_WEIGHTS = {
     "search": 1.10,
     "home": 1.00,
@@ -58,6 +57,7 @@ class ProfileBuildStats:
     item_profiles_missing: int = 0
     invalid_signal_embeddings: int = 0
     non_finite_profiles: int = 0
+    invalid_interest_labels_dropped: int = 0
     calibration: dict[str, float | int] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
@@ -71,6 +71,7 @@ class ProfileBuildStats:
             "item_profiles_missing": self.item_profiles_missing,
             "invalid_signal_embeddings": self.invalid_signal_embeddings,
             "non_finite_profiles": self.non_finite_profiles,
+            "invalid_interest_labels_dropped": self.invalid_interest_labels_dropped,
             "calibration": dict(self.calibration),
             "errors": list(self.errors),
         }
@@ -275,8 +276,26 @@ def _matched_unit_vectors(
 
 
 def _event_update_score(event: dict[str, Any], log: dict[str, Any] | None, updated_at: str) -> float:
+    settings = get_settings()
     event_type = str(event.get("event_type") or "").strip()
-    base_weight = BASE_EVENT_WEIGHTS.get(event_type, 0.0)
+    if event_type == "click":
+        base_weight = settings.signal_click_weight
+    elif event_type == "view_detail":
+        dwell_time_ms = max(_safe_int(event.get("dwell_time_ms"), 0), 0)
+        if dwell_time_ms >= settings.signal_detail_meaningful_ms:
+            base_weight = settings.signal_detail_long_weight
+        elif dwell_time_ms >= settings.signal_detail_short_ms:
+            base_weight = settings.signal_detail_medium_weight
+        else:
+            base_weight = settings.signal_detail_short_weight
+    elif event_type == "wishlist":
+        base_weight = settings.signal_wishlist_weight
+    elif event_type == "add_to_cart":
+        base_weight = settings.signal_add_to_cart_weight
+    elif event_type == "purchase":
+        base_weight = settings.signal_purchase_weight
+    else:
+        base_weight = 0.0
     if base_weight <= 0:
         return 0.0
     surface = str(event.get("surface") or (log.get("surface") if isinstance(log, dict) else "") or "").strip()
@@ -373,19 +392,59 @@ def _build_event_vector(
     return item_vector
 
 
-def _intent_list(signal: dict[str, Any], log: dict[str, Any] | None) -> list[str]:
+def _category_display_label(category_id: Any) -> str:
+    return normalize_interest_label(str(category_id or "").replace("_", " "))
+
+
+def _interest_label(intents: list[str], category_id: str) -> str:
+    if intents:
+        return intents[0]
+    category_label = _category_display_label(category_id)
+    if category_label:
+        return category_label
+    return "interest"
+
+
+def _valid_reason_intent(reason: dict[str, Any], *, max_label_length: int, stats: ProfileBuildStats) -> str:
+    intent = normalize_interest_label(reason.get("intent"))
+    if not intent:
+        return ""
+    if not is_valid_interest_label(intent, max_length=max_label_length):
+        stats.invalid_interest_labels_dropped += 1
+        return ""
+    return intent
+
+
+def _intent_list(
+    signal: dict[str, Any],
+    log: dict[str, Any] | None,
+    *,
+    max_label_length: int,
+    stats: ProfileBuildStats,
+) -> list[str]:
     if not isinstance(log, dict):
         return []
     attribution = log.get("attribution")
     if not isinstance(attribution, dict):
         return []
-    values = attribution.get("matched_intents")
-    if not isinstance(values, list):
-        return []
-    return [str(value).strip() for value in values if str(value).strip()][:5]
+    intents, dropped = sanitize_interest_labels(
+        attribution.get("matched_intents"),
+        max_length=max_label_length,
+        limit=5,
+    )
+    stats.invalid_interest_labels_dropped += dropped
+    return intents
 
 
 def _signal_weight(signal: dict[str, Any]) -> float:
+    settings = get_settings()
+    contributions = signal.get("contributions") if isinstance(signal.get("contributions"), dict) else {}
+    exploratory = _safe_float(contributions.get("exploratory"), 0.0)
+    engaged = _safe_float(contributions.get("engaged"), 0.0)
+    conversion = _safe_float(contributions.get("conversion"), 0.0)
+    deliberate = engaged + conversion
+    if deliberate > 0 or exploratory > 0:
+        return max(deliberate + (exploratory * settings.profile_exploratory_weight), 0.0)
     positive = _safe_float(signal.get("positive_score"), 0.0)
     negative = _safe_float(signal.get("negative_score"), 0.0)
     implicit = _safe_float(signal.get("implicit_score"), positive - negative)
@@ -409,6 +468,32 @@ def _recent_item_ids(events: list[dict[str, Any]]) -> list[str]:
         if len(result) >= RECENT_ITEM_LIMIT:
             break
     return result
+
+
+def _source_signal_model_version(signals: list[dict[str, Any]]) -> str | None:
+    versions = sorted(
+        {
+            str(signal.get("derivation", {}).get("model_version") or "").strip()
+            for signal in signals
+            if isinstance(signal.get("derivation"), dict) and str(signal.get("derivation", {}).get("model_version") or "").strip()
+        }
+    )
+    if not versions:
+        return None
+    if len(versions) == 1:
+        return versions[0]
+    return "mixed"
+
+
+def _latest_signal_built_at(signals: list[dict[str, Any]]) -> str | None:
+    timestamps = [
+        str(signal.get("derivation", {}).get("built_at") or signal.get("updated_at") or "").strip()
+        for signal in signals
+        if str(signal.get("derivation", {}).get("built_at") or signal.get("updated_at") or "").strip()
+    ]
+    if not timestamps:
+        return None
+    return max(timestamps)
 
 
 def _purchased_item_ids(events: list[dict[str, Any]], signals: list[dict[str, Any]]) -> list[str]:
@@ -499,10 +584,7 @@ def _merge_interest_state(
         interest["intent_scores"].items(), key=lambda item: (-item[1], item[0])
     )
     interest["top_intents"] = [intent for intent, _ in ranked_intents[:3]]
-    if interest["top_intents"]:
-        interest["label"] = interest["top_intents"][0]
-    elif category_id:
-        interest["label"] = category_id.replace("_", " ")
+    interest["label"] = _interest_label(interest["top_intents"], category_id)
 
     event_counts = signal.get("event_counts", {})
     interest["evidence"]["click"] += _safe_int(event_counts.get("click"), 0)
@@ -621,10 +703,14 @@ def _load_user_item_signals(user_item_signals_collection: Any) -> list[dict[str,
         "positive_score": 1,
         "negative_score": 1,
         "preference": 1,
+        "seed_eligible": 1,
+        "intent_tier": 1,
+        "contributions": 1,
         "event_counts": 1,
         "reason_scores": 1,
         "last_interaction_at": 1,
         "first_interaction_at": 1,
+        "derivation": 1,
         "updated_at": 1,
     }
     return _load_collection_docs(user_item_signals_collection, {}, projection)
@@ -638,6 +724,7 @@ def _load_clickstream_events(clickstream_events_collection: Any, user_ids: set[s
         "item_id": 1,
         "event_type": 1,
         "surface": 1,
+        "dwell_time_ms": 1,
         "timestamp": 1,
         "created_at": 1,
         "metadata": 1,
@@ -730,6 +817,11 @@ def _build_profile_doc(
     max_interests: int,
     stats: ProfileBuildStats,
     updated_at: str,
+    profile_model_version: str,
+    source_signal_model_version: str,
+    source_signal_built_at: str | None,
+    partial_build: bool,
+    profile_label_max_length: int,
 ) -> dict[str, Any] | None:
     positive_vectors_long: list[tuple[np.ndarray, float]] = []
     positive_vectors_short: list[tuple[np.ndarray, float]] = []
@@ -776,34 +868,48 @@ def _build_profile_doc(
             continue
 
         event_weight = _signal_weight(signal)
-        seed_event = None
+        event_vectors: list[tuple[np.ndarray, float]] = []
+        intents: list[str] = []
         for candidate_event in events_by_item.get(item_id, []):
             event_type = str(candidate_event.get("event_type") or "").strip()
-            if event_type in POSITIVE_EVENT_TYPES:
-                seed_event = candidate_event
-                break
-        if seed_event is None:
-            seed_event = {
+            if event_type not in POSITIVE_EVENT_TYPES:
+                continue
+            request_id = str(candidate_event.get("request_id") or "").strip()
+            log = logs_by_key.get((request_id, item_id)) if request_id else None
+            candidate_vector = _build_event_vector(
+                event=candidate_event,
+                log=log,
+                item_vector=vector,
+                item_profiles=item_profiles,
+                retrieval_units_by_id=retrieval_units_by_id,
+            )
+            if candidate_vector is None:
+                candidate_vector = vector
+            candidate_weight = _event_update_score(candidate_event, log, updated_at)
+            if candidate_weight <= 0:
+                continue
+            event_vectors.append((candidate_vector, candidate_weight))
+            if not intents:
+                intents = _intent_list(
+                    signal,
+                    log,
+                    max_label_length=profile_label_max_length,
+                    stats=stats,
+                )
+
+        if not event_vectors:
+            fallback_event = {
                 "item_id": item_id,
                 "surface": "search",
                 "event_type": "click",
                 "timestamp": str(signal.get("last_interaction_at") or signal.get("updated_at") or updated_at),
                 "metadata": {},
             }
-        request_id = str(seed_event.get("request_id") or "").strip()
-        log = logs_by_key.get((request_id, item_id)) if request_id else None
-        event_vector = _build_event_vector(
-            event=seed_event,
-            log=log,
-            item_vector=vector,
-            item_profiles=item_profiles,
-            retrieval_units_by_id=retrieval_units_by_id,
-        )
-        if event_vector is None:
-            event_vector = vector
-        event_update_score = _event_update_score(seed_event, log, updated_at)
-        if event_update_score <= 0:
-            event_update_score = event_weight
+            event_vectors = [(vector, max(event_weight, _event_update_score(fallback_event, None, updated_at), 0.0))]
+
+        blended_event_vector = _normalize_blend(event_vectors)
+        event_vector = blended_event_vector if blended_event_vector is not None else vector
+        event_update_score = max(event_weight, sum(weight for _vector, weight in event_vectors))
         positive_vectors_long.append((event_vector, event_update_score))
         positive_vectors_short.append((event_vector, event_update_score / recency_index))
 
@@ -830,9 +936,14 @@ def _build_profile_doc(
             if _safe_int(event_counts.get("purchase"), 0) > 0:
                 purchased_prices.append(price_int)
 
-        intents = _intent_list(signal, log)
         for reason in signal.get("reason_scores", []):
-            intent = str(reason.get("intent") or "").strip()
+            if not isinstance(reason, dict):
+                continue
+            intent = _valid_reason_intent(
+                reason,
+                max_label_length=profile_label_max_length,
+                stats=stats,
+            )
             if not intent:
                 continue
             intent_scores[intent] += _safe_float(reason.get("score"), event_weight)
@@ -859,7 +970,7 @@ def _build_profile_doc(
                         "purchase": _safe_int(event_counts.get("purchase"), 0),
                     },
                     "top_item_ids": [item_id] if item_id else [],
-                    "label": intents[0] if intents else (category_id.replace("_", " ") if category_id else "interest"),
+                    "label": _interest_label(intents[:3], category_id),
                     "last_updated_at": str(signal.get("last_interaction_at") or signal.get("updated_at") or updated_at),
                 }
             )
@@ -887,7 +998,13 @@ def _build_profile_doc(
         if category_id:
             negative_category_counts[category_id] += 1
         for reason in signal.get("reason_scores", []):
-            intent = str(reason.get("intent") or "").strip()
+            if not isinstance(reason, dict):
+                continue
+            intent = _valid_reason_intent(
+                reason,
+                max_label_length=profile_label_max_length,
+                stats=stats,
+            )
             if intent:
                 negative_intent_counts[intent] += 1
 
@@ -948,6 +1065,15 @@ def _build_profile_doc(
         },
         recent_item_ids=_recent_item_ids(events),
         purchased_item_ids=_purchased_item_ids(events, signals),
+        derivation={
+            "model_version": profile_model_version,
+            "source_collection": "user_item_signals",
+            "source_signal_model_version": source_signal_model_version,
+            "source_signal_count": len(signals),
+            "source_signal_built_at": source_signal_built_at,
+            "partial_build": partial_build,
+            "built_at": updated_at,
+        },
         updated_at=updated_at,
     )
     return to_mongo_dict(profile)
@@ -1003,7 +1129,10 @@ def build_user_profiles(
         raise ValueError("max_interests must be positive")
     if write and user_profiles_collection is None:
         raise ValueError("user_profiles_collection is required when write=True")
+    if write and limit_users is not None:
+        raise ValueError("unsafe_partial_profile_write: limit_users may only be used in dry-run mode")
 
+    settings = get_settings()
     updated_at = updated_at or utc_now_iso()
     stats = ProfileBuildStats()
     signal_docs = _load_user_item_signals(user_item_signals_collection)
@@ -1048,13 +1177,13 @@ def build_user_profiles(
     item_profiles = _load_item_hype_profiles(item_hype_profiles_collection, item_ids)
     items_by_id = _load_items(items_collection, item_ids)
     retrieval_units_by_id = _load_retrieval_units(retrieval_units_collection, matched_unit_ids)
-
     profile_docs: list[dict[str, Any]] = []
     sample_profiles: list[dict[str, Any]] = []
     for user_id_hash in selected_user_ids:
+        user_signals = selected_users[user_id_hash]
         profile_doc = _build_profile_doc(
             user_id_hash=user_id_hash,
-            signals=selected_users[user_id_hash],
+            signals=user_signals,
             events=events_by_user.get(user_id_hash, []),
             logs_by_key=logs_by_key,
             item_profiles=item_profiles,
@@ -1064,6 +1193,11 @@ def build_user_profiles(
             max_interests=max_interests,
             stats=stats,
             updated_at=updated_at,
+            profile_model_version=settings.profile_model_version,
+            source_signal_model_version=_source_signal_model_version(user_signals) or settings.signal_model_version,
+            source_signal_built_at=_latest_signal_built_at(user_signals),
+            partial_build=limit_users is not None,
+            profile_label_max_length=settings.profile_label_max_length,
         )
         if profile_doc is None:
             continue

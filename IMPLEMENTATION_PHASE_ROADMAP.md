@@ -1,5 +1,23 @@
 # ColdStart Killer — Phase-by-Phase Implementation Roadmap
 
+## Status Update - 2026-05-25
+
+This roadmap is now partly historical.
+
+Current repo state:
+
+- Phases 0 through 13 have been implemented and validated for the current demo branch.
+- The FastAPI-backed API and React frontend are live; any roadmap text below that says API/frontend are future phases should be read as pre-implementation planning context.
+- Bundle A and Bundle B personalization closeout has been completed, rebuilt on the live demo database, and documented in `RECOMMENDATION_ENHANCEMENT_PLAN_AFTER_AUDIT.md`.
+- Fresh evidence artifacts were written to `.runtime/evaluation/bundle_ab_closeout_20260525/`.
+- Active forward-looking planning scope is now Phase 14 and later improvements, not Phase 0-13 delivery.
+
+Use this file as:
+
+- the historical execution roadmap for how the repo was phased,
+- a reference for acceptance criteria and guardrails,
+- not the primary source of current implementation status.
+
 ## 0. Purpose
 
 This file is the implementation roadmap for the ColdStart Killer recommendation upgrade.
@@ -507,7 +525,11 @@ Do not add heavy packages such as Spark, Redis clients, vector DB SDKs, or ML tr
 
 ### 4.2 Frontend Dependencies
 
-Frontend does not exist yet. Add these only in Phase 11.
+Historical planning note: this section was written before Phase 11 shipped.
+
+The frontend now exists under `frontend/` and the current package/source-of-truth state lives in `frontend/package.json`.
+
+Keep the table below as dependency rationale and phase-planning context, not as the latest implementation status snapshot.
 
 | Package | Purpose | Needed immediately? | Phase | Notes |
 |---|---|---:|---:|---|
