@@ -9,8 +9,11 @@ Current repo state:
 - Phases 0 through 13 have been implemented and validated for the current demo branch.
 - The FastAPI-backed API and React frontend are live; any roadmap text below that says API/frontend are future phases should be read as pre-implementation planning context.
 - Bundle A personalization correctness is complete; Bundle B correctness for negative suppression/search seed handling has been applied, while the qualified-CF evidence decision remains open in `RECOMMENDATION_ENHANCEMENT_PLAN_AFTER_AUDIT.md`.
+- Bundle C explanation faithfulness is complete in code: structured primary-reason attribution, material-contribution badge policy, honest cold/diversity attribution, and backend-driven UI badge display are implemented without ranking tuning.
 - After tests and read-only evaluation, an explicitly approved controlled rebuild produced v4 signal/profile lineage and current-policy CF edges sourced from signal v4.
+- Bundle C is explanation-only (`explain_v3_contribution_faithful`) and requires no derived-data rebuild; its read-only `phuc_demo` sample produced `0` primary attribution mismatches across top `10` cards.
 - Read-only CF comparison can be regenerated with `python scripts/run_personalization_evaluation.py --dry-run --write-artifacts --out .runtime/evaluation/bundle_b_cf_gate_<timestamp> --print-json-summary`; `.runtime` outputs are ignored local artifacts.
+- Contribution-faithfulness can be rechecked with `python scripts/report_personalization_baseline.py --user-id u_api_5ea7eb5ac87d4abe --top-k 10`.
 - Active forward-looking planning scope includes Bundle B closeout before Phase 14 and later improvements.
 - The 2026-05-25 comparison returned `needs_more_evidence`: current CF had `278` train directional edges and `MAP@20=0.019393`, while qualified CF had `0` edges and `MAP@20=0.010767`; runtime CF policy was intentionally left unchanged during the approved lineage rebuild.
 

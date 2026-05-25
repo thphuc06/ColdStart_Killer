@@ -138,6 +138,8 @@ def test_similar_products_returns_semantic_and_cf_evidence_when_available() -> N
     assert [item["item_id"] for item in payload["items"]] == ["B", "C"]
     assert "Collaborative Filtering" in payload["items"][1]["reason_badges"]
     assert any("support=3" in explanation for explanation in payload["items"][1]["explanations"])
+    assert payload["items"][0]["attribution"]["primary_reason_channel"] == "semantic_neighbor"
+    assert payload["items"][1]["attribution"]["primary_reason_channel"] == "cf"
     assert payload["snapshot"]["attempted"] == 2
 
 

@@ -10,7 +10,9 @@ Important current-state notes:
 
 - The repo now includes the shipped API, React frontend, Phase 12 evaluation flow, and Phase 13 demo reset/recovery flow.
 - Bundle A personalization hygiene has been implemented and validated; Bundle B correctness for negative suppression and search seed eligibility has been applied, while the qualified-CF evidence gate remains open.
+- Bundle C contribution-faithful explanation is implemented: primary reasons and card badges are backed by material score contributions, and cold-start/diversity exposure no longer claims unsupported retrieval evidence.
 - An explicitly approved controlled rebuild wrote `1157` `signal_v4_boundary_hygiene` signals, `43` `profile_v4_negative_guard` profiles, and `514` current-policy CF edges sourced from signal v4.
+- Bundle C changes explanation/output attribution only (`explain_v3_contribution_faithful`), so no additional Mongo rebuild is required; the read-only `phuc_demo` sample reported `0` primary attribution mismatches on top `10`.
 - `.runtime/evaluation/` outputs are local ignored artifacts and must be regenerated from documented read-only commands rather than treated as shared canonical proof.
 - The backlog table below has been normalized so delivered items are marked as historical completions and remaining gaps stay visible as open backlog.
 
@@ -18,6 +20,7 @@ For current personalization status and a reproducible read-only comparison, pref
 
 - `RECOMMENDATION_ENHANCEMENT_PLAN_AFTER_AUDIT.md`
 - `python scripts/run_personalization_evaluation.py --dry-run --write-artifacts --out .runtime/evaluation/bundle_b_cf_gate_<timestamp> --print-json-summary`
+- `python scripts/report_personalization_baseline.py --user-id u_api_5ea7eb5ac87d4abe --top-k 10`
 
 Read-only gate evidence on 2026-05-25: `profile_plus_cf` reported `HitRate@10=0.166667`, `Recall@20=0.086508`, `MAP@20=0.019393` and `278` train directional CF edges; `profile_plus_qualified_cf` reported `0.119048`, `0.078571`, `0.010767` with `0` qualified edges. Gate decision is `needs_more_evidence`; the approved derived-data rebuild retained current CF policy and made no qualified-CF runtime change.
 

@@ -39,12 +39,18 @@ def test_recommendation_log_contract_accepts_snapshot_fields() -> None:
         attribution={
             "matched_interest_embedding": [0.0] * EMBEDDING_DIM,
             "matched_neighbor_embedding": [0.0] * EMBEDDING_DIM,
+            "primary_reason_channel": "profile",
+            "primary_reason_contribution": 0.24,
+            "material_reason_channels": ["profile", "semantic_neighbor"],
+            "forced_cold_insertion": False,
         },
     )
     dumped = log.model_dump(by_alias=True)
     assert dumped["request_id"] == "req_001"
     assert dumped["scores"]["final_score"] == 0.0
     assert dumped["attribution"]["candidate_sources"] == []
+    assert dumped["attribution"]["primary_reason_channel"] == "profile"
+    assert dumped["attribution"]["material_reason_channels"] == ["profile", "semantic_neighbor"]
     assert len(dumped["query"]["query_embedding"]) == EMBEDDING_DIM
     assert dumped["is_synthetic"] is False
 

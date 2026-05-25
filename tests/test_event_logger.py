@@ -143,6 +143,37 @@ def test_log_recommendation_snapshot_upserts_one_row_per_item_and_stores_version
     assert doc["is_synthetic"] is False
 
 
+def test_log_recommendation_snapshot_preserves_structured_reason_attribution() -> None:
+    collection = FakeRecommendationLogsCollection()
+    log_recommendation_snapshot(
+        request_id="req_reason",
+        user_id_hash="u_demo",
+        session_id="sess_reason",
+        surface="home",
+        items=[
+            {
+                "item_id": "B003",
+                "final_score": 0.4,
+                "attribution": {
+                    "primary_reason_channel": "profile",
+                    "primary_reason_contribution": 0.3,
+                    "material_reason_channels": ["profile"],
+                    "forced_cold_insertion": False,
+                    "explanation": "Boosted because it matches your skincare interest.",
+                },
+            }
+        ],
+        algorithm_version="algo_test",
+        ranking_version="rank_test",
+        recommendation_logs_collection=collection,
+    )
+
+    attribution = collection.docs[("req_reason", "B003")]["attribution"]
+    assert attribution["primary_reason_channel"] == "profile"
+    assert attribution["primary_reason_contribution"] == 0.3
+    assert attribution["material_reason_channels"] == ["profile"]
+
+
 def test_log_clickstream_event_makes_duplicate_impression_idempotent() -> None:
     collection = FakeClickstreamEventsCollection()
 

@@ -16,7 +16,9 @@ Current execution snapshot:
 - Core implementation phases through Phase 13 have been delivered for the demo branch.
 - The behavior pipeline, API layer, React frontend, evaluation flow, and demo reset/recovery workflow are live in the repo.
 - Bundle A recommendation hygiene has been implemented and validated; Bundle B correctness for negative suppression and search seed eligibility has been applied, while the qualified-CF evidence gate remains open.
+- Bundle C explanation faithfulness has been implemented without ranking tuning: primary reasons/badges now follow material weighted contributions, forced cold insertion is attributed, and frontend cards trust backend badge output.
 - After tests and read-only evaluation, an explicitly approved rebuild wrote `1157` signal v4 documents, `43` profile v4 documents, and `514` current-policy CF edges sourced from signal v4.
+- Bundle C uses `explain_v3_contribution_faithful` and needs no Mongo rebuild; a read-only `phuc_demo` sample reported `0` primary attribution mismatches across top `10` cards.
 - Runtime CF remains on its existing multi-user policy while `profile_plus_qualified_cf` is evaluated offline with `min_support=2`.
 - Remaining forward-looking scope includes Bundle B closeout before Phase 14 and later improvement batches.
 
@@ -24,6 +26,7 @@ Latest execution evidence and reproduction:
 
 - `RECOMMENDATION_ENHANCEMENT_PLAN_AFTER_AUDIT.md`
 - `python scripts/run_personalization_evaluation.py --dry-run --write-artifacts --out .runtime/evaluation/bundle_b_cf_gate_<timestamp> --print-json-summary`
+- `python scripts/report_personalization_baseline.py --user-id u_api_5ea7eb5ac87d4abe --top-k 10`
 
 Artifacts under `.runtime/evaluation/` are local ignored outputs; their command and summary metrics must be recorded when used as evidence.
 

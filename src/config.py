@@ -69,6 +69,7 @@ class Settings:
     profile_model_version: str
     cf_model_version: str
     explanation_version: str
+    reason_min_contribution: float
     profile_reason_min_contribution: float
     signal_click_weight: float
     signal_detail_short_ms: int
@@ -114,7 +115,8 @@ def get_settings() -> Settings:
         signal_model_version=os.getenv("SIGNAL_MODEL_VERSION", "signal_v4_boundary_hygiene"),
         profile_model_version=os.getenv("PROFILE_MODEL_VERSION", "profile_v4_negative_guard"),
         cf_model_version=os.getenv("CF_MODEL_VERSION", "cf_v1_supported_edges"),
-        explanation_version=os.getenv("EXPLANATION_VERSION", "explain_v2_profile_threshold"),
+        explanation_version=os.getenv("EXPLANATION_VERSION", "explain_v3_contribution_faithful"),
+        reason_min_contribution=env_float("REASON_MIN_CONTRIBUTION", 0.05),
         profile_reason_min_contribution=env_float("PROFILE_REASON_MIN_CONTRIBUTION", 0.05),
         signal_click_weight=env_float("SIGNAL_CLICK_WEIGHT", 0.35),
         signal_detail_short_ms=env_int("SIGNAL_DETAIL_SHORT_MS", 5_000),

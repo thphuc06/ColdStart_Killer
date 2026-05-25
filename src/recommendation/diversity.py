@@ -28,16 +28,18 @@ def apply_diversity_rerank(
 
     for candidate in candidates:
         row = dict(candidate)
+        row["scores"] = dict(row.get("scores") or {})
+        row["score_breakdown"] = dict(row.get("score_breakdown") or {})
+        row["contributions"] = dict(row.get("contributions") or {})
         category_id = str(row.get("category_id") or "")
         brand = str(row.get("brand") or "")
         category_count = category_counts.get(category_id, 0)
         brand_count = brand_counts.get(brand, 0)
         diversity_adjustment = round(-0.02 * category_count - 0.015 * brand_count, 6)
 
-        row.setdefault("scores", {})
-        row.setdefault("score_breakdown", {})
         row["scores"]["diversity_adjustment"] = diversity_adjustment
         row["score_breakdown"]["diversity_adjustment"] = diversity_adjustment
+        row["contributions"]["diversity_adjustment"] = diversity_adjustment
         row["final_score"] = round(_safe_float(row.get("final_score"), 0.0) + diversity_adjustment, 6)
         row["scores"]["final_score"] = row["final_score"]
         row["score_breakdown"]["final_score"] = row["final_score"]
@@ -74,12 +76,17 @@ def apply_diversity_rerank(
         if cold_candidate is not None and selected:
             insert_at = max(0, check_top - 1)
             replacement = dict(cold_candidate)
-            replacement.setdefault("scores", {})
-            replacement.setdefault("score_breakdown", {})
+            replacement["scores"] = dict(replacement.get("scores") or {})
+            replacement["score_breakdown"] = dict(replacement.get("score_breakdown") or {})
+            replacement["contributions"] = dict(replacement.get("contributions") or {})
             replacement["scores"]["diversity_adjustment"] = replacement["scores"].get("diversity_adjustment", 0.0)
             replacement["score_breakdown"]["diversity_adjustment"] = replacement["score_breakdown"].get(
                 "diversity_adjustment", 0.0
             )
+            replacement["contributions"]["diversity_adjustment"] = replacement["score_breakdown"][
+                "diversity_adjustment"
+            ]
+            replacement["forced_cold_insertion"] = True
             selected.insert(insert_at, replacement)
             deduped: list[dict[str, Any]] = []
             seen_ids: set[str] = set()

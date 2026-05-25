@@ -77,6 +77,13 @@ def test_build_personalization_baseline_report_counts_invalid_labels_and_writes_
                     "item_id": "B001",
                     "reason_badges": ["Profile"],
                     "explanations": ["Boosted because it matches your sensitive skin interest."],
+                    "attribution": {
+                        "primary_reason_channel": "profile",
+                        "primary_reason_contribution": 0.2,
+                        "material_reason_channels": ["profile"],
+                        "forced_cold_insertion": False,
+                        "explanation": "Boosted because it matches your sensitive skin interest.",
+                    },
                     "debug": {"profile_interest_label": "sensitive skin"},
                 },
                 {
@@ -86,6 +93,13 @@ def test_build_personalization_baseline_report_counts_invalid_labels_and_writes_
                         "Boosted because it matches your 550e8400-e29b-41d4-a716-446655440000 interest.",
                         "Matched product fact: The smartphone has a 6.4-inch Super AMOLED capacitive touchscreen with 16M colors.",
                     ],
+                    "attribution": {
+                        "primary_reason_channel": "semantic_neighbor",
+                        "primary_reason_contribution": 0.1,
+                        "material_reason_channels": ["profile"],
+                        "forced_cold_insertion": False,
+                        "explanation": "Different visible explanation.",
+                    },
                     "debug": {"profile_interest_label": uuid_like_label},
                 },
             ],
@@ -102,6 +116,7 @@ def test_build_personalization_baseline_report_counts_invalid_labels_and_writes_
     assert report["counters"]["uuid_label_count"] == 1
     assert report["counters"]["generic_label_count"] == 1
     assert report["counters"]["profile_explanation_audit_failures"] == 2
+    assert report["counters"]["primary_reason_attribution_failure_count"] == 1
 
     out_dir = tmp_path / "baseline"
     report_script.write_report_artifacts(report, out_dir)

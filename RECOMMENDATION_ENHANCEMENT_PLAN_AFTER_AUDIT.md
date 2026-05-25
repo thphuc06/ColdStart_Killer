@@ -2,12 +2,12 @@
 
 **Version:** v1.0  
 **Date:** 2026-05-25  
-**Status:** Bundle A complete; Bundle B correctness applied and rebuilt, with the qualified-CF evidence gate still open. The original audit pass was read-only; approved rebuild evidence and remaining work are summarized below.
+**Status:** Bundle A complete; Bundle B correctness applied and rebuilt; Bundle C contribution-faithful explanation implemented. The qualified-CF evidence gate remains open.
 **Purpose:** Turn verified audit findings into a phased plan for correcting personalization, explanations, implicit feedback handling, collaborative filtering, and operational freshness.
 
-## Status Update - 2026-05-25 Bundle A Complete / Bundle B CF Gate Open
+## Status Update - 2026-05-25 Bundle A/B Correctness Applied / Bundle C Explanation Faithfulness Implemented
 
-Bundle A explanation/profile hygiene and Bundle B correctness changes have been implemented. After tests and the read-only CF comparison passed their safety checks, an explicitly approved controlled rebuild applied the v4 signal/profile lineage while retaining the current CF runtime policy. Bundle B is not closed out because the qualified-CF evidence gate remains open.
+Bundle A explanation/profile hygiene and Bundle B correctness changes have been implemented. After tests and the read-only CF comparison passed their safety checks, an explicitly approved controlled rebuild applied the v4 signal/profile lineage while retaining the current CF runtime policy. Bundle C has now made displayed reasons and badges contribution-faithful without changing ranking weights or CF runtime. Bundle B is not closed out because the qualified-CF evidence gate remains open.
 
 The current code gate covers:
 
@@ -15,6 +15,8 @@ The current code gate covers:
 - Exact hidden/disliked items are suppressed on home, similar products, and personalized search without fallback restoration.
 - Broad-search CF expansion accepts only `seed_eligible` sources.
 - CF runtime is unchanged; the read-only evaluator compares current CF with `profile_plus_qualified_cf` under `min_support=2`.
+- Bundle C selects primary reasons and badges from material weighted contributions, records structured attribution and diversity/cold-insertion causes, and makes the UI consume backend badge truth.
+- Explanation semantics are versioned as `explain_v3_contribution_faithful` with `REASON_MIN_CONTRIBUTION=0.05`; this does not require a signals/profile/CF rebuild.
 
 Approved v4 controlled rebuild evidence:
 
@@ -23,12 +25,14 @@ Approved v4 controlled rebuild evidence:
 - Current-policy CF rebuild retained `514` directional edges as `cf_v1_supported_edges`, each sourced from `signal_v4_boundary_hygiene`.
 - Post-rebuild baseline report for `phuc_demo` / `u_api_5ea7eb5ac87d4abe` returned `freshness.state = current`, `pending_event_count = 0`, `uuid_label_count = 0`, `fact_label_count = 0`, `generic_label_count = 0`, and `profile_explanation_audit_failures = 0`.
 - Post-rebuild profile state remained clean with labels `cell phones and accessories` and `sensitive skin person looking for natural soap`.
+- Post-Bundle-C read-only baseline returned `primary_reason_attribution_failure_count = 0` across the sampled top `10` cards, with no profile explanation audit failures.
 
 Reproducibility and data-state caveats:
 
 - Stored Mongo signals/profiles/CF are now aligned to the v4 signal lineage and current CF runtime policy.
 - Local output under `.runtime/evaluation/` is ignored and reproducible evidence only, not a committed or shared source of truth.
 - Reproduce the CF comparison without Mongo writes using `python scripts/run_personalization_evaluation.py --dry-run --write-artifacts --out .runtime/evaluation/bundle_b_cf_gate_<timestamp> --print-json-summary`.
+- Reproduce the contribution-faithfulness baseline without Mongo writes using `python scripts/report_personalization_baseline.py --user-id u_api_5ea7eb5ac87d4abe --top-k 10`.
 - Synthetic/demo evaluation results must not be presented as human-judged ground truth.
 
 Read-only CF gate run on 2026-05-25 (`bundle_b_cf_gate_20260525_2124`):

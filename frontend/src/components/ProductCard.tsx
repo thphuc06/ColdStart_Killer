@@ -15,38 +15,19 @@ type ProductCardProps = {
 };
 
 
-function scoreValue(card: RecommendationCard, key: string) {
-    return Number(card.score_breakdown?.[key] ?? card.scores?.[key] ?? 0);
-}
-
-
-function hasPositiveScore(card: RecommendationCard, key: string) {
-    return scoreValue(card, key) > 0.0001;
-}
-
-
 function buildBadges(card: RecommendationCard) {
-    const badges: Array<{ label: string; tone: "mint" | "sky" | "amber" | "violet" | "neutral" }> = [];
-    const channels = card.debug?.matched_channels || card.attribution?.matched_channels || [];
-    if (card.reason_badges.includes("Profile")) {
-        badges.push({ label: "Profile", tone: "mint" });
-    }
-    if (card.attribution.cf_evidence || hasPositiveScore(card, "item_item_cf_score")) {
-        badges.push({ label: "Collaborative Filtering", tone: "violet" });
-    }
-    if (hasPositiveScore(card, "semantic_neighbor_score")) {
-        badges.push({ label: "Semantic similar", tone: "sky" });
-    }
-    if (channels.includes("bm25")) {
-        badges.push({ label: "BM25 fact", tone: "neutral" });
-    }
-    if (card.reason_badges.some((badge) => /hype|semantic/i.test(badge)) || channels.includes("vector")) {
-        badges.push({ label: "HyPE intent", tone: "sky" });
-    }
-    if (card.is_cold_item) {
-        badges.push({ label: "Cold-start", tone: "amber" });
-    }
-    return badges.slice(0, 4);
+    const tones: Record<string, "mint" | "sky" | "amber" | "violet" | "neutral"> = {
+        Profile: "mint",
+        "Collaborative Filtering": "violet",
+        "Semantic similar": "sky",
+        "BM25 fact": "neutral",
+        "HyPE semantic": "sky",
+        "Cold-start": "amber",
+        Exploration: "amber",
+    };
+    return [...new Set(card.reason_badges)]
+        .map((label) => ({ label, tone: tones[label] ?? "neutral" }))
+        .slice(0, 4);
 }
 
 

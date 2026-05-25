@@ -12,6 +12,7 @@ from src.utils import utc_now_iso
 
 ProfileStatus = Literal["new", "onboarded", "warming", "warm"]
 RecommendationSurface = Literal["search", "home", "detail_similar", "seller_preview"]
+PrimaryReasonChannel = Literal["query_hybrid", "profile", "semantic_neighbor", "cf", "cold_explore", "generic"]
 EventSurface = Literal["search", "home", "detail_similar", "cart", "onboarding", "debug"]
 SignalIntentTier = Literal["exposure", "exploratory", "engaged", "conversion", "negative"]
 EventType = Literal[
@@ -146,6 +147,10 @@ class RecommendationAttribution(BaseModel):
     matched_interest_embedding: list[float] | None = None
     matched_neighbor_embedding: list[float] | None = None
     cf_evidence: CFEvidence | None = None
+    primary_reason_channel: PrimaryReasonChannel = "generic"
+    primary_reason_contribution: float = 0.0
+    material_reason_channels: list[PrimaryReasonChannel] = Field(default_factory=list)
+    forced_cold_insertion: bool = False
     explanation: str = ""
 
     @field_validator("matched_interest_embedding", "matched_neighbor_embedding")

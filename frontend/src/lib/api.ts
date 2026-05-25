@@ -98,6 +98,16 @@ export type RecommendationCard = {
             co_cart_count?: number;
             cf_score?: number;
         } | null;
+        primary_reason_channel:
+            | "query_hybrid"
+            | "profile"
+            | "semantic_neighbor"
+            | "cf"
+            | "cold_explore"
+            | "generic";
+        primary_reason_contribution: number;
+        material_reason_channels: Array<"query_hybrid" | "profile" | "semantic_neighbor" | "cf" | "cold_explore" | "generic">;
+        forced_cold_insertion: boolean;
         explanation: string;
     };
     debug: {

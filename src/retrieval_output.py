@@ -48,7 +48,7 @@ def cold_start_note(result: dict[str, Any]) -> str:
         return ""
     interaction_count = result.get("interaction_count")
     if interaction_count in (None, 0):
-        return "Cold-start item with no interaction history; surfaced through HyPE/vector and proposition/BM25 retrieval."
+        return "Cold-start item with no interaction history."
     return "Cold-start item with limited interaction history."
 
 

@@ -120,12 +120,14 @@ def _profile_label_counters(profile_doc: dict[str, Any] | None, *, max_label_len
 def _explanation_audit(items: list[dict[str, Any]], *, max_label_length: int) -> dict[str, Any]:
     invalid_profile_reason_count = 0
     contaminated_explanation_count = 0
+    primary_reason_attribution_failure_count = 0
     failures: list[dict[str, Any]] = []
 
     for item in items:
         if not isinstance(item, dict):
             continue
         debug = item.get("debug") if isinstance(item.get("debug"), dict) else {}
+        attribution = item.get("attribution") if isinstance(item.get("attribution"), dict) else {}
         profile_label = normalize_interest_label(debug.get("profile_interest_label"))
         explanations = [str(value) for value in item.get("explanations", []) if str(value).strip()]
 
@@ -159,10 +161,38 @@ def _explanation_audit(items: list[dict[str, Any]], *, max_label_length: int) ->
                     }
                 )
 
+        primary_channel = str(attribution.get("primary_reason_channel") or "").strip()
+        if primary_channel:
+            material_channels = attribution.get("material_reason_channels")
+            material_channels = material_channels if isinstance(material_channels, list) else []
+            expected_primary = (
+                "cold_explore"
+                if bool(attribution.get("forced_cold_insertion"))
+                else (str(material_channels[0]) if material_channels else "generic")
+            )
+            attribution_text = str(attribution.get("explanation") or "").strip()
+            visible_primary_text = explanations[0] if explanations else ""
+            if primary_channel != expected_primary or attribution_text != visible_primary_text:
+                primary_reason_attribution_failure_count += 1
+                if len(failures) < 5:
+                    failures.append(
+                        {
+                            "item_id": str(item.get("item_id") or ""),
+                            "kind": "primary_reason_attribution_mismatch",
+                            "value": {
+                                "primary_channel": primary_channel,
+                                "expected_primary": expected_primary,
+                                "attribution_text": attribution_text,
+                                "visible_primary_text": visible_primary_text,
+                            },
+                        }
+                    )
+
     return {
         "invalid_profile_reason_count": invalid_profile_reason_count,
         "contaminated_explanation_count": contaminated_explanation_count,
         "profile_explanation_audit_failures": invalid_profile_reason_count + contaminated_explanation_count,
+        "primary_reason_attribution_failure_count": primary_reason_attribution_failure_count,
         "sample_explanation_failures": failures,
     }
 
@@ -251,6 +281,10 @@ def build_personalization_baseline_report(
                     "item_id": str(item.get("item_id") or ""),
                     "reason_badges": list(item.get("reason_badges", [])),
                     "explanations": list(item.get("explanations", [])),
+                    "primary_reason_channel": str((item.get("attribution") or {}).get("primary_reason_channel") or ""),
+                    "primary_reason_contribution": (item.get("attribution") or {}).get("primary_reason_contribution", 0.0),
+                    "material_reason_channels": list((item.get("attribution") or {}).get("material_reason_channels", [])),
+                    "forced_cold_insertion": bool((item.get("attribution") or {}).get("forced_cold_insertion")),
                     "profile_interest_label": normalize_interest_label(
                         (item.get("debug") or {}).get("profile_interest_label")
                         if isinstance(item.get("debug"), dict)
@@ -277,6 +311,7 @@ def _report_markdown(report: dict[str, Any]) -> str:
         f"- Fact-like labels: {counters.get('fact_label_count', 0)}",
         f"- Generic labels: {counters.get('generic_label_count', 0)}",
         f"- Explanation audit failures: {counters.get('profile_explanation_audit_failures', 0)}",
+        f"- Primary attribution mismatches: {counters.get('primary_reason_attribution_failure_count', 0)}",
         "",
         "## Interest Labels",
     ]

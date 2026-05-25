@@ -48,6 +48,10 @@ const baseRecommendationItem = {
         matched_interest_embedding: null,
         matched_neighbor_embedding: null,
         cf_evidence: null,
+        primary_reason_channel: "query_hybrid",
+        primary_reason_contribution: 0.7,
+        material_reason_channels: ["query_hybrid"],
+        forced_cold_insertion: false,
         explanation: "Matched HyPE intent.",
     },
     debug: {
@@ -433,6 +437,38 @@ describe("Phase 11 routes", () => {
         expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
         expect(screen.getByText("No profile boost in this rank")).toBeInTheDocument();
         expect(screen.getByText("0 profile matches")).toBeInTheDocument();
+    });
+
+    it("uses backend CF badges instead of inferring support from raw evidence", async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        const currentImplementation = fetchMock.getMockImplementation();
+        fetchMock.mockImplementation((input, init) => {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+            if (url.includes("/api/feed/home")) {
+                return jsonResponse({
+                    ...homeResponse,
+                    items: [
+                        {
+                            ...homeResponse.items[0],
+                            reason_badges: ["Profile"],
+                            score_breakdown: { final_score: 0.91, item_item_cf_score: 1.0, semantic_neighbor_score: 1.0 },
+                            attribution: {
+                                ...homeResponse.items[0].attribution,
+                                cf_evidence: { support: 3, cf_score: 0.8 },
+                            },
+                        },
+                    ],
+                });
+            }
+            return currentImplementation!(input, init);
+        });
+
+        renderApp("/");
+
+        expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
+        expect(screen.getByText("0 CF-supported items")).toBeInTheDocument();
+        expect(screen.queryByText("Collaborative Filtering")).not.toBeInTheDocument();
+        expect(screen.queryByText("Semantic similar")).not.toBeInTheDocument();
     });
 
     it("shows refresh progress while retaining the current feed", async () => {
