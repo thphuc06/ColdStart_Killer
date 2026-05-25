@@ -26,6 +26,24 @@ function FieldRow({ label, value }: { label: string; value: string | number | nu
 }
 
 
+const SOFT_RESET_RECOVERY_STEPS = [
+    "Re-seed recommendation logs and clickstream events.",
+    "Build user_item_signals and rebuild item_stats.",
+    "Build user_profiles from reseeded behavior.",
+    "Keep seeded/precomputed item_item_cf_edges for quick recovery.",
+    "Use full reset only when you need to replay the complete CF rebuild from signals.",
+];
+
+const FULL_RESET_RECOVERY_STEPS = [
+    "Re-seed recommendation logs and clickstream events.",
+    "Build user_item_signals and rebuild item_stats.",
+    "Build user_profiles from derived signals/events.",
+    "Build true item_item_cf_edges from multi-user signals.",
+    "Optionally rebuild item_semantic_neighbors if they were explicitly cleared.",
+    "Run evaluation and browser smoke test before recording the demo.",
+];
+
+
 export function DebugPage() {
     const { userIdHash } = useExperience();
     const queryClient = useQueryClient();
@@ -52,25 +70,30 @@ export function DebugPage() {
     });
     const demoStatusQuery = useQuery({ queryKey: ["demo-status"], queryFn: getDemoStatus });
 
-    const resetMutation = useMutation({ mutationFn: resetDemo });
-    const seedMutation = useMutation({ mutationFn: seedDemo });
-    const processMutation = useMutation({ mutationFn: processEvents });
-    const profileMutation = useMutation({ mutationFn: rebuildProfiles });
-    const cfMutation = useMutation({ mutationFn: rebuildCf });
+    const refreshAdminState = async () => {
+        const tasks: Promise<unknown>[] = [
+            demoStatusQuery.refetch(),
+            queryClient.invalidateQueries({ queryKey: ["demo-users"] }),
+            queryClient.invalidateQueries({ queryKey: ["homepage-feed"] }),
+        ];
+        if (userIdHash) {
+            tasks.unshift(debugQuery.refetch());
+        }
+        await Promise.all(tasks);
+    };
+
+    const resetMutation = useMutation({ mutationFn: resetDemo, onSuccess: refreshAdminState });
+    const seedMutation = useMutation({ mutationFn: seedDemo, onSuccess: refreshAdminState });
+    const processMutation = useMutation({ mutationFn: processEvents, onSuccess: refreshAdminState });
+    const profileMutation = useMutation({ mutationFn: rebuildProfiles, onSuccess: refreshAdminState });
+    const cfMutation = useMutation({ mutationFn: rebuildCf, onSuccess: refreshAdminState });
     const applyBehaviorMutation = useMutation({
         mutationFn: async () => ({
             signals: await processEvents({ limit: 100000, rebuildItemStats: true, write: true }),
             profiles: await rebuildProfiles({ write: true }),
             cf: await rebuildCf({ write: true }),
         }),
-        onSuccess: async () => {
-            await Promise.all([
-                debugQuery.refetch(),
-                demoStatusQuery.refetch(),
-                queryClient.invalidateQueries({ queryKey: ["demo-users"] }),
-                queryClient.invalidateQueries({ queryKey: ["homepage-feed"] }),
-            ]);
-        },
+        onSuccess: refreshAdminState,
     });
 
     const metricSummary = useMemo(
@@ -167,21 +190,22 @@ export function DebugPage() {
                         <p className="soft-label">Demo Recovery</p>
                         <h3 className="mt-1 text-xl font-black text-[var(--ink-strong)]">Reset modes and rebuild order</h3>
                         <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
-                            Soft reset clears live demo logs/events while keeping catalog data and precomputed synthetic CF edges.
-                            Full reset replays the behavior pipeline and requires rebuilding signals, profiles, item stats, and item-item CF.
+                            Soft reset clears recommendation logs, clickstream events, user signals, profiles, and item stats while
+                            keeping catalog data and precomputed synthetic CF edges. Full reset also clears behavior-derived CF edges
+                            and requires rebuilding signals, profiles, item stats, and item-item CF.
                         </p>
                         <div className="mt-4 grid gap-3 md:grid-cols-2">
                             <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-4">
                                 <StatusBadge tone="mint">Soft reset</StatusBadge>
                                 <p className="mt-3 text-sm text-[var(--ink-soft)]">
-                                    Keeps seeded/precomputed `item_item_cf_edges` for quick recovery. Use for repeated live demos.
+                                    Clears behavior state but keeps seeded/precomputed `item_item_cf_edges` for quick recovery.
                                 </p>
                                 <p className="mt-2 font-mono text-xs text-[var(--ink-muted)]">Confirm: DEMO_RESET</p>
                             </div>
                             <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-4">
                                 <StatusBadge tone="amber">Full reset</StatusBadge>
                                 <p className="mt-3 text-sm text-[var(--ink-soft)]">
-                                    Clears behavior-derived artifacts including CF edges. Use only when replaying the full pipeline.
+                                    Also clears `item_item_cf_edges`. Use only when replaying the full event-to-signal-to-profile-to-CF pipeline.
                                 </p>
                                 <p className="mt-2 font-mono text-xs text-[var(--ink-muted)]">Confirm: FULL_DEMO_RESET</p>
                             </div>
@@ -204,7 +228,7 @@ export function DebugPage() {
                         <div className="rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-4">
                             <p className="soft-label">Current demo state</p>
                             <div className="mt-3 space-y-2">
-                                {["recommendation_logs", "clickstream_events", "user_item_signals", "user_profiles", "item_item_cf_edges"].map((name) => (
+                                {["recommendation_logs", "clickstream_events", "user_item_signals", "user_profiles", "item_stats", "item_item_cf_edges"].map((name) => (
                                     <FieldRow key={name} label={name} value={demoStatusQuery.data?.counts?.[name] ?? "n/a"} />
                                 ))}
                             </div>
@@ -213,14 +237,16 @@ export function DebugPage() {
                 </div>
 
                 <details className="mt-5 rounded-lg border border-[var(--line-soft)] bg-white p-4">
-                    <summary className="cursor-pointer font-bold text-[var(--ink-strong)]">Rebuild order after full reset</summary>
+                    <summary className="cursor-pointer font-bold text-[var(--ink-strong)]">
+                        Recovery steps after {resetFull ? "full" : "soft"} reset
+                    </summary>
+                    <div className="mt-3">
+                        <StatusBadge tone={resetFull ? "amber" : "mint"}>{resetFull ? "Full reset selected" : "Soft reset selected"}</StatusBadge>
+                    </div>
                     <ol className="mt-3 list-decimal space-y-2 pl-5 text-sm leading-6 text-[var(--ink-soft)]">
-                        <li>Seed synthetic recommendation logs and clickstream events.</li>
-                        <li>Build `user_item_signals` and rebuild `item_stats`.</li>
-                        <li>Build `user_profiles` from derived signals/events.</li>
-                        <li>Build true `item_item_cf_edges` from multi-user signals.</li>
-                        <li>Optionally rebuild `item_semantic_neighbors` if they were explicitly cleared.</li>
-                        <li>Run evaluation and browser smoke test before recording the demo.</li>
+                        {(resetFull ? FULL_RESET_RECOVERY_STEPS : SOFT_RESET_RECOVERY_STEPS).map((step) => (
+                            <li key={step}>{step}</li>
+                        ))}
                     </ol>
                 </details>
             </section>
@@ -281,6 +307,7 @@ export function DebugPage() {
                             <RefreshCcw className="h-4 w-4" />
                             {resetMutation.isPending ? "Submitting..." : "Run reset"}
                         </button>
+                        <p className="text-xs leading-5 text-[var(--ink-muted)]">This will clear current demo interactions.</p>
                     </div>
                 </section>
 

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 
@@ -159,6 +159,7 @@ const demoStatusResponse = {
         clickstream_events: 10,
         user_item_signals: 8,
         user_profiles: 4,
+        item_stats: 7,
         item_item_cf_edges: 6,
     },
     cf_evidence_available: true,
@@ -274,6 +275,23 @@ function installFetchMock() {
         }
         if (url.includes("/api/demo/status")) {
             return jsonResponse(demoStatusResponse);
+        }
+        if (url.includes("/api/demo/reset")) {
+            return jsonResponse({
+                ok: true,
+                mode: url.includes("write=true") ? "write" : "dry-run",
+                reset_type: url.includes("full=true") ? "full" : "soft",
+                rebuild_order: url.includes("full=true")
+                    ? ["seed", "signals", "profiles", "cf"]
+                    : ["seed", "signals", "profiles", "keep_cf"],
+            });
+        }
+        if (url.includes("/api/demo/seed")) {
+            return jsonResponse({
+                ok: true,
+                mode: url.includes("write=true") ? "write" : "dry-run",
+                summary: { users: 40, requests: 120 },
+            });
         }
         if (url.includes("/api/debug/process-events")) {
             return jsonResponse({ ok: true, stage: "signals" });
@@ -436,5 +454,52 @@ describe("Phase 11 routes", () => {
         expect(screen.getByText(/"stage": "signals"/)).toBeInTheDocument();
         expect(screen.getByText(/"stage": "profiles"/)).toBeInTheDocument();
         expect(screen.getByText(/"stage": "cf"/)).toBeInTheDocument();
+    });
+
+    it("submits a full reset from the debug route with confirmation", async () => {
+        renderApp("/debug");
+
+        const resetPanel = (await screen.findByText("Reset behavior data")).closest("section");
+        expect(resetPanel).not.toBeNull();
+        const resetScope = within(resetPanel as HTMLElement);
+
+        fireEvent.click(resetScope.getByRole("checkbox", { name: "write mode" }));
+        fireEvent.click(resetScope.getByRole("checkbox", { name: "full reset" }));
+        fireEvent.change(resetScope.getByPlaceholderText("FULL_DEMO_RESET"), { target: { value: "FULL_DEMO_RESET" } });
+        fireEvent.click(resetScope.getByRole("button", { name: "Run reset" }));
+
+        expect(await screen.findByText("Reset response")).toBeInTheDocument();
+        expect(screen.getByText(/"reset_type": "full"/)).toBeInTheDocument();
+        expect(screen.getByText("This will clear current demo interactions.")).toBeInTheDocument();
+        await waitFor(() => {
+            const call = vi
+                .mocked(globalThis.fetch)
+                .mock.calls.find(([input]) => String(input).includes("/api/demo/reset"));
+            expect(call).toBeDefined();
+            expect(String(call?.[0])).toContain("write=true");
+            expect(String(call?.[0])).toContain("full=true");
+            expect(String(call?.[0])).toContain("confirm=FULL_DEMO_RESET");
+        });
+    });
+
+    it("submits synthetic seed from the debug route", async () => {
+        renderApp("/debug");
+
+        const seedPanel = (await screen.findByText("Seed synthetic behavior")).closest("section");
+        expect(seedPanel).not.toBeNull();
+        const seedScope = within(seedPanel as HTMLElement);
+
+        fireEvent.click(seedScope.getByRole("checkbox", { name: "write mode" }));
+        fireEvent.click(seedScope.getByRole("button", { name: "Run seed" }));
+
+        expect(await screen.findByText("Seed response")).toBeInTheDocument();
+        expect(screen.getByText(/"summary":/)).toBeInTheDocument();
+        await waitFor(() => {
+            const call = vi
+                .mocked(globalThis.fetch)
+                .mock.calls.find(([input]) => String(input).includes("/api/demo/seed"));
+            expect(call).toBeDefined();
+            expect(String(call?.[0])).toContain("write=true");
+        });
     });
 });

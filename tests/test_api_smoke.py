@@ -305,8 +305,14 @@ def test_demo_reset_dry_run_reports_counts(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["mode"] == "dry-run"
-    assert payload["targets"][0]["collection"] == "recommendation_logs"
-    assert any(target["collection"] == "clickstream_events" for target in payload["targets"])
+    assert {target["collection"] for target in payload["targets"]} == {
+        "recommendation_logs",
+        "clickstream_events",
+        "user_item_signals",
+        "user_profiles",
+        "item_stats",
+    }
+    assert any("build_user_item_signals.py --write --rebuild-item-stats" in step for step in payload["rebuild_order"])
     assert payload["protected_collections"] == ["items", "retrieval_units"]
 
 
@@ -331,6 +337,27 @@ def test_demo_reset_write_requires_confirmation(monkeypatch) -> None:
     detail = response.json()["detail"]
     assert detail["error"] == "confirmation_required"
     assert detail["expected_confirm"] == "DEMO_RESET"
+
+
+def test_demo_reset_write_clears_catalog_cache(monkeypatch) -> None:
+    import src.api.routes_debug as routes_debug
+
+    cache_clears = []
+
+    monkeypatch.setattr(routes_debug, "get_database", lambda: object())
+    monkeypatch.setattr(
+        routes_debug,
+        "execute_reset",
+        lambda *_args, **_kwargs: {"mode": "write", "deleted": {"item_stats": 4}},
+    )
+    monkeypatch.setattr(routes_debug, "clear_catalog_snapshot_cache", lambda: cache_clears.append(True))
+
+    client = TestClient(create_app())
+    response = client.post("/api/demo/reset?write=true&confirm=DEMO_RESET")
+
+    assert response.status_code == 200
+    assert response.json()["mode"] == "write"
+    assert cache_clears == [True]
 
 
 def test_demo_status_reports_counts_and_protected_collections(monkeypatch) -> None:
@@ -362,6 +389,7 @@ def test_demo_status_reports_counts_and_protected_collections(monkeypatch) -> No
     assert payload["counts"]["item_item_cf_edges"] == 8
     assert payload["cf_evidence_available"] is True
     assert payload["protected_collections"] == ["items", "retrieval_units"]
+    assert "seeded/precomputed synthetic behavior" in payload["precomputed_cf_note"]
 
 
 def test_process_events_write_rebuild_stats_clears_catalog_cache(monkeypatch) -> None:

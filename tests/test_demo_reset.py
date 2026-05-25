@@ -13,8 +13,17 @@ def test_old_clear_demo_data_script_is_quarantined(monkeypatch) -> None:
 
 
 def test_phase13_reset_targets_are_behavior_only() -> None:
+    soft_target_names = {target.collection for target in build_reset_targets(full=False)}
     target_names = {target.collection for target in build_reset_targets(full=True, include_semantic_neighbors=True)}
 
+    assert soft_target_names == {
+        "recommendation_logs",
+        "clickstream_events",
+        "user_item_signals",
+        "user_profiles",
+        "item_stats",
+    }
+    assert "item_item_cf_edges" not in soft_target_names
     assert "items" not in target_names
     assert "retrieval_units" not in target_names
     assert "recommendation_logs" in target_names

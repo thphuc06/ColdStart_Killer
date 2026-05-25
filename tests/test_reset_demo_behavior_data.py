@@ -54,7 +54,18 @@ def test_reset_dry_run_does_not_delete() -> None:
     assert result["reset_type"] == "soft"
     assert result["dry_run"] is True
     assert "items" in result["protected_collections"]
+    assert "users" in result["kept_collections"]
+    assert "sessions" in result["kept_collections"]
     assert "item_item_cf_edges" in result["kept_collections"]
+    assert {target["collection"] for target in result["targets"]} == {
+        "recommendation_logs",
+        "clickstream_events",
+        "user_item_signals",
+        "user_profiles",
+        "item_stats",
+    }
+    assert all(target["filter"] == {} for target in result["targets"])
+    assert any("build_user_item_signals.py --write --rebuild-item-stats" in step for step in result["rebuild_order"])
     assert result["rebuild_order"]
     assert all(not collection.deleted_filters for collection in database.collections.values())
 
@@ -62,6 +73,23 @@ def test_reset_dry_run_does_not_delete() -> None:
 def test_reset_write_requires_confirmation() -> None:
     with pytest.raises(RuntimeError, match="Confirmation required"):
         execute_reset(FakeDatabase(), full=True, write=True)
+
+
+def test_soft_reset_write_deletes_behavior_state_but_keeps_cf_edges() -> None:
+    database = FakeDatabase()
+
+    result = execute_reset(database, full=False, write=True, confirm="DEMO_RESET")
+
+    assert result["mode"] == "write"
+    assert set(result["deleted"]) == {
+        "recommendation_logs",
+        "clickstream_events",
+        "user_item_signals",
+        "user_profiles",
+        "item_stats",
+    }
+    assert "item_item_cf_edges" not in result["deleted"]
+    assert all(filter_doc == {} for collection in database.collections.values() for filter_doc in collection.deleted_filters)
 
 
 def test_reset_write_deletes_only_allowlisted_behavior_collections() -> None:
@@ -72,6 +100,7 @@ def test_reset_write_deletes_only_allowlisted_behavior_collections() -> None:
     assert result["mode"] == "write"
     assert "items" not in result["deleted"]
     assert "retrieval_units" not in result["deleted"]
+    assert "item_item_cf_edges" in result["deleted"]
     assert result["deleted"]["clickstream_events"] == 3
 
 

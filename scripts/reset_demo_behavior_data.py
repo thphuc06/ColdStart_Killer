@@ -15,9 +15,16 @@ from src.config import get_settings
 
 
 CATALOG_COLLECTIONS: set[str] = {"items", "retrieval_units"}
-SOFT_RESET_FILTER: dict[str, Any] = {"is_synthetic": {"$ne": True}}
-SOFT_RESET_COLLECTIONS: tuple[str, ...] = ("recommendation_logs", "clickstream_events")
+SOFT_RESET_COLLECTIONS: tuple[str, ...] = (
+    "recommendation_logs",
+    "clickstream_events",
+    "user_item_signals",
+    "user_profiles",
+    "item_stats",
+)
 SOFT_RESET_KEEP_COLLECTIONS: tuple[str, ...] = (
+    "users",
+    "sessions",
     "items",
     "retrieval_units",
     "item_hype_profiles",
@@ -34,9 +41,12 @@ FULL_RESET_COLLECTIONS: tuple[str, ...] = (
     "item_item_cf_edges",
 )
 FULL_RESET_KEEP_COLLECTIONS: tuple[str, ...] = (
+    "users",
+    "sessions",
     "items",
     "retrieval_units",
     "item_hype_profiles",
+    "item_semantic_neighbors",
     "synthetic_personas",
 )
 REBUILD_ORDER_AFTER_FULL_RESET: tuple[str, ...] = (
@@ -51,9 +61,14 @@ REBUILD_ORDER_AFTER_FULL_RESET: tuple[str, ...] = (
     "python scripts/build_item_semantic_neighbors.py --dry-run",
 )
 REBUILD_ORDER_AFTER_SOFT_RESET: tuple[str, ...] = (
-    "Use existing seeded/precomputed synthetic CF edges for quick recovery.",
-    "Optionally process new live demo events: python scripts/build_user_item_signals.py --dry-run --rebuild-item-stats",
-    "Optionally rebuild profiles/CF if you want the current session reflected in downstream artifacts.",
+    "python scripts/seed_synthetic_clickstream.py --dry-run",
+    "python scripts/seed_synthetic_clickstream.py --write",
+    "python scripts/build_user_item_signals.py --dry-run --rebuild-item-stats",
+    "python scripts/build_user_item_signals.py --write --rebuild-item-stats",
+    "python scripts/build_user_profiles.py --dry-run",
+    "python scripts/build_user_profiles.py --write",
+    "Existing seeded/precomputed item_item_cf_edges remain available for quick recovery.",
+    "Use full reset if you need to rebuild item_item_cf_edges from behavior-derived signals.",
 )
 
 
@@ -70,7 +85,7 @@ def build_reset_targets(*, full: bool, include_semantic_neighbors: bool = False)
             names.append("item_semantic_neighbors")
         targets = [ResetTarget(collection=name, filter={}) for name in names]
     else:
-        targets = [ResetTarget(collection=name, filter=dict(SOFT_RESET_FILTER)) for name in SOFT_RESET_COLLECTIONS]
+        targets = [ResetTarget(collection=name, filter={}) for name in SOFT_RESET_COLLECTIONS]
     validate_reset_targets(targets)
     return targets
 
@@ -87,6 +102,13 @@ def _required_confirmation(full: bool) -> str:
 
 def _mode_label(write: bool) -> str:
     return "write" if write else "dry-run"
+
+
+def kept_collections_for_reset(*, full: bool, include_semantic_neighbors: bool = False) -> list[str]:
+    kept = list(FULL_RESET_KEEP_COLLECTIONS if full else SOFT_RESET_KEEP_COLLECTIONS)
+    if full and include_semantic_neighbors and "item_semantic_neighbors" in kept:
+        kept.remove("item_semantic_neighbors")
+    return kept
 
 
 def rebuild_order_for_reset(*, full: bool, include_semantic_neighbors: bool = False) -> list[str]:
@@ -122,9 +144,12 @@ def execute_reset(
         "reset_type": "full" if full else "soft",
         "dry_run": not write,
         "protected_collections": sorted(CATALOG_COLLECTIONS),
-        "kept_collections": list(FULL_RESET_KEEP_COLLECTIONS if full else SOFT_RESET_KEEP_COLLECTIONS),
+        "kept_collections": kept_collections_for_reset(
+            full=full,
+            include_semantic_neighbors=include_semantic_neighbors,
+        ),
         "precomputed_cf_note": (
-            "Soft reset keeps seeded/precomputed item_item_cf_edges for quick demo recovery."
+            "Soft reset clears behavior state but keeps seeded/precomputed item_item_cf_edges for quick demo recovery."
             if not full
             else "Full reset clears item_item_cf_edges so CF must be rebuilt from user_item_signals."
         ),
@@ -155,8 +180,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         )
     )
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--soft", action="store_true", help="Reset non-synthetic live demo logs/events only.")
-    mode.add_argument("--full", action="store_true", help="Reset behavior-derived collections.")
+    mode.add_argument(
+        "--soft",
+        action="store_true",
+        help="Reset logs, events, signals, profiles, and item stats while keeping precomputed CF edges.",
+    )
+    mode.add_argument("--full", action="store_true", help="Reset behavior-derived collections and clear item-item CF edges.")
     parser.add_argument("--dry-run", action="store_true", help="Explicit dry-run mode. This is also the default.")
     parser.add_argument("--write", action="store_true", help="Actually delete matched behavior docs.")
     parser.add_argument("--confirm", default=None, help="Required confirmation string for --write.")

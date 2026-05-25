@@ -176,6 +176,8 @@ def reset_demo_behavior(write: bool = False, full: bool = False, confirm: str | 
                 "expected_confirm": expected,
             },
         ) from exc
+    if write:
+        clear_catalog_snapshot_cache()
     return result
 
 
