@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DatabaseBackup, Gauge, RefreshCcw, TestTube2, Wrench } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { JsonCard } from "../components/JsonCard";
 import { EvaluationSummaryCard } from "../components/EvaluationSummaryCard";
@@ -58,10 +58,18 @@ const FULL_RESET_RECOVERY_STEPS = [
     "Run evaluation and browser smoke test before recording the demo.",
 ];
 
+const ADMIN_TOKEN_STORAGE_KEY = "coldstart-killer/admin-token/v1";
+
 
 export function DebugPage() {
     const { userIdHash } = useExperience();
     const queryClient = useQueryClient();
+    const [adminToken, setAdminToken] = useState(() => {
+        if (typeof window === "undefined") {
+            return "";
+        }
+        return window.sessionStorage.getItem(ADMIN_TOKEN_STORAGE_KEY) || "";
+    });
     const [resetWrite, setResetWrite] = useState(false);
     const [resetFull, setResetFull] = useState(false);
     const [resetConfirm, setResetConfirm] = useState("");
@@ -77,22 +85,40 @@ export function DebugPage() {
     const [cfWrite, setCfWrite] = useState(false);
     const [cfLimitUsers, setCfLimitUsers] = useState("");
     const [cfSupport, setCfSupport] = useState(2);
+    const [applyWrite, setApplyWrite] = useState(false);
+    const hasAdminToken = adminToken.trim().length > 0;
+
+    useEffect(() => {
+        if (typeof window === "undefined") {
+            return;
+        }
+        const value = adminToken.trim();
+        if (value) {
+            window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, value);
+            return;
+        }
+        window.sessionStorage.removeItem(ADMIN_TOKEN_STORAGE_KEY);
+    }, [adminToken]);
 
     const debugQuery = useQuery({
         queryKey: ["debug-user", userIdHash],
-        queryFn: () => getDebugUser(userIdHash!),
-        enabled: Boolean(userIdHash),
+        queryFn: () => getDebugUser(userIdHash!, adminToken),
+        enabled: Boolean(userIdHash && hasAdminToken),
     });
-    const demoStatusQuery = useQuery({ queryKey: ["demo-status"], queryFn: getDemoStatus });
+    const demoStatusQuery = useQuery({
+        queryKey: ["demo-status"],
+        queryFn: () => getDemoStatus(adminToken),
+        enabled: hasAdminToken,
+    });
     const evaluationRunQuery = useQuery({ queryKey: ["evaluation-run-latest"], queryFn: getLatestEvaluationRun });
 
     const refreshAdminState = async () => {
-        const tasks: Promise<unknown>[] = [
-            demoStatusQuery.refetch(),
-            queryClient.invalidateQueries({ queryKey: ["demo-users"] }),
-            queryClient.invalidateQueries({ queryKey: ["homepage-feed"] }),
-        ];
-        if (userIdHash) {
+        const tasks: Promise<unknown>[] = [queryClient.invalidateQueries({ queryKey: ["demo-users"] })];
+        if (hasAdminToken) {
+            tasks.push(demoStatusQuery.refetch());
+        }
+        tasks.push(queryClient.invalidateQueries({ queryKey: ["homepage-feed"] }));
+        if (userIdHash && hasAdminToken) {
             tasks.unshift(debugQuery.refetch());
         }
         await Promise.all(tasks);
@@ -104,7 +130,13 @@ export function DebugPage() {
     const profileMutation = useMutation({ mutationFn: rebuildProfiles, onSuccess: refreshAdminState });
     const cfMutation = useMutation({ mutationFn: rebuildCf, onSuccess: refreshAdminState });
     const applyBehaviorMutation = useMutation({
-        mutationFn: () => applyPendingBehavior({ maxEvents: Number(processLimit) || 100, rebuildItemStats: true, write: true }),
+        mutationFn: () =>
+            applyPendingBehavior({
+                maxEvents: Number(processLimit) || 100,
+                rebuildItemStats: true,
+                write: applyWrite,
+                adminToken,
+            }),
         onSuccess: refreshAdminState,
     });
 
@@ -126,6 +158,7 @@ export function DebugPage() {
     const profileWriteBlocked = profileWrite && profileLimitUsers.trim().length > 0;
     const cfWriteBlocked = cfWrite && cfLimitUsers.trim().length > 0;
     const processWriteBlocked = processWrite && processLimit.trim().length > 0;
+    const adminActionBlocked = !hasAdminToken;
 
     return (
         <div className="space-y-8">
@@ -164,6 +197,30 @@ export function DebugPage() {
                             <p className="soft-label">CF edges</p>
                             <p className="metric-value">{metricSummary.cfEdges}</p>
                         </div>
+                    </div>
+                </div>
+            </section>
+
+            <section className="panel p-5">
+                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr),320px] lg:items-end">
+                    <div>
+                        <p className="soft-label">Admin access</p>
+                        <h3 className="mt-2 text-lg font-medium text-[var(--ink-strong)]">Unlock debug and demo controls</h3>
+                        <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
+                            Protected debug/demo endpoints now require the backend <strong>X-Admin-Token</strong>. Enter it here to load lineage and enable write actions.
+                        </p>
+                    </div>
+                    <div className="space-y-3">
+                        <input
+                            className="form-input"
+                            type="password"
+                            placeholder="Enter admin token"
+                            value={adminToken}
+                            onChange={(event) => setAdminToken(event.target.value)}
+                        />
+                        <StatusBadge tone={hasAdminToken ? "mint" : "amber"}>
+                            {hasAdminToken ? "Admin token loaded" : "Admin token required"}
+                        </StatusBadge>
                     </div>
                 </div>
             </section>
@@ -383,12 +440,18 @@ export function DebugPage() {
                         </div>
                         <button
                             className="action-button action-button-primary w-full"
-                            disabled={applyBehaviorMutation.isPending}
+                            disabled={applyBehaviorMutation.isPending || adminActionBlocked}
                             onClick={() => applyBehaviorMutation.mutate()}
                         >
                             <Wrench className="h-4 w-4" />
-                            {applyBehaviorMutation.isPending ? "Applying behavior..." : "Apply captured behavior"}
+                            {applyBehaviorMutation.isPending
+                                ? (applyWrite ? "Applying behavior..." : "Previewing behavior...")
+                                : (applyWrite ? "Apply captured behavior" : "Preview pending behavior")}
                         </button>
+                        <label className="flex items-center gap-3 rounded-lg bg-[var(--surface-muted)] px-4 py-3 text-sm font-semibold">
+                            <input checked={applyWrite} type="checkbox" onChange={(event) => setApplyWrite(event.target.checked)} />
+                            write mode
+                        </label>
                     </div>
                 </section>
 
@@ -418,8 +481,15 @@ export function DebugPage() {
                         />
                         <button
                             className="action-button action-button-primary w-full"
-                            disabled={resetMutation.isPending}
-                            onClick={() => resetMutation.mutate({ write: resetWrite, full: resetFull, confirm: resetConfirm || undefined })}
+                            disabled={resetMutation.isPending || adminActionBlocked}
+                            onClick={() =>
+                                resetMutation.mutate({
+                                    write: resetWrite,
+                                    full: resetFull,
+                                    confirm: resetConfirm || undefined,
+                                    adminToken,
+                                })
+                            }
                         >
                             <RefreshCcw className="h-4 w-4" />
                             {resetMutation.isPending ? "Submitting..." : "Run reset"}
@@ -449,7 +519,7 @@ export function DebugPage() {
                     </label>
                     <button
                         className="action-button action-button-primary mt-3 w-full"
-                        disabled={seedMutation.isPending}
+                        disabled={seedMutation.isPending || adminActionBlocked}
                         onClick={() =>
                             seedMutation.mutate({
                                 users: seedUsers,
@@ -457,6 +527,7 @@ export function DebugPage() {
                                 itemsPerRequest: seedItems,
                                 seed: seedValue,
                                 write: seedWrite,
+                                adminToken,
                             })
                         }
                     >
@@ -485,8 +556,15 @@ export function DebugPage() {
                     </label>
                     <button
                         className="action-button action-button-primary mt-3 w-full"
-                        disabled={processMutation.isPending || processWriteBlocked}
-                        onClick={() => processMutation.mutate({ limit: processLimit ? Number(processLimit) : undefined, write: processWrite, rebuildItemStats: true })}
+                        disabled={processMutation.isPending || processWriteBlocked || adminActionBlocked}
+                        onClick={() =>
+                            processMutation.mutate({
+                                limit: processLimit ? Number(processLimit) : undefined,
+                                write: processWrite,
+                                rebuildItemStats: true,
+                                adminToken,
+                            })
+                        }
                     >
                         <Wrench className="h-4 w-4" />
                         {processMutation.isPending ? "Submitting..." : "Process events"}
@@ -522,11 +600,12 @@ export function DebugPage() {
                             </p>
                             <button
                                 className="action-button action-button-secondary mt-3 w-full"
-                                disabled={profileMutation.isPending || profileWriteBlocked}
+                                disabled={profileMutation.isPending || profileWriteBlocked || adminActionBlocked}
                                 onClick={() =>
                                     profileMutation.mutate({
                                         limitUsers: profileLimitUsers ? Number(profileLimitUsers) : undefined,
                                         write: profileWrite,
+                                        adminToken,
                                     })
                                 }
                             >
@@ -556,12 +635,13 @@ export function DebugPage() {
                             </p>
                             <button
                                 className="action-button action-button-secondary mt-3 w-full"
-                                disabled={cfMutation.isPending || cfWriteBlocked}
+                                disabled={cfMutation.isPending || cfWriteBlocked || adminActionBlocked}
                                 onClick={() =>
                                     cfMutation.mutate({
                                         limitUsers: cfLimitUsers ? Number(cfLimitUsers) : undefined,
                                         minSupport: cfSupport,
                                         write: cfWrite,
+                                        adminToken,
                                     })
                                 }
                             >

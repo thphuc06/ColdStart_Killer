@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, Query
 
 from src.recommendation.homepage_feed import get_homepage_feed
+from .request_guards import personalization_enabled_for_user
 
 
 router = APIRouter(prefix="/api")
@@ -17,11 +18,15 @@ def get_feed_home(
     top_k: int = Query(20, ge=1, le=100),
     personalized: bool = True,
 ) -> dict[str, Any]:
+    effective_personalized = personalization_enabled_for_user(
+        user_id_hash,
+        personalized=personalized,
+    )
     result = get_homepage_feed(
         user_id_hash=user_id_hash,
         session_id=session_id,
         top_k=top_k,
-        personalized=personalized,
+        personalized=effective_personalized,
     )
     result["user_id_hash"] = user_id_hash
     return result

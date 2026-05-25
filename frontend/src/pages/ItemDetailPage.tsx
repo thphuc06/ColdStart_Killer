@@ -8,7 +8,7 @@ import { ProductImage } from "../components/ProductImage";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
 import { formatVnd, getItemDetail, getSimilarProducts, type EventType, type RecommendationCard } from "../lib/api";
-import { buildOriginFromCard, trackRecommendationAction, type RecommendationOrigin } from "../lib/tracking";
+import { buildOriginFromCard, trackDirectDetailAction, trackRecommendationAction, type RecommendationOrigin } from "../lib/tracking";
 import { useImpressionLogger } from "../lib/useImpressionLogger";
 import { useExperience } from "../state/experience";
 
@@ -87,20 +87,31 @@ export function ItemDetailPage() {
     );
 
     useEffect(() => {
-        if (!origin || !userIdHash || !itemId) {
+        if (!userIdHash || !itemId) {
             return;
         }
 
         const startedAt = performance.now();
         return () => {
             const dwell = Math.max(500, Math.round(performance.now() - startedAt));
-            void trackRecommendationAction({
+            if (origin) {
+                void trackRecommendationAction({
+                    userIdHash,
+                    sessionId,
+                    itemId,
+                    eventType: "view_detail",
+                    origin,
+                    queryText: origin.queryText,
+                    dwellTimeMs: dwell,
+                    clientComponent: "product-detail",
+                });
+                return;
+            }
+            void trackDirectDetailAction({
                 userIdHash,
                 sessionId,
                 itemId,
                 eventType: "view_detail",
-                origin,
-                queryText: origin.queryText,
                 dwellTimeMs: dwell,
                 clientComponent: "product-detail",
             });
@@ -108,21 +119,32 @@ export function ItemDetailPage() {
     }, [itemId, origin, originKey, sessionId, userIdHash]);
 
     async function handleOriginAction(eventType: EventType) {
-        if (!origin || !userIdHash || !itemId) {
-            setDetailFeedback("This detail view was opened directly, so no recommendation event was logged.");
+        if (!userIdHash || !itemId) {
             return;
         }
 
-        await trackRecommendationAction({
+        if (origin) {
+            await trackRecommendationAction({
+                userIdHash,
+                sessionId,
+                itemId,
+                eventType,
+                origin,
+                queryText: origin.queryText,
+                clientComponent: "product-detail",
+            });
+            setDetailFeedback(`${eventType.replace(/_/g, " ")} logged against the originating ${origin.surface} recommendation.`);
+            return;
+        }
+
+        await trackDirectDetailAction({
             userIdHash,
             sessionId,
             itemId,
             eventType,
-            origin,
-            queryText: origin.queryText,
             clientComponent: "product-detail",
         });
-        setDetailFeedback(`${eventType.replace(/_/g, " ")} logged against the originating ${origin.surface} recommendation.`);
+        setDetailFeedback(`${eventType.replace(/_/g, " ")} logged on this product detail page.`);
     }
 
     async function handleOpenSimilar(card: RecommendationCard) {
@@ -178,11 +200,10 @@ export function ItemDetailPage() {
                                 <div className="mt-3 grid grid-cols-4 gap-2">
                                     {galleryImages.slice(0, 8).map((imageUrl, index) => (
                                         <button
-                                            className={`aspect-square overflow-hidden rounded-md border bg-white p-1 ${
-                                                (selectedImageUrl || itemQuery.data.image_url) === imageUrl
+                                            className={`aspect-square overflow-hidden rounded-md border bg-white p-1 ${(selectedImageUrl || itemQuery.data.image_url) === imageUrl
                                                     ? "border-[var(--mint)]"
                                                     : "border-[var(--line-soft)]"
-                                            }`}
+                                                }`}
                                             key={imageUrl}
                                             aria-label={`View product image ${index + 1}`}
                                             onClick={() => setSelectedImageUrl(imageUrl)}
@@ -262,14 +283,14 @@ export function ItemDetailPage() {
                                     </p>
                                 ) : (
                                     <p className="mt-1 text-sm text-[var(--ink-soft)]">
-                                        Opened directly. Actions are shown locally unless a recommendation origin is attached.
+                                        Opened directly. Detail views and actions are still logged, but without recommendation attribution.
                                     </p>
                                 )}
                             </div>
 
                             {itemQuery.data.source_text.description_text ||
-                            itemQuery.data.source_text.features_text ||
-                            itemQuery.data.source_text.details_text ? (
+                                itemQuery.data.source_text.features_text ||
+                                itemQuery.data.source_text.details_text ? (
                                 <div className="space-y-4 rounded-lg border border-[var(--line-soft)] bg-[var(--surface-muted)] p-4">
                                     <p className="soft-label">Product information</p>
                                     {itemQuery.data.source_text.description_text ? (

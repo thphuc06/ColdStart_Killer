@@ -49,6 +49,7 @@ def get_similar_products(
     session_id: str,
     source_item_id: str,
     top_k: int = 12,
+    personalized: bool = True,
     *,
     user_profiles_collection: Any | None = None,
     user_item_signals_collection: Any | None = None,
@@ -97,7 +98,8 @@ def get_similar_products(
             "snapshot": {"ok": True, "attempted": 0, "inserted": 0, "existing": 0},
         }
 
-    profile = load_user_profile(user_id_hash, user_profiles_collection=user_profiles_collection) if settings.enable_personalization else None
+    effective_personalized = bool(personalized and settings.enable_personalization)
+    profile = load_user_profile(user_id_hash, user_profiles_collection=user_profiles_collection) if effective_personalized else None
     excluded_item_ids = exact_suppressed_item_ids(profile, include_purchased=True) | {source_item_id}
     _, _, source_profiles_by_id = load_item_snapshot(
         {source_item_id},
@@ -177,6 +179,7 @@ def get_similar_products(
         "source_item_id": source_item_id,
         "algorithm_version": settings.algorithm_version,
         "ranking_version": settings.ranking_version,
+        "personalized": effective_personalized,
         "snapshot": snapshot,
         "items": cards,
     }

@@ -13,7 +13,7 @@ from src.utils import utc_now_iso
 ProfileStatus = Literal["new", "onboarded", "warming", "warm"]
 RecommendationSurface = Literal["search", "home", "detail_similar", "seller_preview"]
 PrimaryReasonChannel = Literal["query_hybrid", "profile", "semantic_neighbor", "cf", "cold_explore", "generic"]
-EventSurface = Literal["search", "home", "detail_similar", "cart", "onboarding", "debug"]
+EventSurface = Literal["search", "home", "detail", "detail_similar", "cart", "onboarding", "debug"]
 SignalIntentTier = Literal["exposure", "exploratory", "engaged", "conversion", "negative"]
 EventType = Literal[
     "impression",

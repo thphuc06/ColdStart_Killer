@@ -61,7 +61,7 @@ WALKTHROUGH_EVENTS: list[dict] = [
         "user_id_hash": _USER,
         "item_id": "B_SOAP_001",
         "event_type": "view_detail",
-        "surface": "product_detail",
+        "surface": "detail",
         "session_id": _SESSION,
         "request_id": _REQ_SEARCH,
         "dwell_time_ms": 8000,  # engaged tier: >= 5 000 ms, < 20 000 ms
@@ -72,7 +72,7 @@ WALKTHROUGH_EVENTS: list[dict] = [
         "user_id_hash": _USER,
         "item_id": "B_SOAP_001",
         "event_type": "add_to_cart",
-        "surface": "product_detail",
+        "surface": "detail",
         "session_id": _SESSION,
         "request_id": _REQ_SEARCH,
         "timestamp": _TS,
@@ -92,7 +92,7 @@ WALKTHROUGH_EVENTS: list[dict] = [
         "user_id_hash": _USER,
         "item_id": "P_PHONE_001",
         "event_type": "view_detail",
-        "surface": "product_detail",
+        "surface": "detail",
         "session_id": _SESSION,
         "dwell_time_ms": 2000,  # exploratory tier: < 5 000 ms
         "timestamp": _TS,
@@ -111,7 +111,7 @@ WALKTHROUGH_EVENTS: list[dict] = [
         "user_id_hash": _USER,
         "item_id": "P_PHONE_002",
         "event_type": "view_detail",
-        "surface": "product_detail",
+        "surface": "detail",
         "session_id": _SESSION,
         "dwell_time_ms": 1500,  # exploratory tier: < 5 000 ms
         "timestamp": _TS,
@@ -413,8 +413,11 @@ def test_walkthrough_debug_freshness_state_is_current_after_processing(monkeypat
     monkeypatch.setattr(routes_debug, "get_item_item_cf_edges_collection",
                         lambda: _FakeCollection([cf_edge]))
 
+    admin_token = "test-admin-token"
+    monkeypatch.setenv("ADMIN_TOKEN", admin_token)
+
     client = TestClient(create_app())
-    resp = client.get(f"/api/debug/user/{_USER}")
+    resp = client.get(f"/api/debug/user/{_USER}", headers={"X-Admin-Token": admin_token})
     assert resp.status_code == 200
 
     freshness = resp.json()["freshness"]

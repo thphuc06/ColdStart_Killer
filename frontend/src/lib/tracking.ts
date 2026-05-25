@@ -60,3 +60,29 @@ export async function trackRecommendationAction(params: {
         metadata,
     });
 }
+
+
+export async function trackDirectDetailAction(params: {
+    userIdHash: string;
+    sessionId: string;
+    itemId: string;
+    eventType: EventType;
+    dwellTimeMs?: number;
+    metadata?: Record<string, unknown>;
+    clientComponent: string;
+}) {
+    return postEvent({
+        user_id_hash: params.userIdHash,
+        session_id: params.sessionId,
+        item_id: params.itemId,
+        event_type: params.eventType,
+        surface: "detail",
+        event_id: createEventId(),
+        dwell_time_ms: params.dwellTimeMs,
+        client: {
+            component: params.clientComponent,
+            device_type: window.innerWidth < 900 ? "mobile" : "desktop",
+        },
+        metadata: params.metadata || {},
+    });
+}

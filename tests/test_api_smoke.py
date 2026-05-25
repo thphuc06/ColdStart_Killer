@@ -5,6 +5,18 @@ from fastapi.testclient import TestClient
 from src.api.app import create_app
 
 
+ADMIN_TOKEN = "test-admin-token"
+
+
+def _admin_headers() -> dict[str, str]:
+    return {"X-Admin-Token": ADMIN_TOKEN}
+
+
+def _admin_client(monkeypatch) -> TestClient:
+    monkeypatch.setenv("ADMIN_TOKEN", ADMIN_TOKEN)
+    return TestClient(create_app())
+
+
 def test_health_endpoint_returns_versions() -> None:
     client = TestClient(create_app())
     response = client.get("/api/health")
@@ -186,6 +198,7 @@ def test_feed_home_route_delegates_to_service(monkeypatch) -> None:
     import src.api.routes_feed as routes_feed
 
     monkeypatch.setattr(routes_feed, "get_homepage_feed", fake_service)
+    monkeypatch.setattr(routes_feed, "personalization_enabled_for_user", lambda *_args, **_kwargs: True)
     app = create_app()
     client = TestClient(app)
     response = client.get("/api/feed/home", params={"user_id_hash": "u_1", "session_id": "sess_1", "top_k": 5})
@@ -194,6 +207,33 @@ def test_feed_home_route_delegates_to_service(monkeypatch) -> None:
     assert payload["request_id"] == "req_1"
     assert payload["user_id_hash"] == "u_1"
     assert payload["items"][0]["item_id"] == "A1"
+
+
+def test_feed_home_route_disables_personalization_when_user_opted_out(monkeypatch) -> None:
+    expected = {
+        "request_id": "req_1",
+        "surface": "home",
+        "items": [{"item_id": "A1", "title": "Example"}],
+        "algorithm_version": "rec_v1",
+        "ranking_version": "rank_v1",
+        "snapshot": {"ok": True},
+        "personalized": False,
+    }
+
+    def fake_service(**kwargs):
+        assert kwargs["personalized"] is False
+        return dict(expected)
+
+    import src.api.routes_feed as routes_feed
+
+    monkeypatch.setattr(routes_feed, "get_homepage_feed", fake_service)
+    monkeypatch.setattr(routes_feed, "personalization_enabled_for_user", lambda *_args, **_kwargs: False)
+
+    client = TestClient(create_app())
+    response = client.get("/api/feed/home", params={"user_id_hash": "u_1", "session_id": "sess_1"})
+
+    assert response.status_code == 200
+    assert response.json()["personalized"] is False
 
 
 def test_search_route_delegates_to_service(monkeypatch) -> None:
@@ -214,6 +254,7 @@ def test_search_route_delegates_to_service(monkeypatch) -> None:
     import src.api.routes_search as routes_search
 
     monkeypatch.setattr(routes_search, "personalized_search", fake_service)
+    monkeypatch.setattr(routes_search, "personalization_enabled_for_user", lambda *_args, **_kwargs: True)
     client = TestClient(create_app())
     response = client.get(
         "/api/search",
@@ -223,6 +264,37 @@ def test_search_route_delegates_to_service(monkeypatch) -> None:
     payload = response.json()
     assert payload["request_id"] == "req_search_1"
     assert payload["user_id_hash"] == "u_2"
+
+
+def test_search_route_disables_personalization_when_user_opted_out(monkeypatch) -> None:
+    expected = {
+        "request_id": "req_search_1",
+        "surface": "search",
+        "items": [{"item_id": "A2"}],
+        "query": {"raw_query": "iphone case"},
+        "algorithm_version": "rec_v1",
+        "ranking_version": "rank_v1",
+        "snapshot": {"ok": True},
+        "personalized": False,
+    }
+
+    def fake_service(**kwargs):
+        assert kwargs["personalized"] is False
+        return dict(expected)
+
+    import src.api.routes_search as routes_search
+
+    monkeypatch.setattr(routes_search, "personalized_search", fake_service)
+    monkeypatch.setattr(routes_search, "personalization_enabled_for_user", lambda *_args, **_kwargs: False)
+
+    client = TestClient(create_app())
+    response = client.get(
+        "/api/search",
+        params={"user_id_hash": "u_2", "session_id": "sess_2", "q": "iphone case"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["personalized"] is False
 
 
 def test_items_route_returns_404_when_missing(monkeypatch) -> None:
@@ -236,6 +308,37 @@ def test_items_route_returns_404_when_missing(monkeypatch) -> None:
     client = TestClient(create_app())
     response = client.get("/api/items/does-not-exist")
     assert response.status_code == 404
+
+
+def test_items_similar_route_disables_personalization_when_user_opted_out(monkeypatch) -> None:
+    expected = {
+        "request_id": "req_sim_1",
+        "surface": "detail_similar",
+        "source_item_id": "item_1",
+        "items": [{"item_id": "item_2"}],
+        "algorithm_version": "rec_v1",
+        "ranking_version": "rank_v1",
+        "snapshot": {"ok": True},
+        "personalized": False,
+    }
+
+    def fake_service(**kwargs):
+        assert kwargs["personalized"] is False
+        return dict(expected)
+
+    import src.api.routes_items as routes_items
+
+    monkeypatch.setattr(routes_items, "get_similar_products", fake_service)
+    monkeypatch.setattr(routes_items, "personalization_enabled_for_user", lambda *_args, **_kwargs: False)
+
+    client = TestClient(create_app())
+    response = client.get(
+        "/api/items/item_1/similar",
+        params={"user_id_hash": "u_3", "session_id": "sess_3"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["personalized"] is False
 
 
 def test_items_route_returns_clear_primary_image_and_product_text(monkeypatch) -> None:
@@ -290,6 +393,7 @@ def test_events_route_delegates_to_logger(monkeypatch) -> None:
     import src.api.routes_events as routes_events
 
     monkeypatch.setattr(routes_events, "log_clickstream_event", fake_log_clickstream_event)
+    monkeypatch.setattr(routes_events, "clickstream_logging_enabled_for_user", lambda *_args, **_kwargs: True)
     client = TestClient(create_app())
     response = client.post(
         "/api/events",
@@ -305,6 +409,114 @@ def test_events_route_delegates_to_logger(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json()["ok"] is True
     assert called["item_id"] == "A1"
+
+
+def test_events_route_skips_when_user_disables_clickstream_logging(monkeypatch) -> None:
+    called = []
+
+    import src.api.routes_events as routes_events
+
+    monkeypatch.setattr(routes_events, "clickstream_logging_enabled_for_user", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(routes_events, "log_clickstream_event", lambda **kwargs: called.append(kwargs) or {"ok": True})
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/events",
+        json={
+            "user_id_hash": "u_1",
+            "session_id": "sess_1",
+            "item_id": "A1",
+            "event_type": "click",
+            "surface": "home",
+            "request_id": "req_1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["skipped"] is True
+    assert response.json()["reason"] == "clickstream_logging_disabled"
+    assert called == []
+
+
+def test_events_route_rejects_invalid_surface_with_422(monkeypatch) -> None:
+    import src.api.routes_events as routes_events
+
+    monkeypatch.setattr(routes_events, "clickstream_logging_enabled_for_user", lambda *_args, **_kwargs: True)
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/events",
+        json={
+            "user_id_hash": "u_1",
+            "session_id": "sess_1",
+            "item_id": "A1",
+            "event_type": "click",
+            "surface": "checkout",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_events_route_returns_400_for_missing_request_id_on_home_click(monkeypatch) -> None:
+    import src.api.routes_events as routes_events
+
+    monkeypatch.setattr(routes_events, "clickstream_logging_enabled_for_user", lambda *_args, **_kwargs: True)
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/events",
+        json={
+            "user_id_hash": "u_1",
+            "session_id": "sess_1",
+            "item_id": "A1",
+            "event_type": "click",
+            "surface": "home",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "request_id is required for home click events" in response.json()["detail"]
+
+
+def test_events_route_allows_direct_detail_events_without_request_id(monkeypatch) -> None:
+    called = {}
+
+    def fake_log_clickstream_event(**kwargs):
+        called.update(kwargs)
+        return {"ok": True, "inserted": True, "event_id": "evt_detail_1"}
+
+    import src.api.routes_events as routes_events
+
+    monkeypatch.setattr(routes_events, "clickstream_logging_enabled_for_user", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(routes_events, "log_clickstream_event", fake_log_clickstream_event)
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/events",
+        json={
+            "user_id_hash": "u_1",
+            "session_id": "sess_1",
+            "item_id": "A1",
+            "event_type": "view_detail",
+            "surface": "detail",
+            "dwell_time_ms": 1200,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert called["surface"] == "detail"
+    assert called["request_id"] is None
+
+
+def test_debug_routes_require_admin_token(monkeypatch) -> None:
+    monkeypatch.setenv("ADMIN_TOKEN", ADMIN_TOKEN)
+    client = TestClient(create_app())
+    response = client.get("/api/demo/status")
+
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "admin_token_required"
 
 
 def test_debug_user_route_returns_joined_debug_payload(monkeypatch) -> None:
@@ -339,8 +551,8 @@ def test_debug_user_route_returns_joined_debug_payload(monkeypatch) -> None:
     monkeypatch.setattr(routes_debug, "get_clickstream_events_collection", lambda: FakeCollection([{"user_id_hash": "u_1", "event_id": "evt_1", "timestamp": "2026-01-01T02:00:00+00:00", "processed": False}]))
     monkeypatch.setattr(routes_debug, "get_item_item_cf_edges_collection", lambda: FakeCollection([{"item_id": "A1", "neighbor_item_id": "A2"}]))
 
-    client = TestClient(create_app())
-    response = client.get("/api/debug/user/u_1")
+    client = _admin_client(monkeypatch)
+    response = client.get("/api/debug/user/u_1", headers=_admin_headers())
     assert response.status_code == 200
     payload = response.json()
     assert payload["profile"]["profile_status"] == "warming"
@@ -444,8 +656,8 @@ def test_demo_reset_dry_run_reports_counts(monkeypatch) -> None:
     import src.api.routes_debug as routes_debug
 
     monkeypatch.setattr(routes_debug, "get_database", lambda: FakeDatabase())
-    client = TestClient(create_app())
-    response = client.post("/api/demo/reset")
+    client = _admin_client(monkeypatch)
+    response = client.post("/api/demo/reset", headers=_admin_headers())
     assert response.status_code == 200
     payload = response.json()
     assert payload["mode"] == "dry-run"
@@ -475,8 +687,8 @@ def test_demo_reset_write_requires_confirmation(monkeypatch) -> None:
 
     monkeypatch.setattr(routes_debug, "get_database", lambda: {"clickstream_events": FakeCollection(11)})
 
-    client = TestClient(create_app())
-    response = client.post("/api/demo/reset?write=true")
+    client = _admin_client(monkeypatch)
+    response = client.post("/api/demo/reset?write=true", headers=_admin_headers())
     assert response.status_code == 400
     detail = response.json()["detail"]
     assert detail["error"] == "confirmation_required"
@@ -496,8 +708,8 @@ def test_demo_reset_write_clears_catalog_cache(monkeypatch) -> None:
     )
     monkeypatch.setattr(routes_debug, "clear_catalog_snapshot_cache", lambda: cache_clears.append(True))
 
-    client = TestClient(create_app())
-    response = client.post("/api/demo/reset?write=true&confirm=DEMO_RESET")
+    client = _admin_client(monkeypatch)
+    response = client.post("/api/demo/reset?write=true&confirm=DEMO_RESET", headers=_admin_headers())
 
     assert response.status_code == 200
     assert response.json()["mode"] == "write"
@@ -525,8 +737,8 @@ def test_demo_status_reports_counts_and_protected_collections(monkeypatch) -> No
     monkeypatch.setattr(routes_debug, "get_item_semantic_neighbors_collection", lambda: FakeCollection(10))
     monkeypatch.setattr(routes_debug, "get_synthetic_personas_collection", lambda: FakeCollection(11))
 
-    client = TestClient(create_app())
-    response = client.get("/api/demo/status")
+    client = _admin_client(monkeypatch)
+    response = client.get("/api/demo/status", headers=_admin_headers())
 
     assert response.status_code == 200
     payload = response.json()
@@ -560,8 +772,8 @@ def test_process_events_full_write_without_limit_clears_catalog_cache(monkeypatc
     )
     monkeypatch.setattr(routes_debug, "clear_catalog_snapshot_cache", lambda: cache_clears.append(True))
 
-    client = TestClient(create_app())
-    response = client.post("/api/debug/process-events?rebuild_item_stats=true&write=true")
+    client = _admin_client(monkeypatch)
+    response = client.post("/api/debug/process-events?rebuild_item_stats=true&write=true", headers=_admin_headers())
 
     assert response.status_code == 200
     assert build_calls[0]["limit_events"] is None
@@ -586,8 +798,11 @@ def test_process_events_rejects_any_limited_write_before_building_derived_data(m
         lambda **kwargs: build_calls.append(kwargs) or {"ok": True},
     )
 
-    client = TestClient(create_app())
-    response = client.post("/api/debug/process-events?limit=26&rebuild_item_stats=true&write=true")
+    client = _admin_client(monkeypatch)
+    response = client.post(
+        "/api/debug/process-events?limit=26&rebuild_item_stats=true&write=true",
+        headers=_admin_headers(),
+    )
 
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "partial_signal_write_blocked"
@@ -620,8 +835,11 @@ def test_apply_pending_behavior_delegates_to_incremental_processor_and_clears_st
     )
     monkeypatch.setattr(routes_debug, "clear_catalog_snapshot_cache", lambda: cache_clears.append(True))
 
-    client = TestClient(create_app())
-    response = client.post("/api/debug/apply-pending-behavior?max_events=40&rebuild_item_stats=true&write=true")
+    client = _admin_client(monkeypatch)
+    response = client.post(
+        "/api/debug/apply-pending-behavior?max_events=40&rebuild_item_stats=true&write=true",
+        headers=_admin_headers(),
+    )
 
     assert response.status_code == 200
     assert response.json()["processing_mode"] == "incremental_pending"
@@ -646,9 +864,9 @@ def test_rebuild_cf_replaces_existing_edges_only_for_full_write(monkeypatch) -> 
         lambda **kwargs: build_calls.append(kwargs) or {"ok": True},
     )
 
-    client = TestClient(create_app())
-    full_response = client.post("/api/debug/rebuild-cf?write=true")
-    limited_response = client.post("/api/debug/rebuild-cf?write=true&limit_users=5")
+    client = _admin_client(monkeypatch)
+    full_response = client.post("/api/debug/rebuild-cf?write=true", headers=_admin_headers())
+    limited_response = client.post("/api/debug/rebuild-cf?write=true&limit_users=5", headers=_admin_headers())
 
     assert full_response.status_code == 200
     assert limited_response.status_code == 400
@@ -667,8 +885,8 @@ def test_rebuild_profiles_rejects_limited_write(monkeypatch) -> None:
         lambda **kwargs: build_calls.append(kwargs) or {"ok": True},
     )
 
-    client = TestClient(create_app())
-    response = client.post("/api/debug/rebuild-profiles?write=true&limit_users=5")
+    client = _admin_client(monkeypatch)
+    response = client.post("/api/debug/rebuild-profiles?write=true&limit_users=5", headers=_admin_headers())
 
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "partial_profile_write_blocked"

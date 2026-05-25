@@ -32,6 +32,30 @@ const priceHints = [
 ];
 
 
+function buildSearchQueryText(baseQuery: string, hints: string[]) {
+    const normalizedBase = baseQuery.trim();
+    const parts = normalizedBase ? [normalizedBase] : [];
+    const lowerBase = normalizedBase.toLocaleLowerCase();
+
+    for (const rawHint of hints) {
+        const hint = rawHint.trim();
+        if (!hint) {
+            continue;
+        }
+        const lowerHint = hint.toLocaleLowerCase();
+        if (lowerBase.includes(lowerHint)) {
+            continue;
+        }
+        if (parts.some((part) => part.toLocaleLowerCase() === lowerHint)) {
+            continue;
+        }
+        parts.push(hint);
+    }
+
+    return parts.join(" ").trim();
+}
+
+
 export function SearchPage() {
     const navigate = useNavigate();
     const { userIdHash, sessionId } = useExperience();
@@ -80,11 +104,11 @@ export function SearchPage() {
     function submitSearch(event: FormEvent<HTMLFormElement>) {
         event.preventDefault();
         startTransition(() => {
-            const parts = [draftQuery.trim(), categoryHint, priceHint].filter(Boolean);
-            if (parts.length) {
-                setSearchParams({ q: parts.join(" "), personalized: String(personalized) });
+            const combinedQuery = buildSearchQueryText(draftQuery, [categoryHint, priceHint]);
+            if (combinedQuery) {
+                setSearchParams({ q: combinedQuery, personalized: String(personalized) });
             } else {
-                setSearchParams({});
+                setSearchParams(personalized ? {} : { personalized: String(personalized) });
             }
         });
     }
@@ -126,9 +150,7 @@ export function SearchPage() {
 
     function togglePersonalized() {
         const next = personalized ? "false" : "true";
-        if (currentQuery.trim()) {
-            setSearchParams({ q: currentQuery, personalized: next });
-        }
+        setSearchParams(currentQuery.trim() ? { q: currentQuery, personalized: next } : { personalized: next });
     }
 
     return (

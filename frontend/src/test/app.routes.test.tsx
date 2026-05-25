@@ -9,6 +9,8 @@ import { ExperienceProvider } from "../state/experience";
 
 const STORAGE_KEY = "coldstart-killer/frontend-state/v1";
 const LOGIN_SESSION_KEY = "coldstart-killer/active-login/v1";
+const ADMIN_TOKEN_STORAGE_KEY = "coldstart-killer/admin-token/v1";
+const DEBUG_ADMIN_TOKEN = "test-admin-token";
 const longHomeExplanation =
     "Boosted because it matches your sensitive skin profile and preference for natural ingredients with gentle hydration support.";
 const additionalHomeExplanation = "Also supported by recent skincare browsing signals.";
@@ -287,11 +289,45 @@ function jsonResponse(payload: unknown) {
 }
 
 
+function readHeader(init: RequestInit | undefined, name: string) {
+    const headers = init?.headers;
+    if (!headers) {
+        return null;
+    }
+    if (headers instanceof Headers) {
+        return headers.get(name);
+    }
+    if (Array.isArray(headers)) {
+        const match = headers.find(([key]) => key.toLowerCase() === name.toLowerCase());
+        return match?.[1] ?? null;
+    }
+    const entries = Object.entries(headers);
+    const match = entries.find(([key]) => key.toLowerCase() === name.toLowerCase());
+    return typeof match?.[1] === "string" ? match[1] : null;
+}
+
+
+function unauthorizedAdminResponse() {
+    return Promise.resolve(
+        new Response(
+            JSON.stringify({ detail: { error: "admin_token_required", message: "A valid X-Admin-Token header is required for debug/demo routes." } }),
+            {
+                status: 403,
+                headers: { "Content-Type": "application/json" },
+            },
+        ),
+    );
+}
+
+
 function installFetchMock() {
     let createdUser: Record<string, unknown> | null = null;
 
-    return vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    return vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if ((url.includes("/api/debug/") || url.includes("/api/demo/")) && readHeader(init, "X-Admin-Token") !== DEBUG_ADMIN_TOKEN) {
+            return unauthorizedAdminResponse();
+        }
         if (url.includes("/api/health")) {
             return jsonResponse({
                 ok: true,
@@ -536,6 +572,7 @@ function renderApp(route: string, authenticated = true) {
     if (authenticated) {
         window.sessionStorage.setItem(LOGIN_SESSION_KEY, "true");
     }
+    window.sessionStorage.setItem(ADMIN_TOKEN_STORAGE_KEY, DEBUG_ADMIN_TOKEN);
 
     return render(
         <QueryClientProvider client={queryClient}>
@@ -838,6 +875,28 @@ describe("Phase 11 routes", () => {
         expect(screen.getByRole("button", { name: /Search/i })).toBeInTheDocument();
     });
 
+    it("does not duplicate category and price hints on repeated search submits", async () => {
+        renderApp("/search");
+
+        fireEvent.change(screen.getByRole("textbox"), { target: { value: "wireless charger under 300k" } });
+        fireEvent.change(screen.getByDisplayValue("Any category"), { target: { value: "phone accessories" } });
+        fireEvent.change(screen.getByDisplayValue("Any price"), { target: { value: "under 300k" } });
+        fireEvent.click(screen.getByRole("button", { name: /^Search$/i }));
+        expect(await screen.findByText("Search Result Charger")).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole("button", { name: /^Search$/i }));
+
+        await waitFor(() => {
+            const searchCalls = vi
+                .mocked(globalThis.fetch)
+                .mock.calls.filter(([input]) => String(input).includes("/api/search"));
+            const latestUrl = String(searchCalls.at(-1)?.[0]);
+            expect(latestUrl).toContain("q=wireless+charger+under+300k+phone+accessories");
+            expect(latestUrl).not.toContain("under+300k+under+300k");
+            expect(latestUrl).not.toContain("phone+accessories+phone+accessories");
+        });
+    });
+
     it("preserves search attribution when opening a recommendation", async () => {
         renderApp("/search?q=wireless%20charger%20under%20300k");
 
@@ -912,6 +971,34 @@ describe("Phase 11 routes", () => {
         });
     });
 
+    it("logs direct detail actions and dwell without recommendation attribution", async () => {
+        renderApp("/items/item_1");
+
+        expect(await screen.findByText("Detail Product Title")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Add to cart" }));
+        fireEvent.click(screen.getAllByRole("link", { name: "Home" })[0]);
+
+        await waitFor(() => {
+            expect(eventPayloads()).toContainEqual(
+                expect.objectContaining({
+                    item_id: "item_1",
+                    event_type: "add_to_cart",
+                    surface: "detail",
+                    client: { component: "product-detail", device_type: "desktop" },
+                }),
+            );
+            expect(eventPayloads()).toContainEqual(
+                expect.objectContaining({
+                    item_id: "item_1",
+                    event_type: "view_detail",
+                    surface: "detail",
+                    dwell_time_ms: 500,
+                    client: { component: "product-detail", device_type: "desktop" },
+                }),
+            );
+        });
+    });
+
     it("renders the debug route with lineage payloads", async () => {
         renderApp("/debug");
 
@@ -966,14 +1053,16 @@ describe("Phase 11 routes", () => {
     it("applies captured behavior incrementally without rebuilding cf inline", async () => {
         renderApp("/debug");
 
-        fireEvent.click(await screen.findByRole("button", { name: "Apply captured behavior" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Preview pending behavior" }));
 
         expect(await screen.findByText("Applied behavior response")).toBeInTheDocument();
         expect(screen.getByText(/"processing_mode": "incremental_pending"/)).toBeInTheDocument();
         expect(screen.getByText(/"cf_refresh_required": true/)).toBeInTheDocument();
-        const calls = vi.mocked(globalThis.fetch).mock.calls.map(([input]) => String(input));
-        expect(calls.some((url) => url.includes("/api/debug/apply-pending-behavior"))).toBe(true);
-        expect(calls.some((url) => url.includes("/api/debug/rebuild-cf"))).toBe(false);
+        const calls = vi.mocked(globalThis.fetch).mock.calls;
+        expect(calls.some(([input]) => String(input).includes("/api/debug/apply-pending-behavior"))).toBe(true);
+        expect(calls.some(([input]) => String(input).includes("/api/debug/rebuild-cf"))).toBe(false);
+        const applyCall = calls.find(([input]) => String(input).includes("/api/debug/apply-pending-behavior"));
+        expect(String(applyCall?.[0])).not.toContain("write=true");
     });
 
     it("submits a full reset from the debug route with confirmation", async () => {

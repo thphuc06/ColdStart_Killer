@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from scripts.reset_demo_behavior_data import CATALOG_COLLECTIONS, execute_reset
 from src.behavior.incremental_processor import CF_RELEVANT_EVENT_TYPES, process_pending_behavior
@@ -32,9 +32,10 @@ from src.mongodb import (
 )
 from src.recommendation.item_item_cf import build_item_item_cf_edges
 from src.recommendation.candidate_sources import clear_catalog_snapshot_cache
+from .request_guards import require_admin_token
 
 
-router = APIRouter(prefix="/api")
+router = APIRouter(prefix="/api", dependencies=[Depends(require_admin_token)])
 
 
 RESET_CONFIRMATION_MESSAGE = "This will clear current demo interactions."

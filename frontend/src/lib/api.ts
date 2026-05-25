@@ -1,5 +1,5 @@
 export type RecommendationSurface = "home" | "search" | "detail_similar";
-export type EventSurface = RecommendationSurface | "cart" | "onboarding" | "debug";
+export type EventSurface = RecommendationSurface | "detail" | "cart" | "onboarding" | "debug";
 export type EventType =
     | "impression"
     | "click"
@@ -100,12 +100,12 @@ export type RecommendationCard = {
             cf_score?: number;
         } | null;
         primary_reason_channel:
-            | "query_hybrid"
-            | "profile"
-            | "semantic_neighbor"
-            | "cf"
-            | "cold_explore"
-            | "generic";
+        | "query_hybrid"
+        | "profile"
+        | "semantic_neighbor"
+        | "cf"
+        | "cold_explore"
+        | "generic";
         primary_reason_contribution: number;
         material_reason_channels: Array<"query_hybrid" | "profile" | "semantic_neighbor" | "cf" | "cold_explore" | "generic">;
         forced_cold_insertion: boolean;
@@ -407,6 +407,12 @@ type QueryValue = string | number | boolean | null | undefined;
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000").replace(/\/$/, "");
 
 
+function adminHeaders(adminToken?: string): Record<string, string> {
+    const token = adminToken?.trim();
+    return token ? { "X-Admin-Token": token } : {};
+}
+
+
 function toQueryString(values: Record<string, QueryValue>) {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(values)) {
@@ -528,12 +534,16 @@ export function getSimilarProducts(params: {
 }
 
 
-export function getDebugUser(userIdHash: string) {
-    return fetchJson<DebugUserResponse>(`/api/debug/user/${encodeURIComponent(userIdHash)}`);
+export function getDebugUser(userIdHash: string, adminToken?: string) {
+    return fetchJson<DebugUserResponse>(`/api/debug/user/${encodeURIComponent(userIdHash)}`, {
+        headers: adminHeaders(adminToken),
+    });
 }
 
-export function getDemoStatus() {
-    return fetchJson<DemoStatusResponse>("/api/demo/status");
+export function getDemoStatus(adminToken?: string) {
+    return fetchJson<DemoStatusResponse>("/api/demo/status", {
+        headers: adminHeaders(adminToken),
+    });
 }
 
 
@@ -581,14 +591,14 @@ export function postEvent(payload: EventPayload) {
 }
 
 
-export function resetDemo(params: { write?: boolean; full?: boolean; confirm?: string }) {
+export function resetDemo(params: { write?: boolean; full?: boolean; confirm?: string; adminToken?: string }) {
     return fetchJson<Record<string, unknown>>(
         `/api/demo/reset${toQueryString({
             write: params.write ?? false,
             full: params.full ?? false,
             confirm: params.confirm,
         })}`,
-        { method: "POST" },
+        { method: "POST", headers: adminHeaders(params.adminToken) },
     );
 }
 
@@ -599,6 +609,7 @@ export function seedDemo(params: {
     itemsPerRequest?: number;
     seed?: number;
     write?: boolean;
+    adminToken?: string;
 }) {
     return fetchJson<Record<string, unknown>>(
         `/api/demo/seed${toQueryString({
@@ -608,42 +619,42 @@ export function seedDemo(params: {
             seed: params.seed ?? 42,
             write: params.write ?? false,
         })}`,
-        { method: "POST" },
+        { method: "POST", headers: adminHeaders(params.adminToken) },
     );
 }
 
 
-export function processEvents(params: { limit?: number; rebuildItemStats?: boolean; write?: boolean }) {
+export function processEvents(params: { limit?: number; rebuildItemStats?: boolean; write?: boolean; adminToken?: string }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/process-events${toQueryString({
             limit: params.limit,
             rebuild_item_stats: params.rebuildItemStats ?? true,
             write: params.write ?? false,
         })}`,
-        { method: "POST" },
+        { method: "POST", headers: adminHeaders(params.adminToken) },
     );
 }
 
 
-export function applyPendingBehavior(params: { maxEvents?: number; rebuildItemStats?: boolean; write?: boolean }) {
+export function applyPendingBehavior(params: { maxEvents?: number; rebuildItemStats?: boolean; write?: boolean; adminToken?: string }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/apply-pending-behavior${toQueryString({
             max_events: params.maxEvents ?? 100,
             rebuild_item_stats: params.rebuildItemStats ?? true,
             write: params.write ?? false,
         })}`,
-        { method: "POST" },
+        { method: "POST", headers: adminHeaders(params.adminToken) },
     );
 }
 
 
-export function rebuildProfiles(params: { limitUsers?: number; write?: boolean }) {
+export function rebuildProfiles(params: { limitUsers?: number; write?: boolean; adminToken?: string }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/rebuild-profiles${toQueryString({
             limit_users: params.limitUsers,
             write: params.write ?? false,
         })}`,
-        { method: "POST" },
+        { method: "POST", headers: adminHeaders(params.adminToken) },
     );
 }
 
@@ -655,6 +666,7 @@ export function rebuildCf(params: {
     topNeighborsPerItem?: number;
     inputPolicy?: "current_supported" | "qualified_deliberate";
     write?: boolean;
+    adminToken?: string;
 }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/rebuild-cf${toQueryString({
@@ -665,7 +677,7 @@ export function rebuildCf(params: {
             input_policy: params.inputPolicy,
             write: params.write ?? false,
         })}`,
-        { method: "POST" },
+        { method: "POST", headers: adminHeaders(params.adminToken) },
     );
 }
 

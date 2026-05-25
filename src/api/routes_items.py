@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 from src.mongodb import get_items_collection
 from src.recommendation.candidate_sources import display_image_url, preferred_image_sources
 from src.recommendation.similar_products import get_similar_products
+from .request_guards import personalization_enabled_for_user
 
 
 router = APIRouter(prefix="/api")
@@ -85,11 +86,16 @@ def get_item_similar(
     session_id: str = Query(..., min_length=1),
     top_k: int = Query(12, ge=1, le=50),
 ) -> dict[str, Any]:
+    effective_personalized = personalization_enabled_for_user(
+        user_id_hash,
+        personalized=True,
+    )
     result = get_similar_products(
         user_id_hash=user_id_hash,
         session_id=session_id,
         source_item_id=item_id,
         top_k=top_k,
+        personalized=effective_personalized,
     )
     result["user_id_hash"] = user_id_hash
     return result

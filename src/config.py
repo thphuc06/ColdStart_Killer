@@ -48,6 +48,7 @@ def env_float(name: str, default: float) -> float:
 class Settings:
     mongodb_uri: str
     mongodb_db_name: str
+    admin_token: str
     ollama_model: str
     embedding_model: str
     use_cuda: bool
@@ -103,6 +104,7 @@ def get_settings() -> Settings:
     return Settings(
         mongodb_uri=os.getenv("MONGODB_URI", ""),
         mongodb_db_name=os.getenv("MONGODB_DB_NAME", "coldstart_killer"),
+        admin_token=os.getenv("ADMIN_TOKEN", ""),
         ollama_model=os.getenv("OLLAMA_MODEL", "qwen3:8b"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
         use_cuda=env_bool("USE_CUDA", True),
