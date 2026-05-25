@@ -232,3 +232,86 @@ def test_personalized_search_keeps_explanations_and_badges() -> None:
     assert item["reason_badges"]
     assert item["explanations"]
     assert item["matched_fact"] == "giftable beauty set"
+
+
+def test_personalized_search_excludes_exact_hidden_query_result_before_logging() -> None:
+    profile = _profile()
+    profile["negative_preferences"]["item_ids"] = ["A"]
+    payload = personalized_search(
+        "u_skincare",
+        "sess_hidden",
+        "gentle cleanser",
+        top_k=1,
+        process_query_fn=lambda raw_query: {
+            "original_query": raw_query,
+            "english_query": raw_query,
+            "bm25_search_query_en": raw_query,
+            "hard_filters": {},
+            "query_embedding": [0.0] * 1024,
+        },
+        run_search_fn=lambda _fixture, top_k=10: [
+            {
+                "item_id": "A",
+                "title": "Hidden Item",
+                "score": 0.9,
+                "debug": {"brand": "BeautyBrand", "category_id": "all_beauty", "price_bucket": "100k_300k"},
+            }
+        ],
+        user_profiles_collection=FakeCollection([profile]),
+        user_item_signals_collection=FakeCollection([]),
+        items_collection=FakeCollection([_item("A", category_id="all_beauty", brand="BeautyBrand")]),
+        item_stats_collection=FakeCollection([_item_stats("A", 0.7)]),
+        item_hype_profiles_collection=FakeCollection([_item_profile("A", 1, "all_beauty")]),
+        item_item_cf_edges_collection=FakeCollection([]),
+        recommendation_logs_collection=FakeCollection([]),
+    )
+
+    assert payload["items"] == []
+    assert payload["snapshot"]["attempted"] == 0
+
+
+def test_broad_search_cf_uses_only_seed_eligible_signals() -> None:
+    items = FakeCollection(
+        [
+            _item("FROM_CLICK", category_id="all_beauty", brand="BeautyBrand"),
+            _item("FROM_CART", category_id="all_beauty", brand="BeautyBrand"),
+        ]
+    )
+    payload = personalized_search(
+        "u_skincare",
+        "sess_seed",
+        "gift ideas",
+        top_k=2,
+        process_query_fn=lambda raw_query: {
+            "original_query": raw_query,
+            "english_query": raw_query,
+            "bm25_search_query_en": raw_query,
+            "hard_filters": {},
+            "query_embedding": [0.0] * 1024,
+        },
+        run_search_fn=lambda _fixture, top_k=10: [
+            {"item_id": "FROM_CLICK", "title": "Click Neighbor", "score": 0.3, "debug": {"brand": "BeautyBrand", "category_id": "all_beauty", "price_bucket": "100k_300k"}},
+            {"item_id": "FROM_CART", "title": "Cart Neighbor", "score": 0.3, "debug": {"brand": "BeautyBrand", "category_id": "all_beauty", "price_bucket": "100k_300k"}},
+        ],
+        user_profiles_collection=FakeCollection([_profile()]),
+        user_item_signals_collection=FakeCollection(
+            [
+                {"user_id_hash": "u_skincare", "item_id": "CLICK_ONLY", "implicit_score": 0.35, "positive_score": 0.35, "seed_eligible": False},
+                {"user_id_hash": "u_skincare", "item_id": "CART_SEED", "implicit_score": 4.0, "positive_score": 4.0, "seed_eligible": True},
+            ]
+        ),
+        items_collection=items,
+        item_stats_collection=FakeCollection([_item_stats("FROM_CLICK", 0.7), _item_stats("FROM_CART", 0.7)]),
+        item_hype_profiles_collection=FakeCollection([_item_profile("FROM_CLICK", 1, "all_beauty"), _item_profile("FROM_CART", 1, "all_beauty")]),
+        item_item_cf_edges_collection=FakeCollection(
+            [
+                {"item_id": "CLICK_ONLY", "neighbor_item_id": "FROM_CLICK", "cf_score": 0.9, "support": 2},
+                {"item_id": "CART_SEED", "neighbor_item_id": "FROM_CART", "cf_score": 0.9, "support": 2},
+            ]
+        ),
+        recommendation_logs_collection=FakeCollection([]),
+    )
+
+    cards = {card["item_id"]: card for card in payload["items"]}
+    assert "Collaborative Filtering" not in cards["FROM_CLICK"]["reason_badges"]
+    assert "Collaborative Filtering" in cards["FROM_CART"]["reason_badges"]

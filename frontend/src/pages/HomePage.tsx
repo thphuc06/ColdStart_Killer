@@ -49,7 +49,7 @@ export function HomePage() {
     const refreshing = homepageQuery.isFetching && !homepageQuery.isLoading;
 
     const cfCount = visibleItems.filter((item) => item.attribution.cf_evidence || item.score_breakdown.item_item_cf_score > 0).length;
-    const profileCount = visibleItems.filter((item) => Number(item.contributions?.profile ?? 0) > 0).length;
+    const profileCount = visibleItems.filter((item) => item.reason_badges.includes("Profile")).length;
     const coldCount = visibleItems.filter((item) => item.is_cold_item).length;
 
     async function handleOpenDetail(card: RecommendationCard) {

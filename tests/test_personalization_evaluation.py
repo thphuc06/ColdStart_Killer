@@ -13,6 +13,8 @@ sys.path.insert(0, str(ROOT))
 
 from src.evaluation.personalization_eval import (
     PersonalizationEvalConfig,
+    _build_cf_edges,
+    _build_train_signals,
     compute_ranking_metrics,
     evaluate_personalization,
     temporal_split_events,
@@ -79,6 +81,7 @@ def test_temporal_split_events_uses_first_70_percent_for_training() -> None:
     assert [event["item_id"] for event in split.held_out_events] == ["D", "E", "F"]
     assert split.train_positive_item_ids == ["A", "B", "C"]
     assert split.held_out_positive_item_ids == ["D", "E"]
+    assert split.held_out_deliberate_item_ids == []
 
 
 def test_compute_ranking_metrics_returns_expected_core_metrics() -> None:
@@ -179,6 +182,7 @@ def test_evaluate_personalization_compares_required_baselines_and_cf_lift() -> N
         "popularity",
         "profile_only",
         "profile_plus_cf",
+        "profile_plus_qualified_cf",
     }
 
     summary_by_baseline = {
@@ -187,6 +191,11 @@ def test_evaluate_personalization_compares_required_baselines_and_cf_lift() -> N
     }
     assert summary_by_baseline["popularity"]["evaluated_user_count"] >= 2
     assert summary_by_baseline["profile_plus_cf"]["cf_supported_recommendation_count"] > 0
+    assert run_data["cf_diagnostics"]["min_support"] == 2
+    assert "profile_plus_qualified_cf_vs_profile_plus_cf" in {
+        row["comparison"] for row in run_data["comparisons"]
+    }
+    assert run_data["cf_qualified_gate"]["decision"] in {"adopt", "reject", "needs_more_evidence"}
 
     phone_profile_only = next(
         row
@@ -245,6 +254,8 @@ def test_write_personalization_outputs_writes_reproducible_artifacts_and_caveats
     assert Path(paths["baseline_summaries"]).name == "baseline_summaries.json"
     assert "synthetic/demo" in summary_md
     assert "profile_plus_cf" in summary_md
+    assert "profile_plus_qualified_cf" in summary_md
+    assert "Qualified CF Gate" in summary_md
     assert "popularity" in summary_md
 
 
@@ -293,8 +304,38 @@ def test_terminal_summary_exposes_observability_metrics_and_caveat() -> None:
     assert "rank_summary" in summary
     assert "profile_only" in summary
     assert "profile_plus_cf" in summary
+    assert "profile_plus_qualified_cf" in summary
     assert "popularity" in summary
     assert "coverage=" in summary
     assert "cold@20=" in summary
     assert "cf_count=" in summary
+    assert "cf_qualified_gate:" in summary
     assert "artifacts: skipped" in summary
+
+
+def test_evaluator_current_cf_accepts_click_only_but_qualified_cf_requires_deliberate_seed() -> None:
+    click_only = {
+        "u1": _build_train_signals([_event("u1", "A", "click", 0), _event("u1", "B", "click", 1)]),
+        "u2": _build_train_signals([_event("u2", "A", "click", 2), _event("u2", "B", "click", 3)]),
+    }
+    deliberate = {
+        "u1": _build_train_signals([_event("u1", "A", "add_to_cart", 10), _event("u1", "B", "add_to_cart", 11)]),
+        "u2": _build_train_signals([_event("u2", "A", "add_to_cart", 12), _event("u2", "B", "add_to_cart", 13)]),
+    }
+
+    assert "B" in _build_cf_edges(click_only, qualified=False)["A"]
+    assert _build_cf_edges(click_only, qualified=True) == {}
+    assert "B" in _build_cf_edges(deliberate, qualified=True)["A"]
+
+
+def test_evaluator_uses_production_dwell_tiers_for_seed_eligibility() -> None:
+    signals = _build_train_signals(
+        [
+            {**_event("u1", "SHORT", "view_detail", 0), "dwell_time_ms": 4_000},
+            {**_event("u1", "LONG", "view_detail", 1), "dwell_time_ms": 30_000},
+        ]
+    )
+    by_item = {signal["item_id"]: signal for signal in signals}
+
+    assert by_item["SHORT"]["seed_eligible"] is False
+    assert by_item["LONG"]["seed_eligible"] is True

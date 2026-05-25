@@ -2,33 +2,43 @@
 
 **Version:** v1.0  
 **Date:** 2026-05-25  
-**Status:** Historical audit plan plus executed Bundle A/B closeout addendum. The original audit pass was read-only; later implementation, live rebuild, and evidence capture are summarized below.  
+**Status:** Bundle A complete; Bundle B correctness applied and rebuilt, with the qualified-CF evidence gate still open. The original audit pass was read-only; approved rebuild evidence and remaining work are summarized below.
 **Purpose:** Turn verified audit findings into a phased plan for correcting personalization, explanations, implicit feedback handling, collaborative filtering, and operational freshness.
 
-## Status Update - 2026-05-25 Bundle A/B Closeout
+## Status Update - 2026-05-25 Bundle A Complete / Bundle B CF Gate Open
 
-Bundle A and Bundle B have now been implemented, rebuilt on the live demo database, and re-validated against the acceptance criteria used in this plan.
+Bundle A explanation/profile hygiene and Bundle B correctness changes have been implemented. After tests and the read-only CF comparison passed their safety checks, an explicitly approved controlled rebuild applied the v4 signal/profile lineage while retaining the current CF runtime policy. Bundle B is not closed out because the qualified-CF evidence gate remains open.
 
-Evidence artifacts were written to:
+The current code gate covers:
 
-- `.runtime/evaluation/bundle_ab_closeout_20260525/baseline_phuc_demo/personalization_baseline.md`
-- `.runtime/evaluation/bundle_ab_closeout_20260525/baseline_phuc_demo/personalization_baseline.json`
-- `.runtime/evaluation/bundle_ab_closeout_20260525/personalization_eval/metrics_summary.md`
-- `.runtime/evaluation/bundle_ab_closeout_20260525/personalization_eval/baseline_summaries.json`
-- `.runtime/evaluation/bundle_ab_closeout_20260525/personalization_eval/comparisons.json`
+- Net-negative signals cannot enter positive profile learning.
+- Exact hidden/disliked items are suppressed on home, similar products, and personalized search without fallback restoration.
+- Broad-search CF expansion accepts only `seed_eligible` sources.
+- CF runtime is unchanged; the read-only evaluator compares current CF with `profile_plus_qualified_cf` under `min_support=2`.
 
-Verified post-closeout state:
+Approved v4 controlled rebuild evidence:
 
 - Shared intent hygiene now rejects UUID-like, fact-like, and generic labels during signal/profile derivation.
-- Live signal rebuild completed with `invalid_reason_intents_dropped = 6`, proving malformed intent audit visibility now exists in production-like execution.
+- Signal rebuild wrote `1157` documents as `signal_v4_boundary_hygiene`; profile rebuild wrote `43` documents as `profile_v4_negative_guard`.
+- Current-policy CF rebuild retained `514` directional edges as `cf_v1_supported_edges`, each sourced from `signal_v4_boundary_hygiene`.
 - Post-rebuild baseline report for `phuc_demo` / `u_api_5ea7eb5ac87d4abe` returned `freshness.state = current`, `pending_event_count = 0`, `uuid_label_count = 0`, `fact_label_count = 0`, `generic_label_count = 0`, and `profile_explanation_audit_failures = 0`.
 - Post-rebuild profile state remained clean with labels `cell phones and accessories` and `sensitive skin person looking for natural soap`.
-- Post-rebuild CF remained healthy at `514` directional edges.
-- Offline personalization smoke remained favorable after the hygiene fixes: `profile_plus_cf` vs `profile_only` improved from `hit@10 0.0488` to `0.3659`, `recall@20 0.0618` to `0.1809`, and `MAP@20 0.0056` to `0.0527`.
 
-Evaluation caveat:
+Reproducibility and data-state caveats:
 
-- The stored evaluation artifacts remain synthetic/demo evidence and should not be presented as human-judged ground truth.
+- Stored Mongo signals/profiles/CF are now aligned to the v4 signal lineage and current CF runtime policy.
+- Local output under `.runtime/evaluation/` is ignored and reproducible evidence only, not a committed or shared source of truth.
+- Reproduce the CF comparison without Mongo writes using `python scripts/run_personalization_evaluation.py --dry-run --write-artifacts --out .runtime/evaluation/bundle_b_cf_gate_<timestamp> --print-json-summary`.
+- Synthetic/demo evaluation results must not be presented as human-judged ground truth.
+
+Read-only CF gate run on 2026-05-25 (`bundle_b_cf_gate_20260525_2124`):
+
+| Variant | HitRate@10 | Recall@20 | MAP@20 | Deliberate Recall@20 | CF-supported count | Train directional edges |
+|---|---:|---:|---:|---:|---:|---:|
+| `profile_plus_cf` | 0.166667 | 0.086508 | 0.019393 | 0.058824 | 466 | 278 |
+| `profile_plus_qualified_cf` | 0.119048 | 0.078571 | 0.010767 | 0.176471 | 0 | 0 |
+
+Gate outcome: `needs_more_evidence`. Qualified CF generated no supported recommendation or edge under `min_support=2`; the subsequent approved rebuild retained the current CF runtime policy rather than adopting qualified CF.
 
 ---
 

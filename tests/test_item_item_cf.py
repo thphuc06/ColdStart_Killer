@@ -270,6 +270,30 @@ def test_build_item_item_cf_replace_existing_deletes_stale_edges_after_full_writ
     assert {(doc["item_id"], doc["neighbor_item_id"]) for doc in edges.docs} == {("A", "B"), ("B", "A")}
 
 
+def test_build_item_item_cf_written_count_does_not_double_count_modified_matches() -> None:
+    edges = FakeCollection([])
+    kwargs = {
+        "user_item_signals_collection": FakeCollection(
+            [
+                _signal("u1", "A", implicit_score=3.0),
+                _signal("u1", "B", implicit_score=2.0),
+                _signal("u2", "A", implicit_score=3.0),
+                _signal("u2", "B", implicit_score=2.0),
+            ]
+        ),
+        "items_collection": FakeCollection([_item("A"), _item("B")]),
+        "item_item_cf_edges_collection": edges,
+        "write": True,
+        "min_support": 2,
+    }
+    first = build_item_item_cf_edges(**kwargs, updated_at=FIXED_NOW)
+    second = build_item_item_cf_edges(**kwargs, updated_at="2026-01-10T01:00:00+00:00")
+
+    assert first["stats"]["directional_edges_written"] == 2
+    assert second["stats"]["directional_edges_built"] == 2
+    assert second["stats"]["directional_edges_written"] == 2
+
+
 def test_build_item_item_cf_rejects_limited_write_mode() -> None:
     with pytest.raises(ValueError, match="unsafe_partial_cf_write"):
         build_item_item_cf_edges(

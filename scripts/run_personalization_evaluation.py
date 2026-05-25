@@ -87,6 +87,7 @@ def _format_baseline_row(row: dict[str, object]) -> str:
         f"hit@10={float(row['hit_rate_at_10']):.4f}, "
         f"recall@20={float(row['recall_at_20']):.4f}, "
         f"map@20={float(row['map_at_20']):.4f}, "
+        f"deliberate_map@20={float(row['deliberate_map_at_20']):.4f}, "
         f"coverage={float(row['coverage']):.4f}, "
         f"cold@20={float(row['cold_start_exposure_at_20']):.4f}, "
         f"cf_count={int(row['cf_supported_recommendation_count'])}, "
@@ -105,6 +106,8 @@ def _build_terminal_summary(
     config = run_data["config"]  # type: ignore[index]
     baselines = run_data["baseline_summaries"]  # type: ignore[index]
     comparisons = run_data.get("comparisons", [])  # type: ignore[union-attr]
+    gate = run_data.get("cf_qualified_gate", {})  # type: ignore[union-attr]
+    cf_diagnostics = run_data.get("cf_diagnostics", {})  # type: ignore[union-attr]
     lines = [
         f"Personalization evaluation completed: {config['run_id']}",
         f"  data_label: {config['data_label']}",
@@ -144,6 +147,17 @@ def _build_terminal_summary(
             f"map@20_delta={float(row['map_at_20_delta']):.4f}, "
             f"cf_supported_delta={int(row['cf_supported_count_delta'])}"
         )
+    lines.append(
+        "  cf_qualified_gate: "
+        f"{gate.get('decision', 'needs_more_evidence')} "
+        f"({gate.get('reason', 'no reason reported')})"
+    )
+    lines.append(
+        "  cf_diagnostics: "
+        f"min_support={cf_diagnostics.get('min_support', 'unknown')}, "
+        f"current_edges={cf_diagnostics.get('current_directional_edge_count', 0)}, "
+        f"qualified_edges={cf_diagnostics.get('qualified_directional_edge_count', 0)}"
+    )
 
     return "\n".join(lines)
 

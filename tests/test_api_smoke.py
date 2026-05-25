@@ -293,6 +293,32 @@ def test_debug_user_route_returns_joined_debug_payload(monkeypatch) -> None:
     assert payload["freshness"]["model_versions"]["stored"]["signal_model_version"] is None
 
 
+def test_debug_version_snapshot_marks_profile_and_cf_stale_when_signal_lineage_is_old() -> None:
+    import src.api.routes_debug as routes_debug
+
+    configured_signal_version = routes_debug.configured_model_versions(routes_debug.get_settings())["signal_model_version"]
+    snapshot = routes_debug._model_versions_snapshot(
+        profile_doc={
+            "derivation": {
+                "model_version": routes_debug.configured_model_versions(routes_debug.get_settings())["profile_model_version"],
+                "source_signal_model_version": "signal_v3_intent_hierarchy",
+            }
+        },
+        signals=[{"derivation": {"model_version": configured_signal_version}}],
+        cf_edges=[
+            {
+                "derivation": {
+                    "model_version": routes_debug.configured_model_versions(routes_debug.get_settings())["cf_model_version"],
+                    "source_signal_model_version": "signal_v3_intent_hierarchy",
+                }
+            }
+        ],
+    )
+
+    assert "profile" in snapshot["stale_version_components"]
+    assert "cf" in snapshot["stale_version_components"]
+
+
 def test_demo_reset_dry_run_reports_counts(monkeypatch) -> None:
     class FakeCollection:
         def __init__(self, count):

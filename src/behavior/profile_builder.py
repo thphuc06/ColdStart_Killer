@@ -438,6 +438,11 @@ def _intent_list(
 
 def _signal_weight(signal: dict[str, Any]) -> float:
     settings = get_settings()
+    positive = _safe_float(signal.get("positive_score"), 0.0)
+    negative = _safe_float(signal.get("negative_score"), 0.0)
+    implicit = _safe_float(signal.get("implicit_score"), positive - negative)
+    if implicit <= 0:
+        return 0.0
     contributions = signal.get("contributions") if isinstance(signal.get("contributions"), dict) else {}
     exploratory = _safe_float(contributions.get("exploratory"), 0.0)
     engaged = _safe_float(contributions.get("engaged"), 0.0)
@@ -445,9 +450,6 @@ def _signal_weight(signal: dict[str, Any]) -> float:
     deliberate = engaged + conversion
     if deliberate > 0 or exploratory > 0:
         return max(deliberate + (exploratory * settings.profile_exploratory_weight), 0.0)
-    positive = _safe_float(signal.get("positive_score"), 0.0)
-    negative = _safe_float(signal.get("negative_score"), 0.0)
-    implicit = _safe_float(signal.get("implicit_score"), positive - negative)
     return max(implicit, 0.0)
 
 

@@ -22,6 +22,7 @@ from src.recommendation.candidate_sources import (
     build_quality_candidates,
     build_semantic_neighbor_candidates,
     enrich_with_profile_context,
+    exact_suppressed_item_ids,
     load_catalog_snapshot,
     load_user_profile,
     load_user_signals,
@@ -116,18 +117,12 @@ def _filter_homepage_candidates(
     *,
     profile: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    if not profile:
-        return rows
-    negative = profile.get("negative_preferences") if isinstance(profile.get("negative_preferences"), dict) else {}
-    negative_items = {str(value) for value in negative.get("item_ids", [])}
-    purchased_items = {str(value) for value in profile.get("purchased_item_ids", [])}
-    filtered = [
+    excluded_item_ids = exact_suppressed_item_ids(profile, include_purchased=True)
+    return [
         row
         for row in rows
-        if str(row.get("item_id") or "") not in negative_items
-        and str(row.get("item_id") or "") not in purchased_items
+        if str(row.get("item_id") or "") not in excluded_item_ids
     ]
-    return filtered or rows
 
 
 def get_homepage_feed(
@@ -189,6 +184,7 @@ def get_homepage_feed(
         use_cache=use_catalog_cache,
     )
     seed_item_ids = _source_item_ids(signals)
+    excluded_item_ids = exact_suppressed_item_ids(profile, include_purchased=True)
 
     profile_rows = build_profile_candidates(
         profile,
@@ -196,6 +192,7 @@ def get_homepage_feed(
         item_stats_by_id=item_stats_by_id,
         item_profiles_by_id=item_profiles_by_id,
         limit=max(quotas["profile"] * 3, 0),
+        exclude_item_ids=excluded_item_ids,
     ) if quotas["profile"] > 0 else []
     semantic_rows = build_semantic_neighbor_candidates(
         seed_item_ids,
@@ -204,6 +201,7 @@ def get_homepage_feed(
         item_profiles_by_id=item_profiles_by_id,
         item_semantic_neighbors_collection=item_semantic_neighbors_collection,
         limit_per_source=max(quotas["semantic"], 1),
+        exclude_item_ids=excluded_item_ids,
     ) if seed_item_ids and quotas["semantic"] > 0 else []
     cf_rows = build_cf_candidates(
         seed_item_ids,
@@ -211,16 +209,19 @@ def get_homepage_feed(
         item_stats_by_id=item_stats_by_id,
         item_item_cf_edges_collection=item_item_cf_edges_collection,
         limit_per_source=max(quotas["cf"], 1),
+        exclude_item_ids=excluded_item_ids,
     ) if seed_item_ids and quotas["cf"] > 0 else []
     quality_rows = build_quality_candidates(
         items_by_id=items_by_id,
         item_stats_by_id=item_stats_by_id,
         limit=max(top_k * 2, quotas["quality"] * 4, 10),
+        exclude_item_ids=excluded_item_ids,
     )
     exploration_rows = build_cold_exploration_candidates(
         items_by_id=items_by_id,
         item_stats_by_id=item_stats_by_id,
         limit=max(top_k * 2, quotas["exploration"] * 4, 10),
+        exclude_item_ids=excluded_item_ids,
     )
 
     merged = merge_candidate_rows(profile_rows, semantic_rows, cf_rows, quality_rows, exploration_rows)

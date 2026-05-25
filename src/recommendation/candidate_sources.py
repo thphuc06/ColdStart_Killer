@@ -201,6 +201,28 @@ def load_user_profile(
     return _find_one(user_profiles_collection, {"user_id_hash": user_id_hash})
 
 
+def exact_suppressed_item_ids(
+    profile: dict[str, Any] | None,
+    *,
+    include_purchased: bool = False,
+) -> set[str]:
+    if not profile:
+        return set()
+    negative = profile.get("negative_preferences") if isinstance(profile.get("negative_preferences"), dict) else {}
+    item_ids = {
+        str(value).strip()
+        for value in negative.get("item_ids", [])
+        if str(value).strip()
+    }
+    if include_purchased:
+        item_ids.update(
+            str(value).strip()
+            for value in profile.get("purchased_item_ids", [])
+            if str(value).strip()
+        )
+    return item_ids
+
+
 def load_user_signals(
     user_id_hash: str,
     *,

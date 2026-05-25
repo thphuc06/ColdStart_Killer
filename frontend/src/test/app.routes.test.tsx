@@ -414,6 +414,27 @@ describe("Phase 11 routes", () => {
         expect(screen.getByText("0 profile matches")).toBeInTheDocument();
     });
 
+    it("counts profile-backed cards from backend badges instead of raw contribution", async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        const currentImplementation = fetchMock.getMockImplementation();
+        fetchMock.mockImplementation((input, init) => {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+            if (url.includes("/api/feed/home")) {
+                return jsonResponse({
+                    ...homeResponse,
+                    items: [{ ...homeResponse.items[0], contributions: { profile: 0.01 }, reason_badges: ["HyPE semantic"] }],
+                });
+            }
+            return currentImplementation!(input, init);
+        });
+
+        renderApp("/");
+
+        expect(await screen.findByText("Test Charger Block")).toBeInTheDocument();
+        expect(screen.getByText("No profile boost in this rank")).toBeInTheDocument();
+        expect(screen.getByText("0 profile matches")).toBeInTheDocument();
+    });
+
     it("shows refresh progress while retaining the current feed", async () => {
         renderApp("/");
 

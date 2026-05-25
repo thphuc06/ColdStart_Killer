@@ -15,13 +15,19 @@ Current execution snapshot:
 
 - Core implementation phases through Phase 13 have been delivered for the demo branch.
 - The behavior pipeline, API layer, React frontend, evaluation flow, and demo reset/recovery workflow are live in the repo.
-- Bundle A and Bundle B recommendation enhancements have been implemented, rebuilt on the live demo database, and re-validated.
-- Remaining forward-looking scope is primarily Phase 14 and later improvement batches.
+- Bundle A recommendation hygiene has been implemented and validated; Bundle B correctness for negative suppression and search seed eligibility has been applied, while the qualified-CF evidence gate remains open.
+- After tests and read-only evaluation, an explicitly approved rebuild wrote `1157` signal v4 documents, `43` profile v4 documents, and `514` current-policy CF edges sourced from signal v4.
+- Runtime CF remains on its existing multi-user policy while `profile_plus_qualified_cf` is evaluated offline with `min_support=2`.
+- Remaining forward-looking scope includes Bundle B closeout before Phase 14 and later improvement batches.
 
-Latest execution evidence:
+Latest execution evidence and reproduction:
 
 - `RECOMMENDATION_ENHANCEMENT_PLAN_AFTER_AUDIT.md`
-- `.runtime/evaluation/bundle_ab_closeout_20260525/`
+- `python scripts/run_personalization_evaluation.py --dry-run --write-artifacts --out .runtime/evaluation/bundle_b_cf_gate_<timestamp> --print-json-summary`
+
+Artifacts under `.runtime/evaluation/` are local ignored outputs; their command and summary metrics must be recorded when used as evidence.
+
+Latest read-only gate result (`bundle_b_cf_gate_20260525_2124`): current `profile_plus_cf` achieved `HitRate@10=0.166667`, `Recall@20=0.086508`, `MAP@20=0.019393` with `278` train directional CF edges; qualified CF achieved `0.119048`, `0.078571`, `0.010767` with `0` qualified edges. Decision: `needs_more_evidence`; the approved lineage rebuild therefore retained current CF policy and did not switch runtime CF.
 
 This document replaces the planning role of the two earlier plan files. It is a ready-to-implement canonical plan for upgrading ColdStart Killer from a cold-start hybrid retrieval engine into a personalized recommendation engine with behavior logging, user profiles, item-item collaborative filtering, React demo UI, explainability, and evaluation.
 

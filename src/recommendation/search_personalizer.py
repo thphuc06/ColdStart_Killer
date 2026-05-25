@@ -18,6 +18,7 @@ from src.query_processor import process_query
 from src.recommendation.candidate_sources import (
     build_cf_candidates,
     enrich_with_profile_context,
+    exact_suppressed_item_ids,
     load_item_snapshot,
     load_user_profile,
     load_user_signals,
@@ -124,23 +125,39 @@ def personalized_search(
 
     effective_personalized = bool(personalized and settings.enable_personalization)
     profile = load_user_profile(user_id_hash, user_profiles_collection=user_profiles_collection) if effective_personalized else None
-    merged = merge_candidate_rows(base_rows)
+    suppressed_item_ids = exact_suppressed_item_ids(profile) if effective_personalized else set()
+    merged = [
+        row
+        for row in merge_candidate_rows(base_rows)
+        if str(row.get("item_id") or "") not in suppressed_item_ids
+    ]
     if effective_personalized and query_type in {"broad", "exploratory"}:
         signals = load_user_signals(
             user_id_hash,
             user_item_signals_collection=user_item_signals_collection,
             limit=5,
         )
-        source_item_ids = [str(signal.get("item_id") or "") for signal in signals if str(signal.get("item_id") or "")]
+        source_item_ids = [
+            str(signal.get("item_id") or "")
+            for signal in signals
+            if bool(signal.get("seed_eligible"))
+            and str(signal.get("item_id") or "")
+            and str(signal.get("item_id") or "") not in suppressed_item_ids
+        ]
         cf_rows = build_cf_candidates(
             source_item_ids,
             items_by_id=items_by_id,
             item_stats_by_id=item_stats_by_id,
             item_item_cf_edges_collection=item_item_cf_edges_collection,
             limit_per_source=max(top_k, 5),
+            exclude_item_ids=suppressed_item_ids,
         )
         cf_rows = [row for row in cf_rows if str(row.get("item_id") or "") in item_ids]
-        merged = merge_candidate_rows(merged, cf_rows)
+        merged = [
+            row
+            for row in merge_candidate_rows(merged, cf_rows)
+            if str(row.get("item_id") or "") not in suppressed_item_ids
+        ]
 
     merged = enrich_with_profile_context(
         merged,

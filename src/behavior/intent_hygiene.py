@@ -18,28 +18,10 @@ BLOCKED_EXACT_LABELS = {
     "semantic_neighbor",
     "vector",
 }
-SPEC_MARKERS = (
-    "amoled",
-    "bluetooth",
-    "capacitive",
-    "colors",
-    "display",
-    "dpi",
-    "gb",
-    "ghz",
-    "hz",
-    "inch",
-    "mah",
-    "megapixel",
-    "mp",
-    "oled",
-    "ram",
-    "resolution",
-    "screen",
-    "specification",
-    "touchscreen",
-    "usb",
-    "wifi",
+SPEC_MARKER_RE = re.compile(
+    r"\b(?:amoled|bluetooth|capacitive|colors?|display|dpi|gb|ghz|hz|inch(?:es)?|mah|"
+    r"megapixel(?:s)?|mp|oled|ram|resolution|screen|specification(?:s)?|touchscreen|usb|wi-?fi)\b",
+    re.IGNORECASE,
 )
 
 
@@ -76,11 +58,13 @@ def is_fact_like_label(value: Any, *, max_length: int) -> bool:
     digit_count = sum(character.isdigit() for character in label)
     punctuation_count = sum(character in ",;:.()/|" for character in label)
     word_count = len(lower.split())
-    marker_hit = any(marker in lower for marker in SPEC_MARKERS)
+    marker_hits = {match.group(0).casefold() for match in SPEC_MARKER_RE.finditer(lower)}
 
     if len(label) > max_length:
         return True
-    if marker_hit and (digit_count > 0 or punctuation_count > 0 or word_count >= 5):
+    if marker_hits and digit_count > 0:
+        return True
+    if len(marker_hits) >= 2:
         return True
     if digit_count >= 3 and punctuation_count >= 2:
         return True

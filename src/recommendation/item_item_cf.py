@@ -226,7 +226,7 @@ def _bulk_write_edges(collection: Any, docs: list[dict[str, Any]], batch_size: i
         summary["batches"] += 1
         summary["written"] += int(getattr(result, "upserted_count", 0)) + int(
             getattr(result, "modified_count", 0)
-        ) + int(getattr(result, "matched_count", 0))
+        )
     return summary
 
 

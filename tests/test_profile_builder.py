@@ -390,6 +390,52 @@ def test_build_user_profiles_rejects_uuid_like_intents_and_uses_category_fallbac
     assert result["stats"]["invalid_interest_labels_dropped"] == 1
 
 
+def test_net_negative_signal_is_suppressed_without_learning_positive_profile_features() -> None:
+    net_negative = _signal(
+        "u_negative",
+        "BAD_PHONE",
+        positive_score=1.35,
+        negative_score=3.0,
+        reason_intent="compact phone",
+        clicks=3,
+        dislikes=1,
+    )
+    net_negative["contributions"] = {"exploratory": 1.05, "engaged": 0.5, "conversion": 0.0}
+    result = build_user_profiles(
+        user_item_signals_collection=FakeCollection(
+            [net_negative, _signal("u_negative", "GOOD_SOAP", positive_score=2.0, reason_intent="gentle soap")]
+        ),
+        clickstream_events_collection=FakeCollection(
+            [
+                _event("u_negative", "BAD_PHONE", event_type="dislike", request_id="req_bad"),
+                _event("u_negative", "GOOD_SOAP", event_type="click", request_id="req_good"),
+            ]
+        ),
+        recommendation_logs_collection=FakeCollection(
+            [_log("req_bad", "BAD_PHONE", intent="compact phone"), _log("req_good", "GOOD_SOAP", intent="gentle soap")]
+        ),
+        item_hype_profiles_collection=FakeCollection(
+            [
+                _item_profile("BAD_PHONE", 0, category_id="cell_phones_and_accessories"),
+                _item_profile("GOOD_SOAP", 1, category_id="all_beauty"),
+            ]
+        ),
+        items_collection=FakeCollection(
+            [
+                _item("BAD_PHONE", brand="PhoneBrand", category_id="cell_phones_and_accessories"),
+                _item("GOOD_SOAP", brand="SoapBrand", category_id="all_beauty"),
+            ]
+        ),
+        updated_at=FIXED_NOW,
+    )
+
+    profile = result["sample_profiles"][0]
+    assert profile["profile_quality"]["num_positive_items"] == 1
+    assert "BAD_PHONE" in profile["negative_preferences"]["item_ids"]
+    assert "cell_phones_and_accessories" not in profile["category_affinity"]
+    assert all("compact phone" not in interest["top_intents"] for interest in profile["interest_vectors"])
+
+
 def test_build_user_profiles_caps_interests_and_merges_when_limit_reached() -> None:
     signals = []
     events_docs = []

@@ -20,6 +20,7 @@ from src.recommendation.candidate_sources import (
     build_same_category_price_candidates,
     build_semantic_neighbor_candidates,
     enrich_with_profile_context,
+    exact_suppressed_item_ids,
     load_catalog_snapshot,
     load_item_snapshot,
     load_user_profile,
@@ -35,19 +36,12 @@ def _request_id() -> str:
 
 
 def _filter_similar_candidates(rows: list[dict[str, Any]], *, profile: dict[str, Any] | None, source_item_id: str) -> list[dict[str, Any]]:
-    if not profile:
-        return [row for row in rows if str(row.get("item_id") or "") != source_item_id]
-    negative = profile.get("negative_preferences") if isinstance(profile.get("negative_preferences"), dict) else {}
-    negative_items = {str(value) for value in negative.get("item_ids", [])}
-    purchased_items = {str(value) for value in profile.get("purchased_item_ids", [])}
-    filtered = [
+    excluded_item_ids = exact_suppressed_item_ids(profile, include_purchased=True) | {source_item_id}
+    return [
         row
         for row in rows
-        if str(row.get("item_id") or "") != source_item_id
-        and str(row.get("item_id") or "") not in negative_items
-        and str(row.get("item_id") or "") not in purchased_items
+        if str(row.get("item_id") or "") not in excluded_item_ids
     ]
-    return filtered or [row for row in rows if str(row.get("item_id") or "") != source_item_id]
 
 
 def get_similar_products(
@@ -104,6 +98,7 @@ def get_similar_products(
         }
 
     profile = load_user_profile(user_id_hash, user_profiles_collection=user_profiles_collection) if settings.enable_personalization else None
+    excluded_item_ids = exact_suppressed_item_ids(profile, include_purchased=True) | {source_item_id}
     _, _, source_profiles_by_id = load_item_snapshot(
         {source_item_id},
         items_collection=items_collection,
@@ -117,6 +112,7 @@ def get_similar_products(
         item_profiles_by_id=source_profiles_by_id,
         item_semantic_neighbors_collection=item_semantic_neighbors_collection,
         limit_per_source=max(top_k, 8),
+        exclude_item_ids=excluded_item_ids,
     )
     cf_rows = build_cf_candidates(
         [source_item_id],
@@ -124,12 +120,14 @@ def get_similar_products(
         item_stats_by_id=item_stats_by_id,
         item_item_cf_edges_collection=item_item_cf_edges_collection,
         limit_per_source=max(top_k, 8),
+        exclude_item_ids=excluded_item_ids,
     )
     fallback_rows = build_same_category_price_candidates(
         source_item_id,
         items_by_id=items_by_id,
         item_stats_by_id=item_stats_by_id,
         limit=max(top_k * 2, 10),
+        exclude_item_ids=excluded_item_ids,
     )
     merged = merge_candidate_rows(semantic_rows, cf_rows, fallback_rows)
     merged = _filter_similar_candidates(merged, profile=profile, source_item_id=source_item_id)

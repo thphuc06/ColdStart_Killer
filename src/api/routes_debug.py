@@ -99,6 +99,23 @@ def _model_version_from_docs(docs: list[dict[str, Any]]) -> str | None:
     return "mixed"
 
 
+def _source_signal_version_from_doc(doc: dict[str, Any] | None) -> str | None:
+    if not isinstance(doc, dict):
+        return None
+    derivation = doc.get("derivation") if isinstance(doc.get("derivation"), dict) else {}
+    version = str(derivation.get("source_signal_model_version") or "").strip()
+    return version or None
+
+
+def _source_signal_version_from_docs(docs: list[dict[str, Any]]) -> str | None:
+    versions = sorted({version for version in (_source_signal_version_from_doc(doc) for doc in docs) if version})
+    if not versions:
+        return None
+    if len(versions) == 1:
+        return versions[0]
+    return "mixed"
+
+
 def _model_versions_snapshot(
     *,
     profile_doc: dict[str, Any] | None,
@@ -118,6 +135,13 @@ def _model_versions_snapshot(
         if component_name != "explanation_version"
         and stored.get(component_name) not in {None, configured_version}
     ]
+    source_signal_versions = {
+        "profile": _source_signal_version_from_doc(profile_doc),
+        "cf": _source_signal_version_from_docs(cf_edges),
+    }
+    for component_name, source_signal_version in source_signal_versions.items():
+        if source_signal_version not in {None, configured["signal_model_version"]} and component_name not in stale_version_components:
+            stale_version_components.append(component_name)
     return {
         "configured": configured,
         "stored": stored,

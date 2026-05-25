@@ -20,6 +20,8 @@ from itertools import combinations
 from pathlib import Path
 from typing import Any
 
+from src.behavior.profile_builder import POSITIVE_SIGNAL_THRESHOLD, _signal_weight
+from src.behavior.signal_builder import build_signal_artifacts
 from src.mongodb import (
     get_clickstream_events_collection,
     get_evaluation_runs_collection,
@@ -30,6 +32,7 @@ from src.mongodb import (
     get_user_item_signals_collection,
     get_user_profiles_collection,
 )
+from src.recommendation.item_item_cf import DEFAULT_CF_MIN_SUPPORT, _is_positive_signal, _positive_signal_value
 
 
 BASELINE_NAMES = (
@@ -38,18 +41,9 @@ BASELINE_NAMES = (
     "popularity",
     "profile_only",
     "profile_plus_cf",
+    "profile_plus_qualified_cf",
 )
 POSITIVE_EVENT_TYPES = frozenset({"click", "add_to_cart", "purchase", "view_detail", "wishlist"})
-EVENT_WEIGHTS = {
-    "impression": 0.0,
-    "view_detail": 0.5,
-    "click": 1.0,
-    "wishlist": 1.5,
-    "add_to_cart": 2.0,
-    "purchase": 3.0,
-    "hide": -1.5,
-    "dislike": -3.0,
-}
 
 
 @dataclass(frozen=True)
@@ -74,6 +68,7 @@ class TemporalSplit:
     held_out_events: list[dict[str, Any]]
     train_positive_item_ids: list[str]
     held_out_positive_item_ids: list[str]
+    held_out_deliberate_item_ids: list[str]
 
 
 def _now_iso() -> str:
@@ -120,10 +115,6 @@ def _is_positive_event(event_type: str) -> bool:
     return event_type in POSITIVE_EVENT_TYPES
 
 
-def _event_weight(event_type: str) -> float:
-    return EVENT_WEIGHTS.get(event_type, 0.0)
-
-
 def _canonical_item(item: dict[str, Any], item_stats_doc: dict[str, Any] | None = None) -> dict[str, Any]:
     cold_start = item.get("cold_start") if isinstance(item.get("cold_start"), dict) else {}
     stats_cold = item_stats_doc.get("cold_start") if isinstance(item_stats_doc, dict) and isinstance(item_stats_doc.get("cold_start"), dict) else {}
@@ -157,6 +148,13 @@ def _tokenize(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9]+", str(text or "").lower()))
 
 
+def _build_train_signals(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not events:
+        return []
+    updated_at = max(str(event.get("timestamp") or "") for event in events)
+    return build_signal_artifacts(events=events, updated_at=updated_at).signal_docs
+
+
 def temporal_split_events(
     events: list[dict[str, Any]],
     *,
@@ -167,7 +165,7 @@ def temporal_split_events(
 
     ordered_events = sorted(events, key=lambda event: _parse_timestamp(event.get("timestamp")))
     if not ordered_events:
-        return TemporalSplit([], [], [], [])
+        return TemporalSplit([], [], [], [], [])
 
     cut_index = max(1, int(len(ordered_events) * train_ratio))
     cut_index = min(cut_index, len(ordered_events))
@@ -186,12 +184,19 @@ def temporal_split_events(
         if _is_positive_event(str(event.get("event_type") or ""))
         and str(event.get("item_id") or "") not in train_positive_set
     ])
+    held_out_deliberate_item_ids = _dedupe_preserve_order([
+        str(signal.get("item_id") or "")
+        for signal in _build_train_signals(held_out_events)
+        if bool(signal.get("seed_eligible"))
+        and str(signal.get("item_id") or "") not in train_positive_set
+    ])
 
     return TemporalSplit(
         train_events=train_events,
         held_out_events=held_out_events,
         train_positive_item_ids=train_positive_item_ids,
         held_out_positive_item_ids=held_out_positive_item_ids,
+        held_out_deliberate_item_ids=held_out_deliberate_item_ids,
     )
 
 
@@ -211,23 +216,20 @@ def _content_similarity(source_item: dict[str, Any], candidate_item: dict[str, A
     return round((0.45 * brand_match) + (0.35 * category_match) + (0.10 * price_match) + (0.10 * token_overlap), 6)
 
 
-def _build_user_profile(train_events: list[dict[str, Any]], items_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _build_user_profile(train_signals: list[dict[str, Any]], items_by_id: dict[str, dict[str, Any]]) -> dict[str, Any]:
     category_counter: Counter[str] = Counter()
     brand_counter: Counter[str] = Counter()
     price_counter: Counter[str] = Counter()
     token_counter: Counter[str] = Counter()
     seen_positive_items: list[str] = []
 
-    for event in train_events:
-        event_type = str(event.get("event_type") or "")
-        if not _is_positive_event(event_type):
-            continue
-        item_id = str(event.get("item_id") or "")
+    for signal in train_signals:
+        item_id = str(signal.get("item_id") or "")
         item = items_by_id.get(item_id)
         if not item:
             continue
-        weight = _event_weight(event_type)
-        if weight <= 0:
+        weight = _signal_weight(signal)
+        if weight < POSITIVE_SIGNAL_THRESHOLD:
             continue
         category_counter[item["category_id"]] += weight
         if item["brand"]:
@@ -259,30 +261,45 @@ def _profile_score(candidate_item: dict[str, Any], user_profile: dict[str, Any])
     return round((0.50 * category_score) + (0.35 * brand_score) + (0.10 * token_score) + (0.05 * price_score), 6)
 
 
-def _build_train_popularity(train_events_by_user: dict[str, list[dict[str, Any]]]) -> dict[str, float]:
+def _build_train_popularity(train_signals_by_user: dict[str, list[dict[str, Any]]]) -> dict[str, float]:
     popularity: defaultdict[str, float] = defaultdict(float)
-    for events in train_events_by_user.values():
-        for event in events:
-            event_type = str(event.get("event_type") or "")
-            if not _is_positive_event(event_type):
-                continue
-            item_id = str(event.get("item_id") or "")
-            popularity[item_id] += _event_weight(event_type)
+    for signals in train_signals_by_user.values():
+        for signal in signals:
+            item_id = str(signal.get("item_id") or "")
+            weight = _signal_weight(signal)
+            if item_id and weight >= POSITIVE_SIGNAL_THRESHOLD:
+                popularity[item_id] += weight
     return dict(popularity)
 
 
-def _build_cf_edges(train_events_by_user: dict[str, list[dict[str, Any]]]) -> dict[str, dict[str, float]]:
+def _eligible_cf_signal(signal: dict[str, Any], *, qualified: bool) -> bool:
+    return bool(signal.get("seed_eligible")) if qualified else _is_positive_signal(signal)
+
+
+def _cf_source_item_ids(signals: list[dict[str, Any]], *, qualified: bool) -> list[str]:
+    return _dedupe_preserve_order([
+        str(signal.get("item_id") or "")
+        for signal in signals
+        if _eligible_cf_signal(signal, qualified=qualified)
+    ])
+
+
+def _build_cf_edges(
+    train_signals_by_user: dict[str, list[dict[str, Any]]],
+    *,
+    qualified: bool,
+    min_support: int = DEFAULT_CF_MIN_SUPPORT,
+) -> dict[str, dict[str, float]]:
     per_user_item_scores: dict[str, dict[str, float]] = {}
     popularity: defaultdict[str, float] = defaultdict(float)
 
-    for user_id, events in train_events_by_user.items():
+    for user_id, signals in train_signals_by_user.items():
         item_scores: defaultdict[str, float] = defaultdict(float)
-        for event in events:
-            event_type = str(event.get("event_type") or "")
-            if not _is_positive_event(event_type):
+        for signal in signals:
+            if not _eligible_cf_signal(signal, qualified=qualified):
                 continue
-            item_id = str(event.get("item_id") or "")
-            weight = _event_weight(event_type)
+            item_id = str(signal.get("item_id") or "")
+            weight = _positive_signal_value(signal)
             if not item_id or weight <= 0:
                 continue
             item_scores[item_id] += weight
@@ -305,6 +322,8 @@ def _build_cf_edges(train_events_by_user: dict[str, list[dict[str, Any]]]) -> di
 
     edges: defaultdict[str, dict[str, float]] = defaultdict(dict)
     for (left, right), support in pair_support.items():
+        if support < min_support:
+            continue
         left_pop = popularity.get(left, 0.0)
         right_pop = popularity.get(right, 0.0)
         if left_pop <= 0 or right_pop <= 0:
@@ -390,17 +409,17 @@ def _rank_profile_plus_cf(
     items_by_id: dict[str, dict[str, Any]],
     cf_edges: dict[str, dict[str, float]],
     popularity_by_item: dict[str, float],
+    source_item_ids: list[str],
     excluded_item_ids: set[str],
     top_k: int,
 ) -> tuple[list[str], set[str]]:
-    train_items = user_profile.get("train_positive_item_ids", [])
     scored: list[tuple[float, str]] = []
     cf_supported_item_ids: set[str] = set()
     for item_id, candidate in items_by_id.items():
         if item_id in excluded_item_ids:
             continue
         profile_score = _profile_score(candidate, user_profile)
-        cf_score = max((_safe_float(cf_edges.get(source_item_id, {}).get(item_id), 0.0) for source_item_id in train_items), default=0.0)
+        cf_score = max((_safe_float(cf_edges.get(source_item_id, {}).get(item_id), 0.0) for source_item_id in source_item_ids), default=0.0)
         if cf_score > 0:
             cf_supported_item_ids.add(item_id)
         popularity_bonus = 0.05 * _safe_float(popularity_by_item.get(item_id), 0.0)
@@ -510,6 +529,10 @@ def _summary_row(
             "cold_start_exposure_at_20": 0.0,
             "cf_supported_recommendation_count": 0,
             "cf_supported_recommendation_rate": 0.0,
+            "deliberate_evaluated_user_count": 0,
+            "deliberate_hit_rate_at_10": 0.0,
+            "deliberate_recall_at_20": 0.0,
+            "deliberate_map_at_20": 0.0,
         }
 
     unique_recommended_items = {
@@ -519,6 +542,8 @@ def _summary_row(
     }
     total_cf_supported = sum(int(row.get("cf_supported_recommendation_count", 0)) for row in rows)
     denominator = max(sum(min(len(row.get("recommended_item_ids", [])), top_k) for row in rows), 1)
+    deliberate_rows = [row for row in rows if row.get("has_deliberate_target")]
+    deliberate_denominator = len(deliberate_rows) or 1
     return {
         "baseline": baseline,
         "evaluated_user_count": len(rows),
@@ -531,6 +556,10 @@ def _summary_row(
         "cold_start_exposure_at_20": round(sum(_safe_float(row.get("cold_start_exposure_at_20"), 0.0) for row in rows) / len(rows), 6),
         "cf_supported_recommendation_count": total_cf_supported,
         "cf_supported_recommendation_rate": round(total_cf_supported / denominator, 6),
+        "deliberate_evaluated_user_count": len(deliberate_rows),
+        "deliberate_hit_rate_at_10": round(sum(_safe_float(row.get("deliberate_hit_rate_at_10"), 0.0) for row in deliberate_rows) / deliberate_denominator, 6),
+        "deliberate_recall_at_20": round(sum(_safe_float(row.get("deliberate_recall_at_20"), 0.0) for row in deliberate_rows) / deliberate_denominator, 6),
+        "deliberate_map_at_20": round(sum(_safe_float(row.get("deliberate_map_at_20"), 0.0) for row in deliberate_rows) / deliberate_denominator, 6),
     }
 
 
@@ -542,8 +571,25 @@ def _comparison_row(summary_by_baseline: dict[str, dict[str, Any]], left: str, r
         "hit_rate_at_10_delta": round(_safe_float(left_row.get("hit_rate_at_10"), 0.0) - _safe_float(right_row.get("hit_rate_at_10"), 0.0), 6),
         "recall_at_20_delta": round(_safe_float(left_row.get("recall_at_20"), 0.0) - _safe_float(right_row.get("recall_at_20"), 0.0), 6),
         "map_at_20_delta": round(_safe_float(left_row.get("map_at_20"), 0.0) - _safe_float(right_row.get("map_at_20"), 0.0), 6),
+        "deliberate_hit_rate_at_10_delta": round(_safe_float(left_row.get("deliberate_hit_rate_at_10"), 0.0) - _safe_float(right_row.get("deliberate_hit_rate_at_10"), 0.0), 6),
+        "deliberate_recall_at_20_delta": round(_safe_float(left_row.get("deliberate_recall_at_20"), 0.0) - _safe_float(right_row.get("deliberate_recall_at_20"), 0.0), 6),
+        "deliberate_map_at_20_delta": round(_safe_float(left_row.get("deliberate_map_at_20"), 0.0) - _safe_float(right_row.get("deliberate_map_at_20"), 0.0), 6),
         "cf_supported_count_delta": int(left_row.get("cf_supported_recommendation_count", 0)) - int(right_row.get("cf_supported_recommendation_count", 0)),
     }
+
+
+def _qualified_cf_gate(summary_by_baseline: dict[str, dict[str, Any]]) -> dict[str, str]:
+    current = summary_by_baseline["profile_plus_cf"]
+    qualified = summary_by_baseline["profile_plus_qualified_cf"]
+    if int(qualified.get("deliberate_evaluated_user_count", 0)) == 0:
+        return {"decision": "needs_more_evidence", "reason": "No deliberate held-out targets were available for the qualified CF comparison."}
+    if int(qualified.get("cf_supported_recommendation_count", 0)) == 0:
+        return {"decision": "needs_more_evidence", "reason": "Qualified CF produced no supported recommendations under min_support=2."}
+    guarded_metrics = ("recall_at_20", "map_at_20", "deliberate_recall_at_20", "deliberate_map_at_20")
+    degraded = [metric for metric in guarded_metrics if _safe_float(qualified.get(metric)) < _safe_float(current.get(metric))]
+    if degraded:
+        return {"decision": "reject", "reason": f"Qualified CF reduced protected metrics: {', '.join(degraded)}."}
+    return {"decision": "adopt", "reason": "Qualified CF retained protected all-positive and deliberate metrics with usable supported coverage."}
 
 
 def evaluate_personalization(
@@ -589,13 +635,14 @@ def evaluate_personalization(
         user_id_hash: temporal_split_events(events, train_ratio=config.train_ratio)
         for user_id_hash, events in events_by_user.items()
     }
-    train_events_by_user = {
-        user_id_hash: split.train_events
+    train_signals_by_user = {
+        user_id_hash: _build_train_signals(split.train_events)
         for user_id_hash, split in user_splits.items()
         if split.train_events
     }
-    popularity_by_item = _build_train_popularity(train_events_by_user)
-    cf_edges = _build_cf_edges(train_events_by_user)
+    popularity_by_item = _build_train_popularity(train_signals_by_user)
+    cf_edges = _build_cf_edges(train_signals_by_user, qualified=False)
+    qualified_cf_edges = _build_cf_edges(train_signals_by_user, qualified=True)
 
     per_user_metrics: list[dict[str, Any]] = []
     evaluated_users = 0
@@ -603,7 +650,10 @@ def evaluate_personalization(
         if not split.train_positive_item_ids or not split.held_out_positive_item_ids:
             continue
         evaluated_users += 1
-        user_profile = _build_user_profile(split.train_events, items_by_id)
+        user_signals = train_signals_by_user.get(user_id_hash, [])
+        user_profile = _build_user_profile(user_signals, items_by_id)
+        current_cf_source_item_ids = _cf_source_item_ids(user_signals, qualified=False)
+        qualified_cf_source_item_ids = _cf_source_item_ids(user_signals, qualified=True)
         excluded_item_ids = set(split.train_positive_item_ids)
 
         baseline_rankers = {
@@ -635,6 +685,16 @@ def evaluate_personalization(
                 items_by_id=items_by_id,
                 cf_edges=cf_edges,
                 popularity_by_item=popularity_by_item,
+                source_item_ids=current_cf_source_item_ids,
+                excluded_item_ids=excluded_item_ids,
+                top_k=config.top_k,
+            ),
+            "profile_plus_qualified_cf": lambda: _rank_profile_plus_cf(
+                user_profile=user_profile,
+                items_by_id=items_by_id,
+                cf_edges=qualified_cf_edges,
+                popularity_by_item=popularity_by_item,
+                source_item_ids=qualified_cf_source_item_ids,
                 excluded_item_ids=excluded_item_ids,
                 top_k=config.top_k,
             ),
@@ -652,13 +712,28 @@ def evaluate_personalization(
                 recall_k=config.recall_k,
                 map_k=config.map_k,
             )
+            deliberate_metrics = compute_ranking_metrics(
+                recommended_item_ids,
+                split.held_out_deliberate_item_ids,
+                items_by_id=items_by_id,
+                popularity_by_item=popularity_by_item,
+                cf_supported_item_ids=cf_supported_item_ids,
+                hit_rate_k=config.hit_rate_k,
+                recall_k=config.recall_k,
+                map_k=config.map_k,
+            )
             per_user_metrics.append({
                 "user_id_hash": user_id_hash,
                 "baseline": baseline,
                 "train_positive_item_ids": list(split.train_positive_item_ids),
                 "held_out_positive_item_ids": list(split.held_out_positive_item_ids),
+                "held_out_deliberate_item_ids": list(split.held_out_deliberate_item_ids),
+                "has_deliberate_target": bool(split.held_out_deliberate_item_ids),
                 "recommended_item_ids": list(recommended_item_ids),
                 **metric_row,
+                "deliberate_hit_rate_at_10": deliberate_metrics["hit_rate_at_10"],
+                "deliberate_recall_at_20": deliberate_metrics["recall_at_20"],
+                "deliberate_map_at_20": deliberate_metrics["map_at_20"],
             })
 
     summary_by_baseline = {
@@ -674,6 +749,7 @@ def evaluate_personalization(
     comparisons = [
         _comparison_row(summary_by_baseline, "profile_plus_cf", "profile_only"),
         _comparison_row(summary_by_baseline, "profile_plus_cf", "popularity"),
+        _comparison_row(summary_by_baseline, "profile_plus_qualified_cf", "profile_plus_cf"),
     ]
 
     synthetic_label = "synthetic/demo" if config.synthetic_data else "live/non-synthetic"
@@ -694,6 +770,7 @@ def evaluate_personalization(
         "user_count": len(events_by_user),
         "evaluated_user_count": evaluated_users,
         "baselines": list(BASELINE_NAMES),
+        "cf_min_support": DEFAULT_CF_MIN_SUPPORT,
         "extra_metadata": dict(config.extra_metadata),
     }
 
@@ -702,6 +779,12 @@ def evaluate_personalization(
         "per_user_metrics": per_user_metrics,
         "baseline_summaries": baseline_summaries,
         "comparisons": comparisons,
+        "cf_diagnostics": {
+            "min_support": DEFAULT_CF_MIN_SUPPORT,
+            "current_directional_edge_count": sum(len(neighbors) for neighbors in cf_edges.values()),
+            "qualified_directional_edge_count": sum(len(neighbors) for neighbors in qualified_cf_edges.values()),
+        },
+        "cf_qualified_gate": _qualified_cf_gate(summary_by_baseline),
     }
 
 
@@ -725,6 +808,8 @@ def generate_personalization_summary_md(run_data: dict[str, Any]) -> str:
     config = run_data.get("config", {})
     baseline_summaries = run_data.get("baseline_summaries", [])
     comparisons = run_data.get("comparisons", [])
+    gate = run_data.get("cf_qualified_gate", {})
+    cf_diagnostics = run_data.get("cf_diagnostics", {})
 
     lines = [
         "# Personalization Evaluation Report",
@@ -747,6 +832,9 @@ def generate_personalization_summary_md(run_data: dict[str, Any]) -> str:
             ("hit_rate_at_10", "HitRate@10"),
             ("recall_at_20", "Recall@20"),
             ("map_at_20", "MAP@20"),
+            ("deliberate_hit_rate_at_10", "Deliberate Hit@10"),
+            ("deliberate_recall_at_20", "Deliberate Recall@20"),
+            ("deliberate_map_at_20", "Deliberate MAP@20"),
             ("coverage", "Coverage"),
             ("diversity_at_20", "Diversity"),
             ("novelty_at_20", "Novelty"),
@@ -766,15 +854,24 @@ def generate_personalization_summary_md(run_data: dict[str, Any]) -> str:
             ("hit_rate_at_10_delta", "HitRate@10 Delta"),
             ("recall_at_20_delta", "Recall@20 Delta"),
             ("map_at_20_delta", "MAP@20 Delta"),
+            ("deliberate_map_at_20_delta", "Deliberate MAP@20 Delta"),
             ("cf_supported_count_delta", "CF-supported Delta"),
         ],
     ))
     lines.extend([
         "",
+        "## Qualified CF Gate",
+        "",
+        f"- Decision: `{gate.get('decision', 'needs_more_evidence')}`",
+        f"- Reason: {gate.get('reason', 'No gate result produced.')}",
+        f"- CF min support: `{cf_diagnostics.get('min_support', config.get('cf_min_support', 'unknown'))}`",
+        f"- Current / qualified directional edge count: `{cf_diagnostics.get('current_directional_edge_count', 0)}` / `{cf_diagnostics.get('qualified_directional_edge_count', 0)}`",
+        "",
         "## Notes",
         "",
         "- Temporal split uses the first 70% of each user's event history for training and the final 30% for held-out positives.",
-        "- The evaluator rebuilds popularity and CF from train-only data to avoid future leakage.",
+        "- The evaluator builds production-policy signals, popularity, and CF in memory from train-only data to avoid future leakage and MongoDB writes.",
+        "- Both current-policy and qualified-policy CF variants enforce min_support=2.",
         "- CF evidence in this report is behavior-derived from train-time co-interactions, not semantic similarity.",
     ])
     return "\n".join(lines) + "\n"
@@ -789,6 +886,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
     per_user_csv_path = output_path / "per_user_metrics.csv"
     baseline_path = output_path / "baseline_summaries.json"
     comparison_path = output_path / "comparisons.json"
+    gate_path = output_path / "cf_qualified_gate.json"
     summary_path = output_path / "metrics_summary.md"
     manifest_path = output_path / "manifest.json"
 
@@ -796,6 +894,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
     per_user_json_path.write_text(json.dumps(run_data.get("per_user_metrics", []), indent=2, ensure_ascii=False), encoding="utf-8")
     baseline_path.write_text(json.dumps(run_data.get("baseline_summaries", []), indent=2, ensure_ascii=False), encoding="utf-8")
     comparison_path.write_text(json.dumps(run_data.get("comparisons", []), indent=2, ensure_ascii=False), encoding="utf-8")
+    gate_path.write_text(json.dumps(run_data.get("cf_qualified_gate", {}), indent=2, ensure_ascii=False), encoding="utf-8")
     summary_path.write_text(generate_personalization_summary_md(run_data), encoding="utf-8")
 
     per_user_rows = run_data.get("per_user_metrics", [])
@@ -809,8 +908,12 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
         "novelty_at_20",
         "cold_start_exposure_at_20",
         "cf_supported_recommendation_count",
+        "deliberate_hit_rate_at_10",
+        "deliberate_recall_at_20",
+        "deliberate_map_at_20",
         "train_positive_item_ids",
         "held_out_positive_item_ids",
+        "held_out_deliberate_item_ids",
         "recommended_item_ids",
     ]
     with per_user_csv_path.open("w", encoding="utf-8", newline="") as handle:
@@ -818,7 +921,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
         writer.writeheader()
         for row in per_user_rows:
             csv_row = dict(row)
-            for key in ("train_positive_item_ids", "held_out_positive_item_ids", "recommended_item_ids"):
+            for key in ("train_positive_item_ids", "held_out_positive_item_ids", "held_out_deliberate_item_ids", "recommended_item_ids"):
                 csv_row[key] = "|".join(csv_row.get(key, []))
             writer.writerow({key: csv_row.get(key, "") for key in csv_columns})
 
@@ -831,6 +934,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
             "per_user_metrics_csv": str(per_user_csv_path),
             "baseline_summaries": str(baseline_path),
             "comparisons": str(comparison_path),
+            "cf_qualified_gate": str(gate_path),
             "metrics_summary": str(summary_path),
         },
     }
@@ -842,6 +946,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
         "per_user_metrics_csv": str(per_user_csv_path),
         "baseline_summaries": str(baseline_path),
         "comparisons": str(comparison_path),
+        "cf_qualified_gate": str(gate_path),
         "metrics_summary": str(summary_path),
         "manifest": str(manifest_path),
     }
@@ -870,6 +975,7 @@ def load_live_personalization_inputs() -> dict[str, Any]:
         "user_id_hash": 1,
         "item_id": 1,
         "event_type": 1,
+        "dwell_time_ms": 1,
         "timestamp": 1,
     }))
     recommendation_logs = list(recommendation_logs_collection.find({}, {

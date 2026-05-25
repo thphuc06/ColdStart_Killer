@@ -10,6 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from scripts import build_user_item_signals as build_user_item_signals_script
+from src.behavior.intent_hygiene import sanitize_interest_labels
 from src.behavior.signal_builder import build_user_item_signals
 
 
@@ -234,14 +235,25 @@ def test_product_facts_and_unit_ids_do_not_become_interest_reasons() -> None:
 def test_invalid_reason_intents_are_dropped_and_counted() -> None:
     uuid_like_intent = "550e8400-e29b-41d4-a716-446655440000"
     product_fact = "The smartphone has a 6.4-inch Super AMOLED capacitive touchscreen with 16M colors."
+    technical_fact_without_digits = "AMOLED touchscreen display specification"
     result = _run_builder(
         [_event("evt_click", "click")],
-        [_recommendation_log(intents=[uuid_like_intent, product_fact, "oil-control sunscreen"])],
+        [_recommendation_log(intents=[uuid_like_intent, product_fact, technical_fact_without_digits, "oil-control sunscreen"])],
     )
 
     signal = result["sample_signals"][0]
     assert [reason["intent"] for reason in signal["reason_scores"]] == ["oil-control sunscreen"]
-    assert result["stats"]["invalid_reason_intents_dropped"] == 2
+    assert result["stats"]["invalid_reason_intents_dropped"] == 3
+
+
+def test_valid_camping_and_compact_intents_do_not_match_mp_spec_marker() -> None:
+    labels, invalid_count = sanitize_interest_labels(
+        ["camping gear for mountain trips", "compact camera for camping trips"],
+        max_length=80,
+    )
+
+    assert labels == ["camping gear for mountain trips", "compact camera for camping trips"]
+    assert invalid_count == 0
 
 
 def test_hide_and_dislike_create_negative_signal() -> None:

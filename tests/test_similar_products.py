@@ -171,3 +171,40 @@ def test_similar_products_falls_back_when_semantic_neighbors_are_missing() -> No
     assert payload["items"]
     assert payload["items"][0]["item_id"] == "B"
     assert payload["items"][0]["candidate_sources"] == ["metadata_fallback"]
+
+
+def test_similar_products_does_not_restore_disliked_neighbor_from_fallback() -> None:
+    profile = {
+        "user_id_hash": "u_demo",
+        "negative_preferences": {"item_ids": ["B"], "brands": [], "categories": [], "intents": []},
+        "purchased_item_ids": [],
+    }
+    payload = get_similar_products(
+        "u_demo",
+        "sess_disliked_only",
+        "A",
+        top_k=1,
+        user_profiles_collection=FakeCollection([profile]),
+        user_item_signals_collection=FakeCollection([]),
+        items_collection=FakeCollection(
+            [
+                _item("A", category_id="cell_phones_and_accessories", price_bucket="100k_300k"),
+                _item("B", category_id="cell_phones_and_accessories", price_bucket="100k_300k"),
+            ]
+        ),
+        item_stats_collection=FakeCollection([_item_stats("A", 0.7), _item_stats("B", 0.9)]),
+        item_hype_profiles_collection=FakeCollection(
+            [
+                _item_profile("A", 0, "cell_phones_and_accessories", "100k_300k"),
+                _item_profile("B", 0, "cell_phones_and_accessories", "100k_300k"),
+            ]
+        ),
+        item_semantic_neighbors_collection=FakeCollection(
+            [{"item_id": "A", "neighbors": [{"neighbor_item_id": "B", "neighbor_score": 0.99}]}]
+        ),
+        item_item_cf_edges_collection=FakeCollection([]),
+        recommendation_logs_collection=FakeCollection([]),
+    )
+
+    assert payload["items"] == []
+    assert payload["snapshot"]["attempted"] == 0

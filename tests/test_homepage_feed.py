@@ -448,3 +448,26 @@ def test_homepage_seed_selection_ignores_recent_items_without_seed_eligible_sign
     item_ids = {item["item_id"] for item in payload["items"]}
     assert "MATCH_FROM_STRONG" in item_ids
     assert "CF_FROM_STRONG" in item_ids
+
+
+def test_homepage_does_not_restore_only_hidden_candidate_when_pool_is_exhausted() -> None:
+    profile = _profile("u_phone", embedding_index=0)
+    profile["negative_preferences"]["item_ids"] = ["BLOCKED"]
+    payload = get_homepage_feed(
+        "u_phone",
+        "sess_hidden_only",
+        top_k=1,
+        user_profiles_collection=FakeCollection([profile]),
+        user_item_signals_collection=FakeCollection([]),
+        items_collection=FakeCollection(
+            [_item("BLOCKED", category_id="cell_phones_and_accessories", brand="PhoneBrand", price_bucket="100k_300k", cold=False, quality=0.9)]
+        ),
+        item_stats_collection=FakeCollection([_item_stats("BLOCKED", cold=False, quality=0.9, interaction_count=20)]),
+        item_hype_profiles_collection=FakeCollection([_item_profile("BLOCKED", 0, "cell_phones_and_accessories", "100k_300k")]),
+        item_semantic_neighbors_collection=FakeCollection([]),
+        item_item_cf_edges_collection=FakeCollection([]),
+        recommendation_logs_collection=FakeCollection([]),
+    )
+
+    assert payload["items"] == []
+    assert payload["snapshot"]["attempted"] == 0

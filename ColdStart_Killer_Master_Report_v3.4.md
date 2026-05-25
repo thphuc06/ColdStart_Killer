@@ -9,14 +9,17 @@ This v3.4 report should now be read as a baseline snapshot, not the latest close
 Important current-state notes:
 
 - The repo now includes the shipped API, React frontend, Phase 12 evaluation flow, and Phase 13 demo reset/recovery flow.
-- Bundle A and Bundle B personalization fixes have been implemented, rebuilt on live demo data, and re-validated.
-- Fresh post-closeout evidence lives under `.runtime/evaluation/bundle_ab_closeout_20260525/`.
+- Bundle A personalization hygiene has been implemented and validated; Bundle B correctness for negative suppression and search seed eligibility has been applied, while the qualified-CF evidence gate remains open.
+- An explicitly approved controlled rebuild wrote `1157` `signal_v4_boundary_hygiene` signals, `43` `profile_v4_negative_guard` profiles, and `514` current-policy CF edges sourced from signal v4.
+- `.runtime/evaluation/` outputs are local ignored artifacts and must be regenerated from documented read-only commands rather than treated as shared canonical proof.
 - The backlog table below has been normalized so delivered items are marked as historical completions and remaining gaps stay visible as open backlog.
 
-For current closeout evidence and latest personalization status, prefer:
+For current personalization status and a reproducible read-only comparison, prefer:
 
 - `RECOMMENDATION_ENHANCEMENT_PLAN_AFTER_AUDIT.md`
-- `.runtime/evaluation/bundle_ab_closeout_20260525/`
+- `python scripts/run_personalization_evaluation.py --dry-run --write-artifacts --out .runtime/evaluation/bundle_b_cf_gate_<timestamp> --print-json-summary`
+
+Read-only gate evidence on 2026-05-25: `profile_plus_cf` reported `HitRate@10=0.166667`, `Recall@20=0.086508`, `MAP@20=0.019393` and `278` train directional CF edges; `profile_plus_qualified_cf` reported `0.119048`, `0.078571`, `0.010767` with `0` qualified edges. Gate decision is `needs_more_evidence`; the approved derived-data rebuild retained current CF policy and made no qualified-CF runtime change.
 
 > ⚠️ Note: The original spec below (v3.3) represents the 
 > initial target architecture. This section documents what 
