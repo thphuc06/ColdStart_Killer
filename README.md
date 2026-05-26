@@ -201,8 +201,7 @@ The React website is the primary demo. The notebooks remain useful as the techni
 - `scripts/summarize_evaluation.py` — re-summarize an existing evaluation run.
 - `evaluation/` — evaluation data (queries, probes, judgments).
 - `notebooks/05_evaluation_retrieval_quality.ipynb` — evaluation notebook.
-- `PLAN_EVALUATION.md` — current evaluation implementation status and verification record.
-- `task.md` — compact task tracking summary for the evaluation improvement work.
+- `walkthrough_evaluation.md` — step-by-step evaluation walkthrough and usage guide.
 - `TESTING.md` — testing guide.
 
 ## Verified Implementation Notes

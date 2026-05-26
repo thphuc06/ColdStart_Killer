@@ -1,6 +1,6 @@
 # ColdStart Killer — Full Setup & Run Guide
 
-This is the canonical setup and run guide for ColdStart Killer. Use this file for GitHub/submission. `SETUP_GUIDE.md` is treated as a legacy draft/reference and should not be staged unless it is separately reviewed.
+This is the canonical setup and run guide for ColdStart Killer. Use this file for GitHub/submission.
 
 Do not put real secrets in this document. Do not commit `.env`.
 
@@ -1219,7 +1219,7 @@ Recommended canonical guide staging:
 git add PROJECT_SETUP_AND_FULL_RUN_GUIDE.md
 ```
 
-Do not stage `SETUP_GUIDE.md` unless you intentionally keep it as a reviewed secondary document.
+Keep this guide as the single setup/run source of truth for GitHub/submission.
 
 ## 26. Final Submission Checklist
 
@@ -1241,6 +1241,6 @@ Before submission:
 14. Jobs panel does not auto-trigger jobs.
 15. No secret appears in `git diff`.
 16. No generated artifact is staged.
-17. Only the canonical guide is staged; `SETUP_GUIDE.md` remains untracked unless intentionally reviewed.
+17. Only the canonical guide is staged for setup/run instructions.
 
 If all checks pass, the repo is ready for a controlled commit/push.
