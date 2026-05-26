@@ -4,6 +4,11 @@ ColdStart Killer is a MongoDB Hackathon project for bootstrapping retrieval for 
 
 For full clone-to-demo instructions, environment setup, feature flags, troubleshooting, and submission checks, see [PROJECT_SETUP_AND_FULL_RUN_GUIDE.md](PROJECT_SETUP_AND_FULL_RUN_GUIDE.md).
 
+Quick operational docs:
+
+- [DEMO_CHECKLIST.md](DEMO_CHECKLIST.md) — short demo rehearsal checklist.
+- [RELEASE_NOTES.md](RELEASE_NOTES.md) — current validated release snapshot.
+
 ## Current Phase Scope
 
 This phase includes:
@@ -83,6 +88,7 @@ Recommended browser demo flow:
 7. Verify similar products show semantic similarity and Collaborative Filtering as separate signals.
 8. Run a search query and verify query-first results with personalized reranking.
 9. Open Debug/Admin and verify lineage, demo counts, protected collections, and reset warnings.
+10. If seller tools are enabled for the demo, paste a configured seller or admin token into the seller page before create/preview/enrichment/approve-index actions.
 
 Demo safety commands:
 
@@ -201,8 +207,97 @@ The React website is the primary demo. The notebooks remain useful as the techni
 - `scripts/summarize_evaluation.py` — re-summarize an existing evaluation run.
 - `evaluation/` — evaluation data (queries, probes, judgments).
 - `notebooks/05_evaluation_retrieval_quality.ipynb` — evaluation notebook.
+- `DEMO_CHECKLIST.md` — short browser-first demo rehearsal checklist.
+- `RELEASE_NOTES.md` — concise validated release snapshot and residual risks.
 - `walkthrough_evaluation.md` — step-by-step evaluation walkthrough and usage guide.
 - `TESTING.md` — testing guide.
+
+*** Add File: D:\HCPDB\ColdStart_Killer\DEMO_CHECKLIST.md
+# Demo Checklist
+
+Use this list immediately before a live demo. Keep the flow browser-first and avoid changing config during rehearsal.
+
+## Environment
+
+- `.env` is present locally and not modified during the demo session.
+- Python virtual environment is activated.
+- Recommended runtime is Python 3.10-3.12. Python 3.14 can work but still emits a torch/sentence-transformers warning.
+- MongoDB Atlas is reachable and points to the intended demo database.
+- If seller/enrichment will be shown, `ENABLE_SELLER_TOOLS=true`, `ENABLE_WEB_ENRICHMENT=true`, and valid `ADMIN_TOKEN` / `SELLER_TOKEN` exist in `.env`.
+
+## Startup
+
+- Start backend: `python -m uvicorn src.api.app:app --reload`
+- Start frontend: `cd frontend`, `npm install`, `npm run dev`
+- Check health: `/api/health` returns `200`.
+- Frontend loads successfully at `http://localhost:5173`.
+
+## Core Demo Flow
+
+- Select a demo user and confirm homepage cards load.
+- Open a product detail page and confirm images, product text, and score breakdown render.
+- Open similar products and confirm semantic / CF explanations appear when expected.
+- Run one search query and confirm results load with personalized reranking.
+- Optionally open onboarding preview and confirm preview works before saving.
+
+## Seller / Enrichment Flow
+
+- Open seller page and paste seller or admin token into the access-token field.
+- Create a draft successfully.
+- Run draft validation successfully.
+- Run index preview successfully.
+- Run enrichment preview or request successfully.
+- Apply one enrichment suggestion successfully.
+- Do not run approve-index unless you intentionally want additive catalog writes for the demo.
+
+## Debug / Admin
+
+- Open Debug/Admin with admin token if that page is part of the demo.
+- Confirm lineage, counts, and protected collection warnings render.
+- Keep reset/rebuild actions on dry-run unless a human explicitly approves a write.
+
+## Final Safety Check
+
+- No emergency config toggles were changed mid-demo.
+- No live reset/write commands are queued in another terminal.
+- If anything drifts, fallback is browser demo with shopper flows only; seller/admin write actions are optional.
+
+*** Add File: D:\HCPDB\ColdStart_Killer\RELEASE_NOTES.md
+# Release Notes
+
+## Current State
+
+This repository is in a validated post-hardening state for the current Phase 14 demo path.
+
+## Included Updates
+
+- Seller draft flow now requires admin or seller auth for protected actions.
+- Seller scope isolation is enforced for seller-owned draft and enrichment resources.
+- Approve-index requires a persisted preview and rolls back partial catalog writes on failure.
+- Web enrichment request/apply flow is gated by `ENABLE_WEB_ENRICHMENT` and now rolls back inconsistent second-write failures.
+- Frontend seller/enrichment flows now use bearer auth and clear stale draft/enrichment UI state correctly.
+- Search pipeline keeps category include/exclude filters together correctly.
+- Broad/exploratory recommendation path now reuses a safe lightweight catalog snapshot cache.
+- CLI job runner forwards `dry_run` correctly.
+
+## Validation Summary
+
+- Focused seller/auth/enrichment/recommendation/backend regression batches passed.
+- Focused frontend UI tests for seller draft and enrichment flows passed.
+- Runtime smoke passed for seller/enrichment flow with live provider and MongoDB.
+- Guarded smoke also passed with `AUTH_MODE=demo` using configured seller token.
+
+## Residual Risks
+
+- Python 3.14 still emits a torch/sentence-transformers stability warning. Python 3.10-3.12 remains the safer demo runtime.
+- Seller/admin write flows are protected and require valid tokens plus confirmation strings; keep fallback demo scope shopper-first if those protected flows are not needed live.
+
+## Recommended Demo Config
+
+- Keep `AUTH_MODE=demo`.
+- Keep `CACHE_BACKEND=none` unless Redis has been explicitly verified.
+- Keep seller/enrichment enabled only if those flows are part of the planned demo.
+- Do not change `.env` during the demo session unless a human explicitly approves the change.
 
 ## Verified Implementation Notes
 
