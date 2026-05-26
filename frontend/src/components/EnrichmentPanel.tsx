@@ -1,6 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { ExternalLink, Globe2, ShieldCheck, Sparkles } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import {
     applyEnrichmentRequest,
@@ -15,6 +15,7 @@ import { StatusBadge } from "./StatusBadge";
 
 
 type EnrichmentPanelProps = {
+    accessToken?: string;
     draftId?: string | null;
     onApplied?: (response: ApplyWebEnrichmentResponse) => void;
 };
@@ -31,18 +32,19 @@ function stringifyValue(value: unknown) {
 }
 
 
-export function EnrichmentPanel({ draftId, onApplied }: EnrichmentPanelProps) {
+export function EnrichmentPanel({ accessToken, draftId, onApplied }: EnrichmentPanelProps) {
     const [request, setRequest] = useState<WebEnrichmentRequest | null>(null);
     const [preview, setPreview] = useState<WebEnrichmentPreviewResponse | null>(null);
     const [selectedFields, setSelectedFields] = useState<string[]>([]);
     const [confirmText, setConfirmText] = useState("");
+    const hasAccessToken = Boolean(accessToken?.trim());
 
     const previewMutation = useMutation({
-        mutationFn: (id: string) => previewSellerDraftEnrichment(id),
+        mutationFn: (id: string) => previewSellerDraftEnrichment(id, accessToken),
         onSuccess: (response) => setPreview(response),
     });
     const requestMutation = useMutation({
-        mutationFn: (id: string) => requestSellerDraftEnrichment(id),
+        mutationFn: (id: string) => requestSellerDraftEnrichment(id, accessToken),
         onSuccess: (response) => {
             if (response.request) {
                 setRequest(response.request);
@@ -56,15 +58,32 @@ export function EnrichmentPanel({ draftId, onApplied }: EnrichmentPanelProps) {
                 requestId: request?.request_id || "",
                 fieldsToApply: selectedFields,
                 confirm: confirmText,
+                authToken: accessToken,
             }),
         onSuccess: (response) => {
             onApplied?.(response);
         },
     });
 
+    useEffect(() => {
+        setRequest(null);
+        setPreview(null);
+        setSelectedFields([]);
+        setConfirmText("");
+        previewMutation.reset();
+        requestMutation.reset();
+        applyMutation.reset();
+    }, [draftId]);
+
     const confirmation = preview?.required_confirmation || DEFAULT_CONFIRMATION;
     const suggestions = useMemo(() => Object.entries(request?.suggested_fields || {}), [request]);
-    const canApply = Boolean(request && selectedFields.length > 0 && confirmText === confirmation);
+    const canApply = Boolean(
+        request
+        && request.draft_id === draftId
+        && selectedFields.length > 0
+        && confirmText === confirmation
+        && hasAccessToken,
+    );
 
     function toggleField(field: string) {
         setSelectedFields((current) =>
@@ -104,7 +123,7 @@ export function EnrichmentPanel({ draftId, onApplied }: EnrichmentPanelProps) {
             <div className="flex flex-wrap gap-3">
                 <button
                     className="action-button action-button-secondary"
-                    disabled={previewMutation.isPending}
+                    disabled={previewMutation.isPending || !hasAccessToken}
                     type="button"
                     onClick={() => previewMutation.mutate(draftId)}
                 >
@@ -112,7 +131,7 @@ export function EnrichmentPanel({ draftId, onApplied }: EnrichmentPanelProps) {
                 </button>
                 <button
                     className="action-button action-button-secondary"
-                    disabled={requestMutation.isPending}
+                    disabled={requestMutation.isPending || !hasAccessToken}
                     type="button"
                     onClick={() => requestMutation.mutate(draftId)}
                 >
@@ -120,6 +139,12 @@ export function EnrichmentPanel({ draftId, onApplied }: EnrichmentPanelProps) {
                     Request enrichment
                 </button>
             </div>
+
+            {!hasAccessToken ? (
+                <p className="mt-3 text-xs text-[var(--amber)]">
+                    Enter a seller or admin token above before previewing, requesting, or applying web enrichment.
+                </p>
+            ) : null}
 
             {previewMutation.error instanceof Error ? <ErrorState title="Enrichment preview failed" message={previewMutation.error.message} /> : null}
             {requestMutation.error instanceof Error ? <ErrorState title="Enrichment request failed" message={requestMutation.error.message} /> : null}

@@ -5,12 +5,13 @@ import type { SellerDraftPayload } from "../lib/api";
 
 
 type SellerDraftFormProps = {
+    disabled?: boolean;
     isCreating: boolean;
     onCreate: (payload: SellerDraftPayload) => void;
 };
 
 
-export function SellerDraftForm({ isCreating, onCreate }: SellerDraftFormProps) {
+export function SellerDraftForm({ disabled = false, isCreating, onCreate }: SellerDraftFormProps) {
     const [title, setTitle] = useState("");
     const [description, setDescription] = useState("");
     const [brand, setBrand] = useState("");
@@ -89,13 +90,13 @@ export function SellerDraftForm({ isCreating, onCreate }: SellerDraftFormProps) 
             </label>
 
             <div className="mt-5 flex flex-wrap gap-3">
-                <button className="action-button action-button-primary" disabled={isCreating} type="button" onClick={submit}>
+                <button className="action-button action-button-primary" disabled={isCreating || disabled} type="button" onClick={submit}>
                     <PackagePlus className="h-4 w-4" />
                     {isCreating ? "Creating..." : "Create draft"}
                 </button>
                 <div className="flex items-center gap-2 text-xs text-[var(--ink-soft)]">
                     <Eye className="h-4 w-4" />
-                    Preview and approve are not automatic.
+                    {disabled ? "Seller or admin token required before seller draft writes." : "Preview and approve are not automatic."}
                 </div>
             </div>
         </section>

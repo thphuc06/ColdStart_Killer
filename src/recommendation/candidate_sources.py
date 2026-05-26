@@ -51,15 +51,17 @@ ITEM_PROFILE_PROJECTION = {
     "price_bucket": 1,
 }
 
-_catalog_snapshot_cache: tuple[
-    float,
-    tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]],
-] | None = None
+_catalog_snapshot_cache: dict[
+    tuple[bool, str, str, str],
+    tuple[
+        float,
+        tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]],
+    ],
+] = {}
 
 
 def clear_catalog_snapshot_cache() -> None:
-    global _catalog_snapshot_cache
-    _catalog_snapshot_cache = None
+    _catalog_snapshot_cache.clear()
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -191,6 +193,16 @@ def _collection_docs(
     return [_project_doc(dict(doc), projection) for doc in collection.find(filter_doc, projection)]
 
 
+def _cache_collection_key(collection: Any, fallback: str) -> str:
+    full_name = getattr(collection, "full_name", None)
+    if isinstance(full_name, str) and full_name.strip():
+        return full_name.strip()
+    name = getattr(collection, "name", None)
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return f"{fallback}:{id(collection)}"
+
+
 def load_user_profile(
     user_id_hash: str,
     *,
@@ -272,18 +284,23 @@ def load_catalog_snapshot(
     include_item_profiles: bool = True,
     use_cache: bool = False,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
-    global _catalog_snapshot_cache
-    if use_cache and include_item_profiles and _catalog_snapshot_cache is not None:
-        cached_at, cached_snapshot = _catalog_snapshot_cache
-        if monotonic() - cached_at <= CATALOG_SNAPSHOT_CACHE_TTL_SECONDS:
-            return cached_snapshot
-
     if items_collection is None:
         items_collection = get_items_collection()
     if item_stats_collection is None:
         item_stats_collection = get_item_stats_collection()
     if item_hype_profiles_collection is None:
         item_hype_profiles_collection = get_item_hype_profiles_collection()
+
+    cache_key = (
+        bool(include_item_profiles),
+        _cache_collection_key(items_collection, "items"),
+        _cache_collection_key(item_stats_collection, "item_stats"),
+        _cache_collection_key(item_hype_profiles_collection, "item_hype_profiles"),
+    )
+    if use_cache and cache_key in _catalog_snapshot_cache:
+        cached_at, cached_snapshot = _catalog_snapshot_cache[cache_key]
+        if monotonic() - cached_at <= CATALOG_SNAPSHOT_CACHE_TTL_SECONDS:
+            return cached_snapshot
 
     items_by_id = {
         str(doc.get("_id") or "").strip(): dict(doc)
@@ -303,8 +320,8 @@ def load_catalog_snapshot(
             if str(doc.get("item_id") or doc.get("_id") or "").strip()
         }
     snapshot = (items_by_id, item_stats_by_id, item_profiles_by_id)
-    if use_cache and include_item_profiles:
-        _catalog_snapshot_cache = (monotonic(), snapshot)
+    if use_cache:
+        _catalog_snapshot_cache[cache_key] = (monotonic(), snapshot)
     return snapshot
 
 

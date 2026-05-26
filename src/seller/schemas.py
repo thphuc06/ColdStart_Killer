@@ -5,11 +5,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
+DEFAULT_SELLER_ID = "seller_demo_001"
+
+
 SellerDraftStatus = Literal["draft", "validated", "previewed", "approved", "indexed", "failed", "rejected"]
 
 
 class SellerDraftPayload(BaseModel):
-    seller_id: str = Field(default="seller_demo_001", min_length=1)
+    seller_id: str = Field(default=DEFAULT_SELLER_ID, min_length=1)
     title: str = Field(default="", max_length=240)
     description: str = Field(default="", max_length=5000)
     brand: str = Field(default="", max_length=160)

@@ -201,6 +201,49 @@ def _collection_has_retrieval_units(collection: Any, item_id: str) -> bool:
     return bool(collection.find_one({"item_id": item_id}, {"_id": 1}))
 
 
+def _delete_one_for_rollback(collection: Any, filter_doc: dict[str, Any]) -> None:
+    if hasattr(collection, "delete_one"):
+        collection.delete_one(filter_doc)
+        return
+    if hasattr(collection, "delete_many"):
+        collection.delete_many(filter_doc)
+        return
+    raise RuntimeError("collection does not support delete_one rollback")
+
+
+def _delete_many_for_rollback(collection: Any, filter_doc: dict[str, Any]) -> None:
+    if hasattr(collection, "delete_many"):
+        collection.delete_many(filter_doc)
+        return
+    if hasattr(collection, "delete_one"):
+        while collection.find_one(filter_doc, {"_id": 1}):
+            collection.delete_one(filter_doc)
+        return
+    raise RuntimeError("collection does not support delete_many rollback")
+
+
+def _rollback_catalog_writes(
+    *,
+    item_inserted: bool,
+    retrieval_units_inserted: bool,
+    item_id: str,
+    items_collection: Any,
+    retrieval_units_collection: Any,
+) -> list[str]:
+    rollback_errors: list[str] = []
+    if retrieval_units_inserted:
+        try:
+            _delete_many_for_rollback(retrieval_units_collection, {"item_id": item_id})
+        except Exception as exc:
+            rollback_errors.append(f"retrieval_units rollback failed: {exc}")
+    if item_inserted:
+        try:
+            _delete_one_for_rollback(items_collection, {"_id": item_id})
+        except Exception as exc:
+            rollback_errors.append(f"item rollback failed: {exc}")
+    return rollback_errors
+
+
 def approve_and_index_seller_draft(
     draft_id: str,
     *,
@@ -218,13 +261,16 @@ def approve_and_index_seller_draft(
         raise PermissionError(f"approve-index requires confirm={active_settings.seller_index_confirmation}")
 
     draft = get_seller_draft(draft_id, drafts_collection=drafts_collection)
-    if draft.get("status") not in VALID_STATUSES_FOR_INDEX:
-        raise ValueError("draft must be validated or previewed before approve-index")
+    if draft.get("status") != "previewed":
+        raise ValueError("draft must be previewed before approve-index")
     errors, warnings = validate_seller_payload(draft)
     if errors:
         raise ValueError("draft has validation errors: " + "; ".join(errors))
 
     item_id = str(draft.get("proposed_item_id") or "")
+    preview = draft.get("indexing_preview") if isinstance(draft.get("indexing_preview"), dict) else None
+    if not preview or preview.get("proposed_item_id") != item_id or preview.get("preview_only") is not True:
+        raise ValueError("draft must have a persisted preview before approve-index")
     if not item_id:
         raise ValueError("draft is missing proposed_item_id")
     if _collection_has_item(items_collection, item_id):
@@ -238,9 +284,13 @@ def approve_and_index_seller_draft(
         raise ValueError("no retrieval units generated from seller draft")
 
     now = utc_now_iso()
+    item_inserted = False
+    retrieval_units_inserted = False
     try:
         items_collection.insert_one(item_doc)
+        item_inserted = True
         retrieval_units_collection.insert_many(retrieval_units, ordered=True)
+        retrieval_units_inserted = True
         drafts_collection.update_one(
             {"draft_id": draft_id},
             {
@@ -263,7 +313,17 @@ def approve_and_index_seller_draft(
             },
         )
     except Exception as exc:
-        set_draft_failure(draft_id, drafts_collection=drafts_collection, error=str(exc))
+        rollback_errors = _rollback_catalog_writes(
+            item_inserted=item_inserted,
+            retrieval_units_inserted=retrieval_units_inserted,
+            item_id=item_id,
+            items_collection=items_collection,
+            retrieval_units_collection=retrieval_units_collection,
+        )
+        error_message = str(exc)
+        if rollback_errors:
+            error_message = error_message + " | " + " | ".join(rollback_errors)
+        set_draft_failure(draft_id, drafts_collection=drafts_collection, error=error_message)
         raise
 
     return {

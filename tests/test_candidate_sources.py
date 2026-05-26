@@ -111,3 +111,40 @@ def test_catalog_snapshot_cache_reuses_and_can_clear_full_profile_load() -> None
     )
     assert len(profiles.find_calls) == 2
     clear_catalog_snapshot_cache()
+
+
+def test_catalog_snapshot_cache_reuses_and_can_clear_lightweight_load() -> None:
+    items = RecordingCollection([{"_id": "A"}])
+    stats = RecordingCollection([{"item_id": "A"}])
+    profiles = RecordingCollection([{"item_id": "A"}])
+    clear_catalog_snapshot_cache()
+
+    load_catalog_snapshot(
+        items_collection=items,
+        item_stats_collection=stats,
+        item_hype_profiles_collection=profiles,
+        include_item_profiles=False,
+        use_cache=True,
+    )
+    load_catalog_snapshot(
+        items_collection=items,
+        item_stats_collection=stats,
+        item_hype_profiles_collection=profiles,
+        include_item_profiles=False,
+        use_cache=True,
+    )
+    assert len(items.find_calls) == 1
+    assert len(stats.find_calls) == 1
+    assert len(profiles.find_calls) == 0
+
+    clear_catalog_snapshot_cache()
+    load_catalog_snapshot(
+        items_collection=items,
+        item_stats_collection=stats,
+        item_hype_profiles_collection=profiles,
+        include_item_profiles=False,
+        use_cache=True,
+    )
+    assert len(items.find_calls) == 2
+    assert len(stats.find_calls) == 2
+    clear_catalog_snapshot_cache()

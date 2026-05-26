@@ -15,11 +15,11 @@ def normalized_auth_mode(settings: Any) -> str:
 
 
 def disabled_auth_context(settings: Any) -> AuthContext:
-    return AuthContext(authenticated=True, role="disabled", auth_mode=normalized_auth_mode(settings))
+    return AuthContext(authenticated=True, role="disabled", auth_mode=normalized_auth_mode(settings), subject_id=None)
 
 
 def anonymous_auth_context(settings: Any) -> AuthContext:
-    return AuthContext(authenticated=False, role="anonymous", auth_mode=normalized_auth_mode(settings))
+    return AuthContext(authenticated=False, role="anonymous", auth_mode=normalized_auth_mode(settings), subject_id=None)
 
 
 def extract_bearer_token(authorization: str | None) -> str | None:

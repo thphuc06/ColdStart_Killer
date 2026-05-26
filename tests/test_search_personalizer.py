@@ -315,3 +315,67 @@ def test_broad_search_cf_uses_only_seed_eligible_signals() -> None:
     cards = {card["item_id"]: card for card in payload["items"]}
     assert "Collaborative Filtering" not in cards["FROM_CLICK"]["reason_badges"]
     assert "Collaborative Filtering" in cards["FROM_CART"]["reason_badges"]
+
+
+def test_broad_search_can_add_cf_items_not_in_base_query_results() -> None:
+    items = FakeCollection(
+        [
+            _item("BASE_ONLY", category_id="all_beauty", brand="BeautyBrand"),
+            _item("CF_NEW", category_id="all_beauty", brand="BeautyBrand"),
+        ]
+    )
+    item_stats = FakeCollection([_item_stats("BASE_ONLY", 0.7), _item_stats("CF_NEW", 0.72)])
+    item_profiles = FakeCollection([
+        _item_profile("BASE_ONLY", 1, "all_beauty"),
+        _item_profile("CF_NEW", 1, "all_beauty"),
+    ])
+
+    payload = personalized_search(
+        "u_skincare",
+        "sess_cf_expand",
+        "gift ideas",
+        top_k=2,
+        process_query_fn=lambda raw_query: {
+            "original_query": raw_query,
+            "english_query": raw_query,
+            "bm25_search_query_en": raw_query,
+            "hard_filters": {},
+            "query_embedding": [0.0] * 1024,
+        },
+        run_search_fn=lambda _fixture, top_k=10: [
+            {
+                "item_id": "BASE_ONLY",
+                "title": "Base Query Item",
+                "score": 0.7,
+                "matched_intent": "gift idea",
+                "matched_fact": "query match",
+                "debug": {"brand": "BeautyBrand", "category_id": "all_beauty", "price_bucket": "100k_300k"},
+            }
+        ],
+        user_profiles_collection=FakeCollection([_profile()]),
+        user_item_signals_collection=FakeCollection(
+            [
+                {
+                    "user_id_hash": "u_skincare",
+                    "item_id": "CART_SEED",
+                    "implicit_score": 3.5,
+                    "positive_score": 3.5,
+                    "seed_eligible": True,
+                }
+            ]
+        ),
+        items_collection=items,
+        item_stats_collection=item_stats,
+        item_hype_profiles_collection=item_profiles,
+        item_item_cf_edges_collection=FakeCollection(
+            [
+                {"item_id": "CART_SEED", "neighbor_item_id": "CF_NEW", "cf_score": 0.95, "support": 5},
+            ]
+        ),
+        recommendation_logs_collection=FakeCollection([]),
+    )
+
+    cards = {card["item_id"]: card for card in payload["items"]}
+    assert "BASE_ONLY" in cards
+    assert "CF_NEW" in cards
+    assert "Collaborative Filtering" in cards["CF_NEW"]["reason_badges"]

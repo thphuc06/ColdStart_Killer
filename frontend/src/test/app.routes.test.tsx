@@ -10,6 +10,7 @@ import { ExperienceProvider } from "../state/experience";
 const STORAGE_KEY = "coldstart-killer/frontend-state/v1";
 const LOGIN_SESSION_KEY = "coldstart-killer/active-login/v1";
 const ADMIN_TOKEN_STORAGE_KEY = "coldstart-killer/admin-token/v1";
+const SELLER_ACCESS_TOKEN_STORAGE_KEY = "coldstart-killer/seller-access-token/v1";
 const DEBUG_ADMIN_TOKEN = "test-admin-token";
 const longHomeExplanation =
     "Boosted because it matches your sensitive skin profile and preference for natural ingredients with gentle hydration support.";
@@ -1097,10 +1098,11 @@ describe("Phase 11 routes", () => {
     });
 
     it("stages seller draft, previews indexing, and requires confirmation before catalog write", async () => {
+        window.sessionStorage.setItem(SELLER_ACCESS_TOKEN_STORAGE_KEY, "seller-token");
         renderApp("/seller/drafts");
 
         expect(await screen.findByText("Draft, preview, then explicitly index")).toBeInTheDocument();
-        fireEvent.change(screen.getByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
+        fireEvent.change(await screen.findByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
         fireEvent.change(screen.getByLabelText("Brand"), { target: { value: "DemoSun" } });
         fireEvent.change(screen.getByLabelText("Category ID"), { target: { value: "all_beauty" } });
         fireEvent.change(screen.getByLabelText("Price VND"), { target: { value: "299000" } });
@@ -1128,10 +1130,11 @@ describe("Phase 11 routes", () => {
     });
 
     it("previews and applies web enrichment only after explicit confirmation", async () => {
+        window.sessionStorage.setItem(SELLER_ACCESS_TOKEN_STORAGE_KEY, "seller-token");
         renderApp("/seller/drafts");
 
         expect(await screen.findByText("Draft, preview, then explicitly index")).toBeInTheDocument();
-        fireEvent.change(screen.getByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
+        fireEvent.change(await screen.findByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
         fireEvent.change(screen.getByLabelText("Brand"), { target: { value: "DemoSun" } });
         fireEvent.change(screen.getByLabelText("Category ID"), { target: { value: "all_beauty" } });
         fireEvent.change(screen.getByLabelText("Description"), {
@@ -1183,10 +1186,11 @@ describe("Phase 11 routes", () => {
             return currentImplementation!(input, init);
         });
 
+        window.sessionStorage.setItem(SELLER_ACCESS_TOKEN_STORAGE_KEY, "seller-token");
         renderApp("/seller/drafts");
 
         expect(await screen.findByText("Draft, preview, then explicitly index")).toBeInTheDocument();
-        fireEvent.change(screen.getByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
+        fireEvent.change(await screen.findByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
         fireEvent.change(screen.getByLabelText("Category ID"), { target: { value: "all_beauty" } });
         fireEvent.change(screen.getByLabelText("Description"), {
             target: { value: "Lightweight daily sunscreen for oily skin with comfortable finish." },

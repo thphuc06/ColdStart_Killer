@@ -19,7 +19,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run or preview registered ColdStart Killer jobs.")
     parser.add_argument("--list", action="store_true", help="List registered jobs and exit.")
     parser.add_argument("--job", help="Job type to run.")
-    parser.add_argument("--dry-run", action="store_true", default=True, help="Run in dry-run mode. This is the default.")
+    parser.set_defaults(dry_run=True)
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true", help="Run in dry-run mode. This is the default.")
+    parser.add_argument(
+        "--no-dry-run",
+        dest="dry_run",
+        action="store_false",
+        help="Disable dry-run mode. Write-capable jobs still require --write and --confirm.",
+    )
     parser.add_argument("--write", action="store_true", help="Request a write-capable job. Requires confirmation.")
     parser.add_argument("--confirm", default=None, help="Confirmation string for write-capable jobs.")
     parser.add_argument("--track", action="store_true", help="Persist compact job_runs status to MongoDB.")
@@ -61,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
         run = run_registered_job(
             args.job,
             params=_parse_params(args.param),
-            dry_run=not args.write,
+            dry_run=bool(args.dry_run),
             write=args.write,
             confirm=args.confirm,
             collection=collection,

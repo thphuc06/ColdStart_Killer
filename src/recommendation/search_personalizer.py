@@ -18,6 +18,7 @@ from src.recommendation.candidate_sources import (
     build_cf_candidates,
     enrich_with_profile_context,
     exact_suppressed_item_ids,
+    load_catalog_snapshot,
     load_item_snapshot,
     load_user_profile,
     load_user_signals,
@@ -144,20 +145,35 @@ def personalized_search(
             and str(signal.get("item_id") or "")
             and str(signal.get("item_id") or "") not in suppressed_item_ids
         ]
+        cf_items_by_id, cf_item_stats_by_id, _ = load_catalog_snapshot(
+            items_collection=items_collection,
+            item_stats_collection=item_stats_collection,
+            item_hype_profiles_collection=item_hype_profiles_collection,
+            include_item_profiles=False,
+            use_cache=True,
+        )
         cf_rows = build_cf_candidates(
             source_item_ids,
-            items_by_id=items_by_id,
-            item_stats_by_id=item_stats_by_id,
+            items_by_id=cf_items_by_id,
+            item_stats_by_id=cf_item_stats_by_id,
             item_item_cf_edges_collection=item_item_cf_edges_collection,
             limit_per_source=max(top_k, 5),
             exclude_item_ids=suppressed_item_ids,
         )
-        cf_rows = [row for row in cf_rows if str(row.get("item_id") or "") in item_ids]
         merged = [
             row
             for row in merge_candidate_rows(merged, cf_rows)
             if str(row.get("item_id") or "") not in suppressed_item_ids
         ]
+
+    merged_item_ids = {str(row.get("item_id") or "") for row in merged if str(row.get("item_id") or "")}
+    if merged_item_ids:
+        items_by_id, item_stats_by_id, item_profiles_by_id = load_item_snapshot(
+            merged_item_ids,
+            items_collection=items_collection,
+            item_stats_collection=item_stats_collection,
+            item_hype_profiles_collection=item_hype_profiles_collection,
+        )
 
     merged = enrich_with_profile_context(
         merged,

@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from src.retrieval_output import REQUIRED_OUTPUT_FIELDS
-from src.search_pipeline import atlas_search_compound, bm25_subpipeline, build_union_with_pipeline, run_search
+from src.search_pipeline import atlas_search_compound, bm25_subpipeline, build_union_with_pipeline, run_search, vector_search_filter
 
 
 MOCK_FIXTURE = {
@@ -69,6 +69,24 @@ def test_bm25_subpipeline_filters_retrieval_units_after_search() -> None:
     assert pipeline[0]["$search"]["index"] == "text_index"
     assert pipeline[1] == {"$match": {"unit_type": "proposition", "language": "en", "in_stock": True}}
     assert pipeline[2] == {"$limit": 5}
+
+
+def test_vector_search_filter_keeps_category_include_and_exclude() -> None:
+    filters = vector_search_filter(
+        "hype_question",
+        {
+            "category_id": "all_beauty",
+            "exclude_categories": ["cell_phones_and_accessories"],
+            "in_stock": True,
+        },
+    )
+
+    assert filters["unit_type"] == "hype_question"
+    assert filters["language"] == "en"
+    assert filters["in_stock"] is True
+    assert "$and" in filters
+    assert {"category_id": "all_beauty"} in filters["$and"]
+    assert {"category_id": {"$nin": ["cell_phones_and_accessories"]}} in filters["$and"]
 
 
 def test_run_search_with_mock_collection_returns_required_output_fields() -> None:

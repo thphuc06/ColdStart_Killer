@@ -12,6 +12,55 @@ from src.utils import utc_now_iso
 
 
 COMPACT_RESULT_LIMIT = 10
+_MISSING = object()
+
+
+def _path_state(doc: dict[str, Any], path: str) -> tuple[bool, Any]:
+    current: Any = doc
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current = current[part]
+    return True, current
+
+
+def _safe_delete_one(collection: Any, filter_doc: dict[str, Any]) -> None:
+    if hasattr(collection, "delete_one"):
+        collection.delete_one(filter_doc)
+        return
+    if hasattr(collection, "delete_many"):
+        collection.delete_many(filter_doc)
+        return
+    raise RuntimeError("collection does not support delete rollback")
+
+
+def _matched_count(result: Any) -> int:
+    try:
+        return int(getattr(result, "matched_count", 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _restore_draft_state(
+    drafts_collection: Any,
+    draft_id: str,
+    *,
+    original_paths: dict[str, Any],
+) -> None:
+    rollback_set: dict[str, Any] = {}
+    rollback_unset: dict[str, str] = {}
+    for path, value in original_paths.items():
+        if value is _MISSING:
+            rollback_unset[path] = ""
+        else:
+            rollback_set[path] = value
+    update_doc: dict[str, Any] = {}
+    if rollback_set:
+        update_doc["$set"] = rollback_set
+    if rollback_unset:
+        update_doc["$unset"] = rollback_unset
+    if update_doc:
+        drafts_collection.update_one({"draft_id": draft_id}, update_doc)
 
 
 def web_enrichment_disabled_response(settings: Settings | None = None) -> dict[str, Any]:
@@ -224,19 +273,28 @@ def request_web_enrichment(
     }
 
     if not dry_run:
-        requests_collection.insert_one(dict(request_doc))
-        drafts_collection.update_one(
-            {"draft_id": draft_id},
-            {
-                "$set": {
-                    "enrichment.latest_request_id": request_id,
-                    "enrichment.status": "available" if status == "completed" and suggestions else status,
-                    "enrichment.provider": request_doc["provider"],
-                    "enrichment.updated_at": now,
-                    "updated_at": now,
-                }
-            },
-        )
+        inserted_request = False
+        try:
+            requests_collection.insert_one(dict(request_doc))
+            inserted_request = True
+            draft_update_result = drafts_collection.update_one(
+                {"draft_id": draft_id},
+                {
+                    "$set": {
+                        "enrichment.latest_request_id": request_id,
+                        "enrichment.status": "available" if status == "completed" and suggestions else status,
+                        "enrichment.provider": request_doc["provider"],
+                        "enrichment.updated_at": now,
+                        "updated_at": now,
+                    }
+                },
+            )
+            if _matched_count(draft_update_result) <= 0:
+                raise RuntimeError("seller draft update failed during enrichment request")
+        except Exception:
+            if inserted_request:
+                _safe_delete_one(requests_collection, {"request_id": request_id})
+            raise
 
     return {
         "ok": status != "failed",
@@ -303,6 +361,8 @@ def apply_enrichment_to_draft(
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     active_settings = settings or get_settings()
+    if not active_settings.enable_web_enrichment:
+        return web_enrichment_disabled_response(active_settings)
     if confirm != active_settings.web_enrichment_apply_confirmation:
         raise PermissionError(f"apply enrichment requires confirm={active_settings.web_enrichment_apply_confirmation}")
 
@@ -317,6 +377,19 @@ def apply_enrichment_to_draft(
     draft = get_seller_draft(str(request_doc["draft_id"]), drafts_collection=drafts_collection)
     source_urls = sorted({url for field in selected for url in suggestions[field].get("source_urls", [])})
     now = utc_now_iso()
+    original_paths: dict[str, Any] = {}
+    for path in [
+        "enrichment.status",
+        "enrichment.latest_request_id",
+        "enrichment.applied_request_ids",
+        "enrichment.applied_fields",
+        "enrichment.source_urls",
+        "enrichment.updated_at",
+        "enrichment.original_fields",
+        "updated_at",
+    ]:
+        present, value = _path_state(draft, path)
+        original_paths[path] = value if present else _MISSING
     update_set: dict[str, Any] = {
         "enrichment.status": "applied",
         "enrichment.latest_request_id": request_id,
@@ -332,20 +405,34 @@ def apply_enrichment_to_draft(
     for field in selected:
         update_path = _update_path_for_field(field)
         original_fields[field] = _field_value_from_draft(draft, field)
+        present, current_value = _path_state(draft, update_path)
+        original_paths[update_path] = current_value if present else _MISSING
         update_set[update_path] = suggestions[field]["value"]
         update_set[f"enrichment.original_fields.{field.replace('.', '__')}"] = original_fields[field]
 
-    drafts_collection.update_one({"draft_id": request_doc["draft_id"]}, {"$set": update_set})
-    requests_collection.update_one(
-        {"request_id": request_id},
-        {
-            "$set": {
-                "status": "applied",
-                "applied_fields": selected,
-                "updated_at": now,
-            }
-        },
-    )
+    draft_update_result = drafts_collection.update_one({"draft_id": request_doc["draft_id"]}, {"$set": update_set})
+    if _matched_count(draft_update_result) <= 0:
+        raise RuntimeError("seller draft update failed during enrichment apply")
+    try:
+        request_update_result = requests_collection.update_one(
+            {"request_id": request_id},
+            {
+                "$set": {
+                    "status": "applied",
+                    "applied_fields": selected,
+                    "updated_at": now,
+                }
+            },
+        )
+        if _matched_count(request_update_result) <= 0:
+            raise RuntimeError("enrichment request update failed during apply")
+    except Exception:
+        _restore_draft_state(
+            drafts_collection,
+            str(request_doc["draft_id"]),
+            original_paths=original_paths,
+        )
+        raise
     draft.update({field: suggestions[field]["value"] for field in selected if "." not in field})
     draft["enrichment"] = {
         **dict(draft.get("enrichment") or {}),

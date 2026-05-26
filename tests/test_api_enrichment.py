@@ -115,6 +115,8 @@ def _payload():
 
 def _install(monkeypatch, *, seller_enabled=True, enrichment_enabled=True, key="test-key"):
     monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("ENABLE_SELLER_TOOLS", "true" if seller_enabled else "false")
+    monkeypatch.setenv("ENABLE_WEB_ENRICHMENT", "true" if enrichment_enabled else "false")
     drafts = FakeCollection()
     requests = FakeCollection()
     settings = _settings(seller_enabled=seller_enabled, enrichment_enabled=enrichment_enabled, key=key)
@@ -201,3 +203,92 @@ def test_apply_with_confirm_updates_only_draft_and_request(monkeypatch) -> None:
     assert body["applied_fields"] == ["description"]
     assert drafts.find_one({"draft_id": draft["draft_id"]})["description"] == request["suggested_fields"]["description"]["value"]
     assert requests.find_one({"request_id": request["request_id"]})["status"] == "applied"
+
+
+def test_request_requires_token_when_seller_tools_enabled(monkeypatch) -> None:
+    _drafts, requests, draft = _install(monkeypatch)
+    import src.enrichment.service as service
+
+    monkeypatch.setenv("AUTH_MODE", "demo")
+    monkeypatch.setenv("SELLER_TOKEN", "seller-token")
+    monkeypatch.setattr(service, "build_provider", lambda _settings: FakeProvider())
+    client = TestClient(create_app())
+
+    unauthorized = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request")
+    authorized = client.post(
+        f"/api/enrichment/seller-drafts/{draft['draft_id']}/request",
+        headers={"Authorization": "Bearer seller-token"},
+    )
+
+    assert unauthorized.status_code == 403
+    assert authorized.status_code == 200
+    assert len(requests.insert_one_calls) == 1
+
+
+def test_apply_returns_disabled_when_web_enrichment_feature_is_off(monkeypatch) -> None:
+    drafts, requests, draft = _install(monkeypatch, enrichment_enabled=False)
+    requests.insert_one(
+        {
+            "request_id": "enrich_existing",
+            "draft_id": draft["draft_id"],
+            "seller_id": draft["seller_id"],
+            "provider": "fake_provider",
+            "query": "demo query",
+            "status": "completed",
+            "results": [{"title": "Result", "url": "https://example.test/enrichment", "snippet": "snippet", "score": 0.7, "source": "fake_provider"}],
+            "suggested_fields": {
+                "description": {
+                    "value": "Updated description",
+                    "confidence": 0.7,
+                    "source_urls": ["https://example.test/enrichment"],
+                    "reason": "demo",
+                }
+            },
+            "applied_fields": [],
+            "created_at": "2026-05-27T00:00:00+00:00",
+            "updated_at": "2026-05-27T00:00:00+00:00",
+            "error": None,
+        }
+    )
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/api/enrichment/requests/enrich_existing/apply?confirm=APPLY_WEB_ENRICHMENT",
+        json={"fields_to_apply": ["description"]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enabled"] is False
+    assert body["status"] == "disabled"
+    assert drafts.find_one({"draft_id": draft["draft_id"]})["description"] == draft["description"]
+
+
+def test_seller_token_cannot_access_foreign_enrichment_request(monkeypatch) -> None:
+    _drafts, requests, _draft = _install(monkeypatch)
+    monkeypatch.setenv("AUTH_MODE", "demo")
+    monkeypatch.setenv("SELLER_TOKEN", "seller-token")
+    requests.insert_one(
+        {
+            "request_id": "enrich_foreign",
+            "draft_id": "draft_foreign",
+            "seller_id": "seller_other_999",
+            "provider": "fake_provider",
+            "query": "demo query",
+            "status": "completed",
+            "results": [],
+            "suggested_fields": {},
+            "applied_fields": [],
+            "created_at": "2026-05-27T00:00:00+00:00",
+            "updated_at": "2026-05-27T00:00:00+00:00",
+            "error": None,
+        }
+    )
+    client = TestClient(create_app())
+
+    response = client.get(
+        "/api/enrichment/requests/enrich_foreign",
+        headers={"Authorization": "Bearer seller-token"},
+    )
+
+    assert response.status_code == 403

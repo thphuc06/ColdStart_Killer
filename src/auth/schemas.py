@@ -12,4 +12,5 @@ class AuthContext:
     authenticated: bool
     role: AuthRole
     auth_mode: str
+    subject_id: str | None = None
 

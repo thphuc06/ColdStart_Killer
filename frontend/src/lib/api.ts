@@ -650,6 +650,12 @@ function adminHeaders(adminToken?: string): Record<string, string> {
 }
 
 
+function accessHeaders(authToken?: string): Record<string, string> {
+    const token = authToken?.trim();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+
 function toQueryString(values: Record<string, QueryValue>) {
     const params = new URLSearchParams();
     for (const [key, value] of Object.entries(values)) {
@@ -850,80 +856,89 @@ export function runJob(payload: RunJobPayload, adminToken?: string) {
 }
 
 
-export function listSellerDrafts(params: { sellerId?: string; limit?: number } = {}) {
+export function listSellerDrafts(params: { sellerId?: string; limit?: number; authToken?: string } = {}) {
     return fetchJson<SellerDraftsResponse>(
         `/api/seller/drafts${toQueryString({
             seller_id: params.sellerId,
             limit: params.limit ?? 20,
         })}`,
+        { headers: accessHeaders(params.authToken) },
     );
 }
 
 
-export function createSellerDraft(payload: SellerDraftPayload) {
+export function createSellerDraft(payload: SellerDraftPayload, authToken?: string) {
     return fetchJson<SellerDraftResponse>("/api/seller/drafts", {
         method: "POST",
+        headers: accessHeaders(authToken),
         body: JSON.stringify(payload),
     });
 }
 
 
-export function getSellerDraft(draftId: string) {
-    return fetchJson<SellerDraftResponse>(`/api/seller/drafts/${encodeURIComponent(draftId)}`);
+export function getSellerDraft(draftId: string, authToken?: string) {
+    return fetchJson<SellerDraftResponse>(`/api/seller/drafts/${encodeURIComponent(draftId)}`, {
+        headers: accessHeaders(authToken),
+    });
 }
 
 
-export function validateSellerDraft(draftId: string) {
+export function validateSellerDraft(draftId: string, authToken?: string) {
     return fetchJson<SellerDraftResponse>(`/api/seller/drafts/${encodeURIComponent(draftId)}/validate`, {
         method: "POST",
+        headers: accessHeaders(authToken),
     });
 }
 
 
-export function previewSellerDraftIndexing(draftId: string) {
+export function previewSellerDraftIndexing(draftId: string, authToken?: string) {
     return fetchJson<SellerPreviewResponse>(`/api/seller/drafts/${encodeURIComponent(draftId)}/index-preview`, {
         method: "POST",
+        headers: accessHeaders(authToken),
     });
 }
 
 
-export function approveSellerDraftIndexing(params: { draftId: string; write: boolean; confirm: string; adminToken?: string }) {
+export function approveSellerDraftIndexing(params: { draftId: string; write: boolean; confirm: string; authToken?: string }) {
     return fetchJson<SellerApproveIndexResponse>(
         `/api/seller/drafts/${encodeURIComponent(params.draftId)}/approve-index${toQueryString({
             write: params.write,
             confirm: params.confirm,
         })}`,
-        { method: "POST", headers: adminHeaders(params.adminToken) },
+        { method: "POST", headers: accessHeaders(params.authToken) },
     );
 }
 
 
-export function previewSellerDraftEnrichment(draftId: string) {
+export function previewSellerDraftEnrichment(draftId: string, authToken?: string) {
     return fetchJson<WebEnrichmentPreviewResponse>(`/api/enrichment/seller-drafts/${encodeURIComponent(draftId)}/preview`, {
         method: "POST",
+        headers: accessHeaders(authToken),
     });
 }
 
 
-export function requestSellerDraftEnrichment(draftId: string, adminToken?: string) {
+export function requestSellerDraftEnrichment(draftId: string, authToken?: string) {
     return fetchJson<WebEnrichmentRequestResponse>(`/api/enrichment/seller-drafts/${encodeURIComponent(draftId)}/request`, {
         method: "POST",
-        headers: adminHeaders(adminToken),
+        headers: accessHeaders(authToken),
     });
 }
 
 
-export function getEnrichmentRequest(requestId: string) {
-    return fetchJson<WebEnrichmentDetailResponse>(`/api/enrichment/requests/${encodeURIComponent(requestId)}`);
+export function getEnrichmentRequest(requestId: string, authToken?: string) {
+    return fetchJson<WebEnrichmentDetailResponse>(`/api/enrichment/requests/${encodeURIComponent(requestId)}`, {
+        headers: accessHeaders(authToken),
+    });
 }
 
 
-export function applyEnrichmentRequest(params: { requestId: string; fieldsToApply: string[]; confirm: string; adminToken?: string }) {
+export function applyEnrichmentRequest(params: { requestId: string; fieldsToApply: string[]; confirm: string; authToken?: string }) {
     return fetchJson<ApplyWebEnrichmentResponse>(
         `/api/enrichment/requests/${encodeURIComponent(params.requestId)}/apply${toQueryString({ confirm: params.confirm })}`,
         {
             method: "POST",
-            headers: adminHeaders(params.adminToken),
+            headers: accessHeaders(params.authToken),
             body: JSON.stringify({ fields_to_apply: params.fieldsToApply }),
         },
     );

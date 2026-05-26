@@ -119,9 +119,16 @@ def vector_search_filter(unit_type: str, hard_filters: dict[str, Any] | None) ->
             output[field] = bool(filters[field])
     if filters.get("price_bucket"):
         output["price_bucket"] = {"$in": _as_list_filter(filters["price_bucket"], "price_bucket")}
-    if filters.get("category_id"):
+    has_category_id = bool(filters.get("category_id"))
+    has_exclude_categories = bool(filters.get("exclude_categories"))
+    if has_category_id and has_exclude_categories:
+        output["$and"] = [
+            {"category_id": filters["category_id"]},
+            {"category_id": {"$nin": _as_list_filter(filters["exclude_categories"], "exclude_categories")}},
+        ]
+    elif has_category_id:
         output["category_id"] = filters["category_id"]
-    if filters.get("exclude_categories"):
+    elif has_exclude_categories:
         output["category_id"] = {"$nin": _as_list_filter(filters["exclude_categories"], "exclude_categories")}
     return output
 

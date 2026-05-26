@@ -7,6 +7,7 @@ from fastapi import Header, HTTPException
 from src.auth.schemas import AuthContext
 from src.auth.service import disabled_auth_context, extract_bearer_token, normalized_auth_mode, token_matches_any
 from src.config import get_settings
+from src.seller.schemas import DEFAULT_SELLER_ID
 
 
 ADMIN_TOKEN_HEADER = "X-Admin-Token"
@@ -55,7 +56,7 @@ def require_admin(
     if not expected:
         raise _token_not_configured("admin")
     if token_matches_any(extract_bearer_token(authorization), [expected]) or token_matches_any(x_admin_token, [expected]):
-        return AuthContext(authenticated=True, role="admin", auth_mode=mode)
+        return AuthContext(authenticated=True, role="admin", auth_mode=mode, subject_id=None)
     raise _token_required("admin")
 
 
@@ -89,9 +90,9 @@ def require_seller_or_admin(
     seller_token = str(getattr(settings, "seller_token", "") or "").strip()
 
     if admin_token and any(token_matches_any(token, [admin_token]) for token in supplied_tokens):
-        return AuthContext(authenticated=True, role="admin", auth_mode=mode)
+        return AuthContext(authenticated=True, role="admin", auth_mode=mode, subject_id=None)
     if seller_token and any(token_matches_any(token, [seller_token]) for token in supplied_tokens):
-        return AuthContext(authenticated=True, role="seller", auth_mode=mode)
+        return AuthContext(authenticated=True, role="seller", auth_mode=mode, subject_id=DEFAULT_SELLER_ID)
     if not admin_token and not seller_token:
         raise _token_not_configured("admin")
     raise _token_required("seller_or_admin")
@@ -115,7 +116,7 @@ def optional_auth_context(
     admin_token = str(getattr(settings, "admin_token", "") or "").strip()
     seller_token = str(getattr(settings, "seller_token", "") or "").strip()
     if admin_token and any(token_matches_any(token, [admin_token]) for token in supplied_tokens):
-        return AuthContext(authenticated=True, role="admin", auth_mode=mode)
+        return AuthContext(authenticated=True, role="admin", auth_mode=mode, subject_id=None)
     if seller_token and any(token_matches_any(token, [seller_token]) for token in supplied_tokens):
-        return AuthContext(authenticated=True, role="seller", auth_mode=mode)
-    return AuthContext(authenticated=False, role="anonymous", auth_mode=mode)
+        return AuthContext(authenticated=True, role="seller", auth_mode=mode, subject_id=DEFAULT_SELLER_ID)
+    return AuthContext(authenticated=False, role="anonymous", auth_mode=mode, subject_id=None)
