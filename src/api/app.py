@@ -6,12 +6,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.config import get_settings
 
 from .routes_debug import router as debug_router
+from .routes_enrichment import router as enrichment_router
 from .routes_events import router as events_router
 from .routes_evaluation import router as evaluation_router
 from .routes_feed import router as feed_router
 from .routes_items import router as items_router
+from .routes_jobs import router as jobs_router
 from .routes_onboarding import router as onboarding_router
 from .routes_search import router as search_router
+from .routes_seller import router as seller_router
 from .routes_users import router as users_router
 
 
@@ -48,6 +51,9 @@ def create_app() -> FastAPI:
     app.include_router(events_router)
     app.include_router(onboarding_router)
     app.include_router(evaluation_router)
+    app.include_router(seller_router)
+    app.include_router(enrichment_router)
+    app.include_router(jobs_router)
     app.include_router(debug_router)
     return app
 

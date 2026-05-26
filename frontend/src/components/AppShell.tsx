@@ -1,4 +1,4 @@
-import { BarChart3, Home, Search, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
+import { BarChart3, Home, PackagePlus, Search, ShieldCheck, SlidersHorizontal, Sparkles } from "lucide-react";
 import { NavLink, Outlet } from "react-router-dom";
 
 import { StatusBadge } from "./StatusBadge";
@@ -43,6 +43,10 @@ export function AppShell() {
                             <SlidersHorizontal className="h-4 w-4" />
                             Preferences
                         </NavLink>
+                        <NavLink className={navLinkClassName} to="/seller/drafts">
+                            <PackagePlus className="h-4 w-4" />
+                            Seller
+                        </NavLink>
                         <NavLink className={navLinkClassName} to="/debug">
                             <BarChart3 className="h-4 w-4" />
                             Debug
@@ -64,6 +68,10 @@ export function AppShell() {
                     <NavLink className={navLinkClassName} to="/onboarding">
                         <SlidersHorizontal className="h-4 w-4" />
                         Preferences
+                    </NavLink>
+                    <NavLink className={navLinkClassName} to="/seller/drafts">
+                        <PackagePlus className="h-4 w-4" />
+                        Seller
                     </NavLink>
                     <NavLink className={navLinkClassName} to="/debug">
                         <BarChart3 className="h-4 w-4" />

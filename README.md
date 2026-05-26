@@ -2,6 +2,8 @@
 
 ColdStart Killer is a MongoDB Hackathon project for bootstrapping retrieval for brand-new ecommerce products. The system builds a 3,000-item MVP dataset from Amazon Reviews 2023 metadata, generates HyPE queries and propositions via Qwen3:8b (Ollama), embeds with BAAI/bge-m3, and runs hybrid retrieval (vector + BM25) through MongoDB Atlas. The evaluation framework measures retrieval quality across 5 search variants and generates both technical and hackathon-facing reports.
 
+For full clone-to-demo instructions, environment setup, feature flags, troubleshooting, and submission checks, see [PROJECT_SETUP_AND_FULL_RUN_GUIDE.md](PROJECT_SETUP_AND_FULL_RUN_GUIDE.md).
+
 ## Current Phase Scope
 
 This phase includes:
@@ -18,13 +20,18 @@ This phase includes:
 - A thin FastAPI layer for homepage feed, search, item detail, similar-items, users, events, and debug/demo operations.
 - A React + Vite frontend demo under `frontend/` for homepage, search, detail, similar-products, and debug/admin flows.
 - Optional cold-shopper onboarding for category, price, intent, and real catalog seed-item preferences. Preview is read-only; completion writes only `users.onboarding` and onboarding `clickstream_events`.
+- Optional seller draft staging is disabled by default. Drafts write only to `seller_product_drafts`; catalog indexing requires `write=true` and `confirm=INDEX_SELLER_DRAFT`.
+- Optional web enrichment for seller drafts is disabled by default. It stores sourced suggestions in `web_enrichment_requests` and applies selected fields only back to the draft with `confirm=APPLY_WEB_ENRICHMENT`; it never writes `items` / `retrieval_units`.
+- Lightweight job registry/status tracking is available for Debug/Admin. It stores compact `job_runs` records only when explicitly tracked, keeps the trigger API disabled by default, and does not replace the existing scripts.
+- Optional backend cache abstraction supports `none`, `memory`, and lazy `redis` backends. `CACHE_BACKEND=none` by default, Redis is not required, and the cache is currently limited to compact read-only evaluation/job status endpoints.
+- Demo/production auth guards protect Debug/Admin and write-capable Phase 14 actions. `AUTH_MODE=demo` is the default; public search/feed/item routes stay open.
 - **Retrieval evaluation** with 5 variants, 50 queries, 20 diagnostic probes, AI-assisted conservative relevance judgments (2,119 query-item pairs labeled using LLM with conservative scoring — human audit recommended before claiming as full ground truth), and IR metrics (NDCG, Recall, MRR, Precision, HitRate, cold-start exposure quality).
 - **Hackathon impact reporting** with variant deltas, qualitative examples, business-impact stories, Vietnamese slice analysis, and cold-start caveats.
 
 This phase still does not include:
 
 - A production-hardened seller-facing UI.
-- Production auth/session management beyond the current demo contract.
+- Full OAuth/SSO account management and production identity lifecycle.
 
 ## Phase 14 Demo Quickstart
 
@@ -42,11 +49,16 @@ Check API health:
 python - <<'PY'
 from fastapi.testclient import TestClient
 from src.api.app import create_app
+import os
 
 client = TestClient(create_app())
-for path in ["/api/health", "/api/users/demo", "/api/demo/status"]:
+for path in ["/api/health", "/api/users/demo"]:
     r = client.get(path)
     print(path, r.status_code)
+admin_token = os.getenv("ADMIN_TOKEN", "")
+if admin_token:
+    r = client.get("/api/demo/status", headers={"X-Admin-Token": admin_token})
+    print("/api/demo/status", r.status_code)
 PY
 ```
 
@@ -115,6 +127,11 @@ Recommendation honesty:
 - True Collaborative Filtering is `item_item_cf_edges` built from multi-user `user_item_signals`.
 - Debug/Admin may label CF evidence as seeded/precomputed when it comes from synthetic demo behavior.
 - Onboarding is not direct profile or CF seeding. It captures explicit preferences and weak seed-item events; use the existing behavior/signal/profile pipeline to derive profiles afterward.
+- Seller add-product flow is staged. Preview does not write `items` / `retrieval_units`; approve-index is additive only and refuses existing item collisions.
+- Job orchestration is intentionally lightweight. `/api/jobs/*` is Admin-protected, job triggering is disabled unless `ENABLE_JOB_TRIGGER_API=true`, and CLI dry-runs default to `--no-track` unless a human explicitly requests compact `job_runs` tracking.
+- The backend cache layer is separate from Query Embedding Cache. It does not cache write endpoints, raw event histories, secrets, admin tokens, or personalized search/feed responses in the current implementation. Rollback is `CACHE_BACKEND=none`.
+- Auth/privacy guardrails keep public demo reads open while requiring admin/seller tokens for Debug/Admin controls, seller approve-index, enrichment request/apply, and job triggers. Live Debug/Admin write controls also require exact confirmation strings such as `SEED_DEMO_BEHAVIOR`, `PROCESS_EVENTS_WRITE`, `APPLY_PENDING_BEHAVIOR_WRITE`, `REBUILD_PROFILES_WRITE`, and `REBUILD_CF_WRITE`. Rollback for local-only emergency is `AUTH_MODE=disabled`.
+- Judge clarification: CF does not need to be built with MongoDB Aggregation Pipeline. Aggregation Pipeline remains used in search/retrieval/ranking/filtering/evaluation/debug paths; a MongoDB-native CF proof is optional future research, not a current blocker.
 
 ## Current Evaluation Status
 

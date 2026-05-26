@@ -21,7 +21,10 @@ def test_index_plan_includes_all_phase1_collections() -> None:
     assert "recommendation_logs" in plan["collections"]
     assert "clickstream_events" in plan["collections"]
     assert "item_item_cf_edges" in plan["collections"]
+    assert "seller_product_drafts" in plan["collections"]
+    assert "web_enrichment_requests" in plan["collections"]
     assert "evaluation_runs" in plan["collections"]
+    assert "job_runs" in plan["collections"]
 
 
 def test_clickstream_impression_idempotency_indexes_are_partial_and_unique() -> None:
@@ -113,8 +116,11 @@ def test_new_mongodb_getters_reuse_existing_get_database(monkeypatch) -> None:
     assert mongodb.get_item_item_cf_edges_collection() == "collection:item_item_cf_edges"
     assert mongodb.get_item_stats_collection() == "collection:item_stats"
     assert mongodb.get_query_embedding_cache_collection() == "collection:query_embedding_cache"
+    assert mongodb.get_seller_product_drafts_collection() == "collection:seller_product_drafts"
+    assert mongodb.get_web_enrichment_requests_collection() == "collection:web_enrichment_requests"
     assert mongodb.get_synthetic_personas_collection() == "collection:synthetic_personas"
     assert mongodb.get_evaluation_runs_collection() == "collection:evaluation_runs"
+    assert mongodb.get_job_runs_collection() == "collection:job_runs"
     assert calls == [
         "users",
         "sessions",
@@ -127,6 +133,9 @@ def test_new_mongodb_getters_reuse_existing_get_database(monkeypatch) -> None:
         "item_item_cf_edges",
         "item_stats",
         "query_embedding_cache",
+        "seller_product_drafts",
+        "web_enrichment_requests",
         "synthetic_personas",
         "evaluation_runs",
+        "job_runs",
     ]

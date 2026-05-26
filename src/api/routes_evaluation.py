@@ -4,6 +4,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 
+from src.cache.keys import make_cache_key
+from src.cache.service import get_cache_backend, get_or_compute
+from src.config import get_settings
 from src.mongodb import get_evaluation_runs_collection
 
 
@@ -73,46 +76,68 @@ def _newest_cursor(collection: Any, limit: int):
     return cursor
 
 
+def _evaluation_cache_ttl() -> int:
+    return max(1, min(get_settings().cache_default_ttl_seconds, 300))
+
+
 @router.get("/runs/latest")
 def get_latest_evaluation_run() -> dict[str, Any]:
-    collection = get_evaluation_runs_collection()
-    doc = None
-    cursor = _newest_cursor(collection, 1)
-    for candidate in cursor:
-        doc = candidate
-        break
-    latest = sanitize_evaluation_run_document(doc)
-    if latest is None:
-        return {"ok": True, "empty": True, "latest": None, "message": EVALUATION_EMPTY_MESSAGE}
-    return {"ok": True, "empty": False, "latest": latest}
+    settings = get_settings()
+    key = make_cache_key("evaluation", "latest", version=settings.cache_key_version)
+
+    def compute() -> dict[str, Any]:
+        collection = get_evaluation_runs_collection()
+        doc = None
+        cursor = _newest_cursor(collection, 1)
+        for candidate in cursor:
+            doc = candidate
+            break
+        latest = sanitize_evaluation_run_document(doc)
+        if latest is None:
+            return {"ok": True, "empty": True, "latest": None, "message": EVALUATION_EMPTY_MESSAGE}
+        return {"ok": True, "empty": False, "latest": latest}
+
+    return get_or_compute(cache=get_cache_backend(), key=key, ttl_seconds=_evaluation_cache_ttl(), compute_fn=compute)
 
 
 @router.get("/runs")
 def list_evaluation_runs(limit: int = Query(10, ge=1)) -> dict[str, Any]:
     capped_limit = min(int(limit), MAX_EVALUATION_RUN_LIMIT)
-    collection = get_evaluation_runs_collection()
-    runs = [
-        sanitized
-        for sanitized in (
-            sanitize_evaluation_run_document(doc)
-            for doc in _newest_cursor(collection, capped_limit)
-        )
-        if sanitized is not None
-    ]
-    return {
-        "ok": True,
-        "empty": len(runs) == 0,
-        "runs": runs,
-        "limit": capped_limit,
-        "message": EVALUATION_EMPTY_MESSAGE if not runs else None,
-    }
+    settings = get_settings()
+    key = make_cache_key("evaluation", {"runs_limit": capped_limit}, version=settings.cache_key_version)
+
+    def compute() -> dict[str, Any]:
+        collection = get_evaluation_runs_collection()
+        runs = [
+            sanitized
+            for sanitized in (
+                sanitize_evaluation_run_document(doc)
+                for doc in _newest_cursor(collection, capped_limit)
+            )
+            if sanitized is not None
+        ]
+        return {
+            "ok": True,
+            "empty": len(runs) == 0,
+            "runs": runs,
+            "limit": capped_limit,
+            "message": EVALUATION_EMPTY_MESSAGE if not runs else None,
+        }
+
+    return get_or_compute(cache=get_cache_backend(), key=key, ttl_seconds=_evaluation_cache_ttl(), compute_fn=compute)
 
 
 @router.get("/runs/{run_id}")
 def get_evaluation_run(run_id: str) -> dict[str, Any]:
-    collection = get_evaluation_runs_collection()
-    doc = collection.find_one({"run_id": run_id})
-    sanitized = sanitize_evaluation_run_document(doc)
-    if sanitized is None:
-        raise HTTPException(status_code=404, detail={"error": "not_found", "run_id": run_id})
-    return {"ok": True, "run": sanitized}
+    settings = get_settings()
+    key = make_cache_key("evaluation", {"run_id": run_id}, version=settings.cache_key_version)
+
+    def compute() -> dict[str, Any]:
+        collection = get_evaluation_runs_collection()
+        doc = collection.find_one({"run_id": run_id})
+        sanitized = sanitize_evaluation_run_document(doc)
+        if sanitized is None:
+            raise HTTPException(status_code=404, detail={"error": "not_found", "run_id": run_id})
+        return {"ok": True, "run": sanitized}
+
+    return get_or_compute(cache=get_cache_backend(), key=key, ttl_seconds=_evaluation_cache_ttl(), compute_fn=compute)

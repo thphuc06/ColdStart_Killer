@@ -49,6 +49,11 @@ class Settings:
     mongodb_uri: str
     mongodb_db_name: str
     admin_token: str
+    auth_mode: str
+    seller_token: str
+    auth_require_admin_for_debug: bool
+    auth_require_admin_for_writes: bool
+    privacy_mask_debug_data: bool
     ollama_model: str
     embedding_model: str
     use_cuda: bool
@@ -67,10 +72,30 @@ class Settings:
     enable_onboarding: bool
     onboarding_max_seed_items: int
     onboarding_preview_limit: int
+    enable_seller_tools: bool
+    seller_index_confirmation: str
+    seller_draft_max_preview_units: int
+    enable_web_enrichment: bool
+    web_enrichment_provider: str
+    tavily_api_key: str
+    tavily_max_results: int
+    web_enrichment_timeout_seconds: int
+    web_enrichment_apply_confirmation: str
     enable_query_embedding_cache: bool
     query_cache_write_enabled: bool
     query_cache_version: str
     query_cache_ttl_days: int
+    enable_job_runs: bool
+    enable_job_trigger_api: bool
+    job_run_confirmation: str
+    job_run_max_history: int
+    cache_backend: str
+    cache_default_ttl_seconds: int
+    cache_key_version: str
+    redis_url: str
+    redis_socket_timeout_seconds: int
+    redis_connect_timeout_seconds: int
+    cache_debug_headers: bool
     algorithm_version: str
     ranking_version: str
     signal_model_version: str
@@ -105,6 +130,11 @@ def get_settings() -> Settings:
         mongodb_uri=os.getenv("MONGODB_URI", ""),
         mongodb_db_name=os.getenv("MONGODB_DB_NAME", "coldstart_killer"),
         admin_token=os.getenv("ADMIN_TOKEN", ""),
+        auth_mode=os.getenv("AUTH_MODE", "demo"),
+        seller_token=os.getenv("SELLER_TOKEN", ""),
+        auth_require_admin_for_debug=env_bool("AUTH_REQUIRE_ADMIN_FOR_DEBUG", True),
+        auth_require_admin_for_writes=env_bool("AUTH_REQUIRE_ADMIN_FOR_WRITES", True),
+        privacy_mask_debug_data=env_bool("PRIVACY_MASK_DEBUG_DATA", True),
         ollama_model=os.getenv("OLLAMA_MODEL", "qwen3:8b"),
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
         use_cuda=env_bool("USE_CUDA", True),
@@ -123,10 +153,33 @@ def get_settings() -> Settings:
         enable_onboarding=env_bool("ENABLE_ONBOARDING", True),
         onboarding_max_seed_items=env_int("ONBOARDING_MAX_SEED_ITEMS", 8),
         onboarding_preview_limit=env_int("ONBOARDING_PREVIEW_LIMIT", 12),
+        enable_seller_tools=env_bool("ENABLE_SELLER_TOOLS", False),
+        seller_index_confirmation=os.getenv("SELLER_INDEX_CONFIRMATION", "INDEX_SELLER_DRAFT"),
+        seller_draft_max_preview_units=env_int("SELLER_DRAFT_MAX_PREVIEW_UNITS", 20),
+        enable_web_enrichment=env_bool("ENABLE_WEB_ENRICHMENT", False),
+        web_enrichment_provider=os.getenv("WEB_ENRICHMENT_PROVIDER", "tavily"),
+        tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
+        tavily_max_results=env_int("TAVILY_MAX_RESULTS", 3),
+        web_enrichment_timeout_seconds=env_int("WEB_ENRICHMENT_TIMEOUT_SECONDS", 10),
+        web_enrichment_apply_confirmation=os.getenv(
+            "WEB_ENRICHMENT_APPLY_CONFIRMATION",
+            "APPLY_WEB_ENRICHMENT",
+        ),
         enable_query_embedding_cache=env_bool("ENABLE_QUERY_EMBEDDING_CACHE", False),
         query_cache_write_enabled=env_bool("QUERY_CACHE_WRITE_ENABLED", False),
         query_cache_version=os.getenv("QUERY_CACHE_VERSION", "query_cache_v1"),
         query_cache_ttl_days=env_int("QUERY_CACHE_TTL_DAYS", 0),
+        enable_job_runs=env_bool("ENABLE_JOB_RUNS", True),
+        enable_job_trigger_api=env_bool("ENABLE_JOB_TRIGGER_API", False),
+        job_run_confirmation=os.getenv("JOB_RUN_CONFIRMATION", "RUN_JOB"),
+        job_run_max_history=env_int("JOB_RUN_MAX_HISTORY", 50),
+        cache_backend=os.getenv("CACHE_BACKEND", "none"),
+        cache_default_ttl_seconds=env_int("CACHE_DEFAULT_TTL_SECONDS", 300),
+        cache_key_version=os.getenv("CACHE_KEY_VERSION", "v1"),
+        redis_url=os.getenv("REDIS_URL", ""),
+        redis_socket_timeout_seconds=env_int("REDIS_SOCKET_TIMEOUT_SECONDS", 2),
+        redis_connect_timeout_seconds=env_int("REDIS_CONNECT_TIMEOUT_SECONDS", 2),
+        cache_debug_headers=env_bool("CACHE_DEBUG_HEADERS", False),
         algorithm_version=os.getenv("ALGORITHM_VERSION", "rec_v2_negative_suppression_seed_guard"),
         ranking_version=os.getenv("RANKING_VERSION", "rank_v1_default_weights"),
         signal_model_version=os.getenv("SIGNAL_MODEL_VERSION", "signal_v4_boundary_hygiene"),

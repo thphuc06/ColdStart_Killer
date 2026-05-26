@@ -23,7 +23,7 @@ This phase does:
 This phase does not do:
 
 - Production auth/privacy.
-- Seller add-product or Tavily/web enrichment.
+- Production seller marketplace hardening or Tavily/web enrichment. The optional seller draft flow is staged and disabled by default.
 - Redis/async worker infrastructure.
 - Live reset/seed without explicit human confirmation.
 
@@ -191,6 +191,37 @@ Interpretation rule:
 
 > Synthetic/demo metrics are indicative only. They help explain system behavior and compare baselines, but they are not human-audited ground truth.
 
+## Fusion Comparison Smoke
+
+Batch 14.10 adds a read-only comparison utility for the stable `$unionWith` / manual RRF path versus optional native `$rankFusion` support:
+
+```bash
+python scripts/compare_fusion_strategies.py --dry-run
+```
+
+By default this smoke uses a catalog-backed query fixture from `item_hype_profiles`
+so it can compare fusion modes without loading the local embedding model. For a
+true `process_query()` comparison, use:
+
+```bash
+python scripts/compare_fusion_strategies.py --dry-run --live-query-processing
+```
+
+Write a local JSON artifact only when needed:
+
+```bash
+python scripts/compare_fusion_strategies.py --dry-run --write-artifacts
+```
+
+Safety notes:
+
+- This script never writes MongoDB.
+- The production default search mode remains `unionWith`.
+- `$rankFusion` may be unsupported depending on Atlas tier/version; the script reports that gracefully unless `--strict` is used.
+- `$scoreFusion` is not implemented in this repo and is reported as proposed-only.
+
+Judge clarification: Aggregation Pipeline CF proof is not required for the current roadmap. Current CF remains Python-side behavior-derived item-item CF from `user_item_signals`; MongoDB Aggregation Pipeline remains used in retrieval/ranking/filtering/evaluation/debug processing.
+
 ## Optional Query Embedding Cache
 
 Batch 14.2 adds an optional runtime cache around `process_query()` for repeated search queries. It is safe by default:
@@ -203,6 +234,149 @@ QUERY_CACHE_TTL_DAYS=0
 ```
 
 Rollback is immediate: set `ENABLE_QUERY_EMBEDDING_CACHE=false`. Cache writes require `QUERY_CACHE_WRITE_ENABLED=true`; leave writes disabled for judging/demo unless a human explicitly approves cache persistence.
+
+## Optional Seller Draft Flow
+
+Batch 14.5 adds a staged seller add-product flow. It is disabled by default:
+
+```text
+ENABLE_SELLER_TOOLS=false
+SELLER_INDEX_CONFIRMATION=INDEX_SELLER_DRAFT
+SELLER_DRAFT_MAX_PREVIEW_UNITS=20
+```
+
+When enabled for a reviewed local demo, use `/seller/drafts` in the React app or the API:
+
+```text
+POST /api/seller/drafts
+POST /api/seller/drafts/{draft_id}/validate
+POST /api/seller/drafts/{draft_id}/index-preview
+POST /api/seller/drafts/{draft_id}/approve-index?write=true&confirm=INDEX_SELLER_DRAFT
+```
+
+Safety contract:
+
+- Draft creation writes only to `seller_product_drafts`.
+- Index preview writes only preview metadata back to the draft; it does not write `items` or `retrieval_units`.
+- Approve-index is the only catalog-write path and requires `write=true` plus the exact confirmation string.
+- Approve-index refuses existing `items._id` collisions and existing `retrieval_units.item_id` collisions.
+- Seller indexing adds text proposition retrieval units only. HyPE vectors and `item_hype_profiles` rebuild are separate reviewed steps.
+- Rollback is immediate: set `ENABLE_SELLER_TOOLS=false`; staged drafts can remain in `seller_product_drafts`.
+
+## Optional Web Enrichment for Seller Drafts
+
+Batch 14.6 adds optional Tavily/web enrichment for staged seller drafts. It is disabled by default and the app runs without an API key:
+
+```text
+ENABLE_WEB_ENRICHMENT=false
+WEB_ENRICHMENT_PROVIDER=tavily
+TAVILY_API_KEY=
+TAVILY_MAX_RESULTS=3
+WEB_ENRICHMENT_TIMEOUT_SECONDS=10
+WEB_ENRICHMENT_APPLY_CONFIRMATION=APPLY_WEB_ENRICHMENT
+```
+
+Safety contract:
+
+- Preview builds the enrichment query only and performs no writes.
+- Requesting enrichment requires `ENABLE_WEB_ENRICHMENT=true` and a configured provider; it writes only `web_enrichment_requests` plus draft enrichment metadata.
+- Suggestions must include source URLs and confidence. Do not use suggestions without provenance.
+- Applying suggestions requires `confirm=APPLY_WEB_ENRICHMENT` and updates only selected `seller_product_drafts` fields.
+- Enrichment never writes `items`, `retrieval_units`, `user_profiles`, `item_item_cf_edges`, or `item_hype_profiles`.
+- Seller validation, index preview, and approve-index remain separate steps.
+- Rollback is immediate: set `ENABLE_WEB_ENRICHMENT=false`; staged enrichment requests can remain ignored.
+
+## Lightweight Job Registry
+
+Batch 14.7 adds a small job registry and compact `job_runs` status layer. This is not Celery/Redis and it does not replace the existing scripts.
+
+```text
+ENABLE_JOB_RUNS=true
+ENABLE_JOB_TRIGGER_API=false
+JOB_RUN_CONFIRMATION=RUN_JOB
+JOB_RUN_MAX_HISTORY=50
+```
+
+Safe CLI checks:
+
+```bash
+python scripts/run_job.py --list
+python scripts/run_job.py --job fusion_comparison_dry_run --dry-run --no-track
+```
+
+Safety contract:
+
+- Debug/Admin can read `/api/jobs/registry` and `/api/jobs/runs`.
+- The browser does not run jobs while `ENABLE_JOB_TRIGGER_API=false`.
+- CLI dry-runs do not write `job_runs` unless `--track` is explicitly passed.
+- Write-capable jobs remain manual-only and keep their own confirmation strings.
+- Redis/real async workers are still future work.
+
+## Optional Backend Cache Layer
+
+Batch 14.8 adds a small cache abstraction for safe read-heavy API paths. It is disabled by default and is separate from the query embedding cache.
+
+```text
+CACHE_BACKEND=none
+CACHE_DEFAULT_TTL_SECONDS=300
+CACHE_KEY_VERSION=v1
+REDIS_URL=
+REDIS_SOCKET_TIMEOUT_SECONDS=2
+REDIS_CONNECT_TIMEOUT_SECONDS=2
+CACHE_DEBUG_HEADERS=false
+```
+
+Supported backends:
+
+- `none`: default no-op behavior.
+- `memory`: in-process TTL cache for local/dev.
+- `redis`: optional lazy backend; app falls back to no-op if `REDIS_URL` is missing, Redis is unavailable, or the package is not installed.
+
+Current cached paths:
+
+- `GET /api/evaluation/runs/latest`
+- `GET /api/evaluation/runs`
+- `GET /api/evaluation/runs/{run_id}`
+- `GET /api/jobs/registry`
+- `GET /api/jobs/runs`
+- `GET /api/jobs/runs/{job_run_id}`
+
+Safety contract:
+
+- Write endpoints are not cached.
+- Raw event histories, secrets, admin tokens, and provider keys are not used in cache keys.
+- Personalized homepage/search/similar responses are not cached in this first pass.
+- Rollback is immediate: set `CACHE_BACKEND=none`.
+
+## Auth / Privacy Guardrails
+
+Batch 14.9 adds lightweight token guards without changing the public shopper demo flow:
+
+```text
+AUTH_MODE=demo
+ADMIN_TOKEN=
+SELLER_TOKEN=
+AUTH_REQUIRE_ADMIN_FOR_DEBUG=true
+AUTH_REQUIRE_ADMIN_FOR_WRITES=true
+PRIVACY_MASK_DEBUG_DATA=true
+```
+
+Use a locally generated token for admin actions:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Policy:
+
+- Public reads remain open: homepage feed, search, item detail, similar products, user selection, and onboarding.
+- Debug/Admin and demo reset/seed/rebuild controls require `ADMIN_TOKEN` when `AUTH_MODE=demo` or `production`.
+- Live Debug/Admin write controls require exact confirmation strings: `SEED_DEMO_BEHAVIOR`, `PROCESS_EVENTS_WRITE`, `APPLY_PENDING_BEHAVIOR_WRITE`, `REBUILD_PROFILES_WRITE`, and `REBUILD_CF_WRITE`.
+- Seller approve-index and enrichment request/apply require an admin or seller token plus their existing confirmation strings.
+- Job trigger API requires admin token and remains disabled unless `ENABLE_JOB_TRIGGER_API=true`.
+- Debug payloads redact secret-like fields and mask raw user identifiers when `PRIVACY_MASK_DEBUG_DATA=true`.
+
+Rollback for local-only emergency: set `AUTH_MODE=disabled`. Do not use disabled mode for shared demos or production-like runs.
 
 ## Optional Shopper Onboarding
 

@@ -322,10 +322,14 @@ function unauthorizedAdminResponse() {
 
 function installFetchMock() {
     let createdUser: Record<string, unknown> | null = null;
+    let sellerDraft: any | null = null;
 
     return vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        if ((url.includes("/api/debug/") || url.includes("/api/demo/")) && readHeader(init, "X-Admin-Token") !== DEBUG_ADMIN_TOKEN) {
+        if (
+            (url.includes("/api/debug/") || url.includes("/api/demo/") || url.includes("/api/jobs/"))
+            && readHeader(init, "X-Admin-Token") !== DEBUG_ADMIN_TOKEN
+        ) {
             return unauthorizedAdminResponse();
         }
         if (url.includes("/api/health")) {
@@ -483,6 +487,197 @@ function installFetchMock() {
                 message: "Onboarding saved. Run behavior processing later to derive signals and profile updates.",
             });
         }
+        if (url.includes("/api/enrichment/seller-drafts/draft_test_1/preview")) {
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                status: "ready",
+                draft_id: "draft_test_1",
+                provider: "tavily",
+                provider_configured: true,
+                query: "DemoSun Seller Sunscreen all_beauty",
+                write_performed: false,
+                message: "Preview only. Request enrichment explicitly to call the configured provider.",
+                required_confirmation: "APPLY_WEB_ENRICHMENT",
+            });
+        }
+        if (url.includes("/api/enrichment/seller-drafts/draft_test_1/request")) {
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                status: "completed",
+                request: {
+                    request_id: "enrich_test_1",
+                    draft_id: "draft_test_1",
+                    seller_id: "seller_demo_001",
+                    provider: "fake_provider",
+                    query: "DemoSun Seller Sunscreen all_beauty",
+                    status: "completed",
+                    results: [
+                        {
+                            title: "DemoSun Seller Sunscreen source",
+                            url: "https://example.test/enrichment-source",
+                            snippet: "External evidence snippet for seller sunscreen.",
+                            score: 0.7,
+                            source: "fake_provider",
+                        },
+                    ],
+                    suggested_fields: {
+                        "attributes.web_evidence_summary": {
+                            value: "External evidence snippet for seller sunscreen.",
+                            confidence: 0.7,
+                            source_urls: ["https://example.test/enrichment-source"],
+                            reason: "Stores an auditable evidence summary without changing catalog documents.",
+                        },
+                    },
+                    applied_fields: [],
+                    created_at: "2026-05-26T00:00:00+00:00",
+                    updated_at: "2026-05-26T00:00:00+00:00",
+                    error: null,
+                },
+                write_scope: ["web_enrichment_requests", "seller_product_drafts"],
+                catalog_write_performed: false,
+            });
+        }
+        if (url.includes("/api/enrichment/requests/enrich_test_1/apply")) {
+            sellerDraft = {
+                ...(sellerDraft || {}),
+                enrichment: {
+                    status: "applied",
+                    latest_request_id: "enrich_test_1",
+                    applied_request_ids: ["enrich_test_1"],
+                    applied_fields: ["attributes.web_evidence_summary"],
+                    source_urls: ["https://example.test/enrichment-source"],
+                },
+                attributes: {
+                    ...(sellerDraft?.attributes || {}),
+                    web_evidence_summary: "External evidence snippet for seller sunscreen.",
+                },
+            };
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                status: "applied",
+                request_id: "enrich_test_1",
+                draft_id: "draft_test_1",
+                applied_fields: ["attributes.web_evidence_summary"],
+                source_urls: ["https://example.test/enrichment-source"],
+                draft: sellerDraft,
+                write_scope: ["seller_product_drafts", "web_enrichment_requests"],
+                catalog_write_performed: false,
+            });
+        }
+        if (url.includes("/api/seller/drafts/draft_test_1/approve-index")) {
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                write_performed: true,
+                catalog_write_performed: true,
+                draft_id: "draft_test_1",
+                item_id: "seller_seller_demo_001_seller_sunscreen_abc123",
+                inserted_items: 1,
+                inserted_retrieval_units: 2,
+                writes: ["items", "retrieval_units", "seller_product_drafts"],
+                forbidden_writes_performed: [],
+                message: "Seller draft indexed additively. Run separate reviewed HyPE/item profile rebuild if vector exposure is required.",
+            });
+        }
+        if (url.includes("/api/seller/drafts/draft_test_1/index-preview")) {
+            sellerDraft = {
+                ...(sellerDraft || {}),
+                status: "previewed",
+                indexing_preview: {
+                    preview_only: true,
+                    catalog_write_performed: false,
+                    valid: true,
+                    validation_errors: [],
+                    validation_warnings: [],
+                    proposed_item_id: "seller_seller_demo_001_seller_sunscreen_abc123",
+                    estimated_retrieval_units: 2,
+                    vector_units_generated: 0,
+                    requires_hype_profile_rebuild: true,
+                    message: "Preview uses seller-provided text proposition units only.",
+                    retrieval_units: [
+                        {
+                            _id: "seller_prop_1",
+                            item_id: "seller_seller_demo_001_seller_sunscreen_abc123",
+                            unit_type: "proposition",
+                            raw_text: "Seller Sunscreen",
+                            text_search: "Seller Sunscreen",
+                            source: "seller_submitted",
+                            category_id: "all_beauty",
+                            price_bucket: "100k_300k",
+                            seller_confirmed: false,
+                        },
+                        {
+                            _id: "seller_prop_2",
+                            item_id: "seller_seller_demo_001_seller_sunscreen_abc123",
+                            unit_type: "proposition",
+                            raw_text: "Lightweight daily sunscreen for oily skin with comfortable finish.",
+                            text_search: "Lightweight daily sunscreen for oily skin with comfortable finish.",
+                            source: "seller_submitted",
+                            category_id: "all_beauty",
+                            price_bucket: "100k_300k",
+                            seller_confirmed: false,
+                        },
+                    ],
+                },
+            };
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                draft_id: "draft_test_1",
+                preview: sellerDraft.indexing_preview,
+                write_scope: ["seller_product_drafts"],
+                catalog_write_performed: false,
+            });
+        }
+        if (url.includes("/api/seller/drafts/draft_test_1/validate")) {
+            sellerDraft = {
+                ...(sellerDraft || {}),
+                status: "validated",
+                validation_errors: [],
+                validation_warnings: [],
+            };
+            return jsonResponse({ ok: true, enabled: true, draft: sellerDraft, write_scope: ["seller_product_drafts"] });
+        }
+        if (url.endsWith("/api/seller/drafts") && init?.method === "POST") {
+            sellerDraft = {
+                draft_id: "draft_test_1",
+                seller_id: "seller_demo_001",
+                title: "Seller Sunscreen",
+                description: "Lightweight daily sunscreen for oily skin with comfortable finish.",
+                brand: "DemoSun",
+                category_id: "all_beauty",
+                price_vnd: 299000,
+                price_bucket: "100k_300k",
+                image_url: null,
+                attributes: {},
+                status: "validated",
+                validation_errors: [],
+                validation_warnings: [],
+                proposed_item_id: "seller_seller_demo_001_seller_sunscreen_abc123",
+                indexing_preview: null,
+                enrichment: {
+                    status: "none",
+                    latest_request_id: null,
+                    applied_request_ids: [],
+                    applied_fields: [],
+                    source_urls: [],
+                },
+                created_at: "2026-05-26T00:00:00+00:00",
+                updated_at: "2026-05-26T00:00:00+00:00",
+            };
+            return jsonResponse({ ok: true, enabled: true, draft: sellerDraft, write_scope: ["seller_product_drafts"] });
+        }
+        if (url.includes("/api/seller/drafts")) {
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                drafts: sellerDraft ? [sellerDraft] : [],
+                required_confirmation: "INDEX_SELLER_DRAFT",
+            });
+        }
         if (url.includes("/api/feed/home")) {
             return jsonResponse(homeResponse);
         }
@@ -503,6 +698,50 @@ function installFetchMock() {
         }
         if (url.includes("/api/evaluation/runs/latest")) {
             return jsonResponse(evaluationEmptyResponse);
+        }
+        if (url.includes("/api/jobs/registry")) {
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                trigger_api_enabled: false,
+                jobs: [
+                    {
+                        job_type: "fusion_comparison_dry_run",
+                        label: "Fusion comparison dry-run",
+                        description: "Compares fusion strategies without changing production search defaults.",
+                        category: "evaluation",
+                        dry_run_default: true,
+                        write_capable: false,
+                        confirmation_required: null,
+                        triggerable_from_api: true,
+                        adapter: "manual_command",
+                        command: "python scripts/compare_fusion_strategies.py --dry-run",
+                        current_status: "available",
+                    },
+                    {
+                        job_type: "run_evaluation_write",
+                        label: "Persist evaluation run",
+                        description: "Manual-only write job guarded by confirmation.",
+                        category: "evaluation",
+                        dry_run_default: true,
+                        write_capable: true,
+                        confirmation_required: "EVAL_RUN_WRITE",
+                        triggerable_from_api: false,
+                        adapter: "manual_command",
+                        command: "python scripts/run_personalization_evaluation.py --write-evaluation-run --confirm EVAL_RUN_WRITE",
+                        current_status: "manual_only",
+                    },
+                ],
+            });
+        }
+        if (url.includes("/api/jobs/runs")) {
+            return jsonResponse({
+                ok: true,
+                enabled: true,
+                empty: true,
+                runs: [],
+                limit: 10,
+            });
         }
         if (url.includes("/api/demo/reset")) {
             return jsonResponse({
@@ -857,6 +1096,110 @@ describe("Phase 11 routes", () => {
         expect(onboardingCalls).toHaveLength(0);
     });
 
+    it("stages seller draft, previews indexing, and requires confirmation before catalog write", async () => {
+        renderApp("/seller/drafts");
+
+        expect(await screen.findByText("Draft, preview, then explicitly index")).toBeInTheDocument();
+        fireEvent.change(screen.getByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
+        fireEvent.change(screen.getByLabelText("Brand"), { target: { value: "DemoSun" } });
+        fireEvent.change(screen.getByLabelText("Category ID"), { target: { value: "all_beauty" } });
+        fireEvent.change(screen.getByLabelText("Price VND"), { target: { value: "299000" } });
+        fireEvent.change(screen.getByLabelText("Description"), {
+            target: { value: "Lightweight daily sunscreen for oily skin with comfortable finish." },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+
+        expect(await screen.findByText("Seller Sunscreen")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Validate draft" }));
+        fireEvent.click(await screen.findByRole("button", { name: "Preview indexing" }));
+        expect(await screen.findByText("Preview valid")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: "Approve and index seller draft" })).toBeDisabled();
+
+        fireEvent.change(screen.getByPlaceholderText("INDEX_SELLER_DRAFT"), { target: { value: "INDEX_SELLER_DRAFT" } });
+        fireEvent.click(screen.getByRole("button", { name: "Approve and index seller draft" }));
+
+        expect(await screen.findByText(/indexed additively/i)).toBeInTheDocument();
+        const approveCall = vi
+            .mocked(globalThis.fetch)
+            .mock.calls.find(([input]) => String(input).includes("/api/seller/drafts/draft_test_1/approve-index"));
+        expect(approveCall).toBeDefined();
+        expect(String(approveCall?.[0])).toContain("write=true");
+        expect(String(approveCall?.[0])).toContain("confirm=INDEX_SELLER_DRAFT");
+    });
+
+    it("previews and applies web enrichment only after explicit confirmation", async () => {
+        renderApp("/seller/drafts");
+
+        expect(await screen.findByText("Draft, preview, then explicitly index")).toBeInTheDocument();
+        fireEvent.change(screen.getByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
+        fireEvent.change(screen.getByLabelText("Brand"), { target: { value: "DemoSun" } });
+        fireEvent.change(screen.getByLabelText("Category ID"), { target: { value: "all_beauty" } });
+        fireEvent.change(screen.getByLabelText("Description"), {
+            target: { value: "Lightweight daily sunscreen for oily skin with comfortable finish." },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+
+        expect(await screen.findByText("Seller Sunscreen")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Preview enrichment query" }));
+        expect(await screen.findByText("DemoSun Seller Sunscreen all_beauty")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: /Request enrichment/ }));
+
+        expect(await screen.findByText("https://example.test/enrichment-source")).toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /Apply selected suggestions/ })).toBeDisabled();
+        fireEvent.click(screen.getByLabelText(/attributes.web_evidence_summary/));
+        expect(screen.getByRole("button", { name: /Apply selected suggestions/ })).toBeDisabled();
+        fireEvent.change(screen.getByPlaceholderText("APPLY_WEB_ENRICHMENT"), { target: { value: "APPLY_WEB_ENRICHMENT" } });
+        fireEvent.click(screen.getByRole("button", { name: /Apply selected suggestions/ }));
+
+        await waitFor(() => {
+            const applyCall = vi
+                .mocked(globalThis.fetch)
+                .mock.calls.find(([input]) => String(input).includes("/api/enrichment/requests/enrich_test_1/apply"));
+            expect(applyCall).toBeDefined();
+            expect(String(applyCall?.[0])).toContain("confirm=APPLY_WEB_ENRICHMENT");
+            expect(String(applyCall?.[1]?.body)).toContain("attributes.web_evidence_summary");
+        });
+    });
+
+    it("renders web enrichment provider setup state without auto-applying", async () => {
+        const fetchMock = vi.mocked(globalThis.fetch);
+        const currentImplementation = fetchMock.getMockImplementation();
+        fetchMock.mockImplementation((input, init) => {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+            if (url.includes("/api/enrichment/seller-drafts/draft_test_1/preview")) {
+                return jsonResponse({
+                    ok: true,
+                    enabled: true,
+                    status: "provider_not_configured",
+                    draft_id: "draft_test_1",
+                    provider: "tavily",
+                    provider_configured: false,
+                    query: "DemoSun Seller Sunscreen all_beauty",
+                    write_performed: false,
+                    message: "Web enrichment is enabled but TAVILY_API_KEY is not configured.",
+                    required_confirmation: "APPLY_WEB_ENRICHMENT",
+                });
+            }
+            return currentImplementation!(input, init);
+        });
+
+        renderApp("/seller/drafts");
+
+        expect(await screen.findByText("Draft, preview, then explicitly index")).toBeInTheDocument();
+        fireEvent.change(screen.getByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
+        fireEvent.change(screen.getByLabelText("Category ID"), { target: { value: "all_beauty" } });
+        fireEvent.change(screen.getByLabelText("Description"), {
+            target: { value: "Lightweight daily sunscreen for oily skin with comfortable finish." },
+        });
+        fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+        expect(await screen.findByText("Seller Sunscreen")).toBeInTheDocument();
+        fireEvent.click(screen.getByRole("button", { name: "Preview enrichment query" }));
+
+        expect(await screen.findByText("provider_not_configured")).toBeInTheDocument();
+        expect(screen.getByText("Web enrichment is enabled but TAVILY_API_KEY is not configured.")).toBeInTheDocument();
+        expect(screen.queryByText("External evidence snippet for seller sunscreen.")).not.toBeInTheDocument();
+    });
+
     it("returns to shopper selection when changing account", async () => {
         renderApp("/");
 
@@ -1005,8 +1348,12 @@ describe("Phase 11 routes", () => {
         expect(await screen.findByText("Inspect lineage and operate the demo safely")).toBeInTheDocument();
         expect(await screen.findByText("Evaluation dashboard")).toBeInTheDocument();
         expect(await screen.findByText("No persisted evaluation runs yet.")).toBeInTheDocument();
-        expect(screen.getByText(/EVAL_RUN_WRITE/)).toBeInTheDocument();
+        expect(screen.getAllByText(/EVAL_RUN_WRITE/).length).toBeGreaterThan(0);
         expect(screen.queryByRole("button", { name: /run evaluation/i })).not.toBeInTheDocument();
+        expect(await screen.findByText("Job orchestration")).toBeInTheDocument();
+        expect(await screen.findByText("Trigger API disabled")).toBeInTheDocument();
+        expect(await screen.findByText(/No job_runs records yet/)).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: /run job/i })).not.toBeInTheDocument();
         expect(await screen.findByText("Top signals")).toBeInTheDocument();
         expect(await screen.findByText("Demo Recovery")).toBeInTheDocument();
         expect(await screen.findByText("items")).toBeInTheDocument();
@@ -1099,6 +1446,7 @@ describe("Phase 11 routes", () => {
         const seedScope = within(seedPanel as HTMLElement);
 
         fireEvent.click(seedScope.getByRole("checkbox", { name: "write mode" }));
+        fireEvent.change(seedScope.getByPlaceholderText("SEED_DEMO_BEHAVIOR"), { target: { value: "SEED_DEMO_BEHAVIOR" } });
         fireEvent.click(seedScope.getByRole("button", { name: "Run seed" }));
 
         expect(await screen.findByText("Seed response")).toBeInTheDocument();
@@ -1109,6 +1457,7 @@ describe("Phase 11 routes", () => {
                 .mock.calls.find(([input]) => String(input).includes("/api/demo/seed"));
             expect(call).toBeDefined();
             expect(String(call?.[0])).toContain("write=true");
+            expect(String(call?.[0])).toContain("confirm=SEED_DEMO_BEHAVIOR");
         });
     });
 });

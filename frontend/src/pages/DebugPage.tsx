@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { JsonCard } from "../components/JsonCard";
 import { EvaluationSummaryCard } from "../components/EvaluationSummaryCard";
+import { JobRunsPanel } from "../components/JobRunsPanel";
 import { StatusBadge } from "../components/StatusBadge";
 import { applyPendingBehavior, getDebugUser, getDemoStatus, getLatestEvaluationRun, processEvents, rebuildCf, rebuildProfiles, resetDemo, seedDemo } from "../lib/api";
 import { useExperience } from "../state/experience";
@@ -59,6 +60,11 @@ const FULL_RESET_RECOVERY_STEPS = [
 ];
 
 const ADMIN_TOKEN_STORAGE_KEY = "coldstart-killer/admin-token/v1";
+const SEED_DEMO_CONFIRMATION = "SEED_DEMO_BEHAVIOR";
+const PROCESS_EVENTS_CONFIRMATION = "PROCESS_EVENTS_WRITE";
+const APPLY_PENDING_BEHAVIOR_CONFIRMATION = "APPLY_PENDING_BEHAVIOR_WRITE";
+const REBUILD_PROFILES_CONFIRMATION = "REBUILD_PROFILES_WRITE";
+const REBUILD_CF_CONFIRMATION = "REBUILD_CF_WRITE";
 
 
 export function DebugPage() {
@@ -78,14 +84,19 @@ export function DebugPage() {
     const [seedRequests, setSeedRequests] = useState(3);
     const [seedItems, setSeedItems] = useState(10);
     const [seedValue, setSeedValue] = useState(42);
+    const [seedConfirm, setSeedConfirm] = useState("");
     const [processWrite, setProcessWrite] = useState(false);
     const [processLimit, setProcessLimit] = useState("100");
+    const [processConfirm, setProcessConfirm] = useState("");
     const [profileWrite, setProfileWrite] = useState(false);
     const [profileLimitUsers, setProfileLimitUsers] = useState("");
+    const [profileConfirm, setProfileConfirm] = useState("");
     const [cfWrite, setCfWrite] = useState(false);
     const [cfLimitUsers, setCfLimitUsers] = useState("");
     const [cfSupport, setCfSupport] = useState(2);
+    const [cfConfirm, setCfConfirm] = useState("");
     const [applyWrite, setApplyWrite] = useState(false);
+    const [applyConfirm, setApplyConfirm] = useState("");
     const hasAdminToken = adminToken.trim().length > 0;
 
     useEffect(() => {
@@ -135,6 +146,7 @@ export function DebugPage() {
                 maxEvents: Number(processLimit) || 100,
                 rebuildItemStats: true,
                 write: applyWrite,
+                confirm: applyConfirm || undefined,
                 adminToken,
             }),
         onSuccess: refreshAdminState,
@@ -158,6 +170,11 @@ export function DebugPage() {
     const profileWriteBlocked = profileWrite && profileLimitUsers.trim().length > 0;
     const cfWriteBlocked = cfWrite && cfLimitUsers.trim().length > 0;
     const processWriteBlocked = processWrite && processLimit.trim().length > 0;
+    const seedConfirmBlocked = seedWrite && seedConfirm !== SEED_DEMO_CONFIRMATION;
+    const processConfirmBlocked = processWrite && processConfirm !== PROCESS_EVENTS_CONFIRMATION;
+    const applyConfirmBlocked = applyWrite && applyConfirm !== APPLY_PENDING_BEHAVIOR_CONFIRMATION;
+    const profileConfirmBlocked = profileWrite && profileConfirm !== REBUILD_PROFILES_CONFIRMATION;
+    const cfConfirmBlocked = cfWrite && cfConfirm !== REBUILD_CF_CONFIRMATION;
     const adminActionBlocked = !hasAdminToken;
 
     return (
@@ -347,6 +364,8 @@ export function DebugPage() {
                 error={evaluationRunQuery.error instanceof Error ? evaluationRunQuery.error : null}
             />
 
+            <JobRunsPanel adminToken={adminToken} />
+
             <section className="panel p-5">
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr),360px]">
                     <div>
@@ -440,7 +459,7 @@ export function DebugPage() {
                         </div>
                         <button
                             className="action-button action-button-primary w-full"
-                            disabled={applyBehaviorMutation.isPending || adminActionBlocked}
+                            disabled={applyBehaviorMutation.isPending || applyConfirmBlocked || adminActionBlocked}
                             onClick={() => applyBehaviorMutation.mutate()}
                         >
                             <Wrench className="h-4 w-4" />
@@ -452,6 +471,14 @@ export function DebugPage() {
                             <input checked={applyWrite} type="checkbox" onChange={(event) => setApplyWrite(event.target.checked)} />
                             write mode
                         </label>
+                        {applyWrite ? (
+                            <input
+                                className="form-input"
+                                placeholder={APPLY_PENDING_BEHAVIOR_CONFIRMATION}
+                                value={applyConfirm}
+                                onChange={(event) => setApplyConfirm(event.target.value)}
+                            />
+                        ) : null}
                     </div>
                 </section>
 
@@ -517,9 +544,17 @@ export function DebugPage() {
                         <input checked={seedWrite} type="checkbox" onChange={(event) => setSeedWrite(event.target.checked)} />
                         write mode
                     </label>
+                    {seedWrite ? (
+                        <input
+                            className="form-input mt-3"
+                            placeholder={SEED_DEMO_CONFIRMATION}
+                            value={seedConfirm}
+                            onChange={(event) => setSeedConfirm(event.target.value)}
+                        />
+                    ) : null}
                     <button
                         className="action-button action-button-primary mt-3 w-full"
-                        disabled={seedMutation.isPending || adminActionBlocked}
+                        disabled={seedMutation.isPending || seedConfirmBlocked || adminActionBlocked}
                         onClick={() =>
                             seedMutation.mutate({
                                 users: seedUsers,
@@ -527,6 +562,7 @@ export function DebugPage() {
                                 itemsPerRequest: seedItems,
                                 seed: seedValue,
                                 write: seedWrite,
+                                confirm: seedConfirm || undefined,
                                 adminToken,
                             })
                         }
@@ -554,14 +590,23 @@ export function DebugPage() {
                         <input checked={processWrite} type="checkbox" onChange={(event) => setProcessWrite(event.target.checked)} />
                         write mode
                     </label>
+                    {processWrite ? (
+                        <input
+                            className="form-input mt-3"
+                            placeholder={PROCESS_EVENTS_CONFIRMATION}
+                            value={processConfirm}
+                            onChange={(event) => setProcessConfirm(event.target.value)}
+                        />
+                    ) : null}
                     <button
                         className="action-button action-button-primary mt-3 w-full"
-                        disabled={processMutation.isPending || processWriteBlocked || adminActionBlocked}
+                        disabled={processMutation.isPending || processWriteBlocked || processConfirmBlocked || adminActionBlocked}
                         onClick={() =>
                             processMutation.mutate({
                                 limit: processLimit ? Number(processLimit) : undefined,
                                 write: processWrite,
                                 rebuildItemStats: true,
+                                confirm: processConfirm || undefined,
                                 adminToken,
                             })
                         }
@@ -593,6 +638,14 @@ export function DebugPage() {
                                 <input checked={profileWrite} type="checkbox" onChange={(event) => setProfileWrite(event.target.checked)} />
                                 write mode
                             </label>
+                            {profileWrite ? (
+                                <input
+                                    className="form-input mt-3"
+                                    placeholder={REBUILD_PROFILES_CONFIRMATION}
+                                    value={profileConfirm}
+                                    onChange={(event) => setProfileConfirm(event.target.value)}
+                                />
+                            ) : null}
                             <p className={`mt-2 text-xs leading-5 ${profileWriteBlocked ? "text-[var(--rose)]" : "text-[var(--ink-soft)]"}`}>
                                 {profileWriteBlocked
                                     ? "Write mode requires a full rebuild. Clear the user limit first."
@@ -600,11 +653,12 @@ export function DebugPage() {
                             </p>
                             <button
                                 className="action-button action-button-secondary mt-3 w-full"
-                                disabled={profileMutation.isPending || profileWriteBlocked || adminActionBlocked}
+                                disabled={profileMutation.isPending || profileWriteBlocked || profileConfirmBlocked || adminActionBlocked}
                                 onClick={() =>
                                     profileMutation.mutate({
                                         limitUsers: profileLimitUsers ? Number(profileLimitUsers) : undefined,
                                         write: profileWrite,
+                                        confirm: profileConfirm || undefined,
                                         adminToken,
                                     })
                                 }
@@ -628,6 +682,14 @@ export function DebugPage() {
                                 <input checked={cfWrite} type="checkbox" onChange={(event) => setCfWrite(event.target.checked)} />
                                 write mode
                             </label>
+                            {cfWrite ? (
+                                <input
+                                    className="form-input mt-3"
+                                    placeholder={REBUILD_CF_CONFIRMATION}
+                                    value={cfConfirm}
+                                    onChange={(event) => setCfConfirm(event.target.value)}
+                                />
+                            ) : null}
                             <p className={`mt-2 text-xs leading-5 ${cfWriteBlocked ? "text-[var(--rose)]" : "text-[var(--ink-soft)]"}`}>
                                 {cfWriteBlocked
                                     ? "Write mode requires a full rebuild. Clear the user limit first."
@@ -635,12 +697,13 @@ export function DebugPage() {
                             </p>
                             <button
                                 className="action-button action-button-secondary mt-3 w-full"
-                                disabled={cfMutation.isPending || cfWriteBlocked || adminActionBlocked}
+                                disabled={cfMutation.isPending || cfWriteBlocked || cfConfirmBlocked || adminActionBlocked}
                                 onClick={() =>
                                     cfMutation.mutate({
                                         limitUsers: cfLimitUsers ? Number(cfLimitUsers) : undefined,
                                         minSupport: cfSupport,
                                         write: cfWrite,
+                                        confirm: cfConfirm || undefined,
                                         adminToken,
                                     })
                                 }

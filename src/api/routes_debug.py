@@ -10,6 +10,7 @@ from src.behavior.incremental_processor import CF_RELEVANT_EVENT_TYPES, process_
 from src.behavior.profile_builder import build_user_profiles
 from src.behavior.signal_builder import build_user_item_signals
 from src.config import configured_model_versions, get_settings
+from src.auth.privacy import sanitize_debug_payload
 from src.behavior.synthetic_generator import (
     build_synthetic_behavior_plan,
     load_candidates_from_collections,
@@ -39,6 +40,13 @@ router = APIRouter(prefix="/api", dependencies=[Depends(require_admin_token)])
 
 
 RESET_CONFIRMATION_MESSAGE = "This will clear current demo interactions."
+WRITE_CONFIRMATIONS = {
+    "seed_demo_behavior": "SEED_DEMO_BEHAVIOR",
+    "process_events": "PROCESS_EVENTS_WRITE",
+    "apply_pending_behavior": "APPLY_PENDING_BEHAVIOR_WRITE",
+    "rebuild_profiles": "REBUILD_PROFILES_WRITE",
+    "rebuild_cf": "REBUILD_CF_WRITE",
+}
 
 
 def _safe_list(cursor: Any, limit: int) -> list[dict[str, Any]]:
@@ -56,6 +64,21 @@ def _require_reset_confirmation(*, write: bool, full: bool, confirm: str | None)
         detail={
             "error": "confirmation_required",
             "message": RESET_CONFIRMATION_MESSAGE,
+            "expected_confirm": expected,
+        },
+    )
+
+
+def _require_write_confirmation(*, write: bool, confirm: str | None, expected: str, message: str) -> None:
+    if not write:
+        return
+    if confirm == expected:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "confirmation_required",
+            "message": message,
             "expected_confirm": expected,
         },
     )
@@ -326,7 +349,7 @@ def get_debug_user(user_id: str) -> dict[str, Any]:
         1,
     )
 
-    return {
+    payload = {
         "user": user_doc,
         "profile": profile_doc,
         "signals": signals,
@@ -342,6 +365,7 @@ def get_debug_user(user_id: str) -> dict[str, Any]:
             cf_lineage_docs=cf_lineage_docs,
         ),
     }
+    return sanitize_debug_payload(payload) if get_settings().privacy_mask_debug_data else payload
 
 
 @router.post("/demo/seed")
@@ -351,7 +375,14 @@ def seed_demo_behavior(
     items_per_request: int = 10,
     seed: int = 42,
     write: bool = False,
+    confirm: str | None = None,
 ) -> dict[str, Any]:
+    _require_write_confirmation(
+        write=write,
+        confirm=confirm,
+        expected=WRITE_CONFIRMATIONS["seed_demo_behavior"],
+        message="Writing synthetic demo behavior requires explicit confirmation.",
+    )
     candidates = load_candidates_from_collections(
         items_collection=get_items_collection(),
         item_hype_profiles_collection=get_item_hype_profiles_collection(),
@@ -426,7 +457,18 @@ def reset_demo_behavior(write: bool = False, full: bool = False, confirm: str | 
 
 
 @router.post("/debug/process-events")
-def process_events(limit: int | None = None, rebuild_item_stats: bool = True, write: bool = False) -> dict[str, Any]:
+def process_events(
+    limit: int | None = None,
+    rebuild_item_stats: bool = True,
+    write: bool = False,
+    confirm: str | None = None,
+) -> dict[str, Any]:
+    _require_write_confirmation(
+        write=write,
+        confirm=confirm,
+        expected=WRITE_CONFIRMATIONS["process_events"],
+        message="Writing rebuilt behavior signals requires explicit confirmation.",
+    )
     clickstream_events_collection = get_clickstream_events_collection()
     if write and limit is not None:
         raise HTTPException(
@@ -456,7 +498,14 @@ def apply_pending_behavior(
     max_events: int = 100,
     rebuild_item_stats: bool = True,
     write: bool = False,
+    confirm: str | None = None,
 ) -> dict[str, Any]:
+    _require_write_confirmation(
+        write=write,
+        confirm=confirm,
+        expected=WRITE_CONFIRMATIONS["apply_pending_behavior"],
+        message="Applying pending behavior writes derived state and requires explicit confirmation.",
+    )
     try:
         result = process_pending_behavior(
             clickstream_events_collection=get_clickstream_events_collection(),
@@ -479,7 +528,13 @@ def apply_pending_behavior(
 
 
 @router.post("/debug/rebuild-profiles")
-def rebuild_profiles(limit_users: int | None = None, write: bool = False) -> dict[str, Any]:
+def rebuild_profiles(limit_users: int | None = None, write: bool = False, confirm: str | None = None) -> dict[str, Any]:
+    _require_write_confirmation(
+        write=write,
+        confirm=confirm,
+        expected=WRITE_CONFIRMATIONS["rebuild_profiles"],
+        message="Writing rebuilt user profiles requires explicit confirmation.",
+    )
     if write and limit_users is not None:
         raise HTTPException(
             status_code=400,
@@ -510,7 +565,14 @@ def rebuild_cf(
     top_neighbors_per_item: int = 50,
     input_policy: str | None = None,
     write: bool = False,
+    confirm: str | None = None,
 ) -> dict[str, Any]:
+    _require_write_confirmation(
+        write=write,
+        confirm=confirm,
+        expected=WRITE_CONFIRMATIONS["rebuild_cf"],
+        message="Writing rebuilt item-item CF edges requires explicit confirmation.",
+    )
     if write and limit_users is not None:
         raise HTTPException(
             status_code=400,

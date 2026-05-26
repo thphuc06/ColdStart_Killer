@@ -239,6 +239,119 @@ Expected terminal summary includes:
 
 Do not overclaim these metrics. They are useful for demo proof and regression tracking, not a human oracle.
 
+### Phase 14 fusion comparison tests
+
+Fusion comparison is read-only and does not change production search defaults:
+
+```bash
+python -m pytest tests/test_fusion_comparison.py -q -p no:cacheprovider
+python scripts/compare_fusion_strategies.py --dry-run
+```
+
+The default CLI smoke uses a catalog-backed fixture from `item_hype_profiles`
+instead of loading the local embedding model. Use `--live-query-processing` only
+when you explicitly want to exercise `process_query()` and the configured
+embedding runtime.
+
+Optional local artifact:
+
+```bash
+python scripts/compare_fusion_strategies.py --dry-run --write-artifacts
+```
+
+Expected behavior:
+
+- `unionWith` is the stable baseline and remains the default `run_search()` mode.
+- `rankFusion` is attempted only for comparison and may be marked unsupported on some Atlas tiers.
+- `scoreFusion` is reported as not implemented/proposed-only unless a future batch adds an explicit branch.
+- No MongoDB writes occur.
+- Aggregation Pipeline CF proof is deferred after judge clarification and is not a current test gate.
+
+### Phase 14 seller draft tests
+
+Seller tools are disabled by default and catalog writes require explicit confirmation:
+
+```bash
+python -m pytest tests/test_seller_drafts.py tests/test_api_seller.py -q -p no:cacheprovider
+```
+
+Expected behavior:
+
+- `POST /api/seller/drafts` writes only `seller_product_drafts`.
+- `POST /api/seller/drafts/{draft_id}/index-preview` does not write `items` or `retrieval_units`.
+- `POST /api/seller/drafts/{draft_id}/approve-index` refuses unless `write=true&confirm=INDEX_SELLER_DRAFT`.
+- Confirmed approve-index is additive and refuses existing item/retrieval-unit collisions.
+- No `user_profiles`, `item_item_cf_edges`, or `item_hype_profiles` writes occur in this batch.
+
+### Phase 14 web enrichment tests
+
+Web enrichment is disabled by default, optional, and must not call live Tavily in tests:
+
+```bash
+python -m pytest tests/test_enrichment_service.py tests/test_api_enrichment.py -q -p no:cacheprovider
+```
+
+Expected behavior:
+
+- Disabled or missing `TAVILY_API_KEY` returns a readable state and no provider call.
+- Fake provider results are normalized with source URLs and confidence.
+- Enrichment request writes only `web_enrichment_requests` and seller draft enrichment metadata.
+- Apply requires `confirm=APPLY_WEB_ENRICHMENT`.
+- Apply updates only selected seller draft fields and never writes `items` / `retrieval_units`.
+- Frontend tests mock enrichment APIs; no live external API calls are made.
+
+### Phase 14 job registry tests
+
+Batch 14.7 is a lightweight registry/status layer, not Celery/Redis. The API trigger is disabled by default and the Debug UI is read-only unless a human explicitly changes config:
+
+```bash
+python -m pytest tests/test_jobs_registry.py tests/test_jobs_runner.py tests/test_api_jobs.py -q -p no:cacheprovider
+python scripts/run_job.py --list
+python scripts/run_job.py --job fusion_comparison_dry_run --dry-run --no-track
+```
+
+Expected behavior:
+
+- `job_runs` stores compact, sanitized status only when tracking is explicitly enabled.
+- `/api/jobs/registry` and `/api/jobs/runs` require the Admin token.
+- `POST /api/jobs/run` returns `job_trigger_api_disabled` while `ENABLE_JOB_TRIGGER_API=false`.
+- Write-capable jobs require their own confirmation and are not triggerable from the browser by default.
+- Existing scripts remain valid and are not rewritten by the registry.
+
+### Phase 14 backend cache tests
+
+Batch 14.8 adds an optional backend cache abstraction. Redis is not required for tests or local demo:
+
+```bash
+python -m pytest tests/test_cache_keys.py tests/test_memory_cache.py tests/test_cache_service.py tests/test_api_cache_behavior.py -q -p no:cacheprovider
+```
+
+Expected behavior:
+
+- `CACHE_BACKEND=none` is the default and behaves as no-op.
+- `memory` supports TTL, delete, namespace clearing, and max-item eviction.
+- `redis` is optional/lazy and falls back safely when URL/package/connection is missing.
+- Cached API paths are compact read-only evaluation/job endpoints.
+- Write endpoints, raw events, admin tokens, provider keys, and personalized search/feed responses are not cached.
+- Query Embedding Cache remains a separate feature controlled by `ENABLE_QUERY_EMBEDDING_CACHE`.
+
+### Phase 14 auth/privacy tests
+
+Batch 14.9 keeps public shopper reads open and protects Debug/Admin plus write-capable Phase 14 actions:
+
+```bash
+python -m pytest tests/test_auth_dependencies.py tests/test_api_auth_guards.py tests/test_privacy_masking.py -q -p no:cacheprovider
+```
+
+Expected behavior:
+
+- `AUTH_MODE=demo` is the default.
+- Missing `ADMIN_TOKEN` returns a controlled `admin_token_not_configured` response for protected admin routes.
+- Public search/feed/item routes do not require a token.
+- Seller approve-index, enrichment request/apply, and job trigger routes require admin/seller auth before any write-capable work.
+- Demo seed and Debug/Admin rebuild write endpoints refuse `write=true` unless the expected confirmation string is provided.
+- Debug payload masking redacts secret-like fields and masks raw user identifiers.
+
 ### Phase 14 query embedding cache tests
 
 The query cache wraps `process_query()` only when explicitly enabled. Read and write are disabled by default, and unit tests use fake collections rather than live MongoDB:

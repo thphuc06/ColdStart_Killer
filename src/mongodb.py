@@ -74,12 +74,24 @@ def get_query_embedding_cache_collection() -> Collection:
     return get_database()["query_embedding_cache"]
 
 
+def get_seller_product_drafts_collection() -> Collection:
+    return get_database()["seller_product_drafts"]
+
+
+def get_web_enrichment_requests_collection() -> Collection:
+    return get_database()["web_enrichment_requests"]
+
+
 def get_synthetic_personas_collection() -> Collection:
     return get_database()["synthetic_personas"]
 
 
 def get_evaluation_runs_collection() -> Collection:
     return get_database()["evaluation_runs"]
+
+
+def get_job_runs_collection() -> Collection:
+    return get_database()["job_runs"]
 
 
 def ping_mongodb() -> dict[str, Any]:

@@ -6,6 +6,7 @@ import { HomePage } from "./pages/HomePage";
 import { ItemDetailPage } from "./pages/ItemDetailPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { SearchPage } from "./pages/SearchPage";
+import { SellerDraftPage } from "./pages/SellerDraftPage";
 import { ShopperLoginPage } from "./pages/ShopperLoginPage";
 import { useExperience } from "./state/experience";
 
@@ -30,6 +31,7 @@ export default function App() {
                 <Route element={<AppShell />}>
                     <Route path="/" element={<HomePage />} />
                     <Route path="/onboarding" element={<OnboardingPage />} />
+                    <Route path="/seller/drafts" element={<SellerDraftPage />} />
                     <Route path="/search" element={<SearchPage />} />
                     <Route path="/items/:itemId" element={<ItemDetailPage />} />
                     <Route path="/debug" element={<DebugPage />} />

@@ -28,8 +28,11 @@ COLLECTION_NAMES: tuple[str, ...] = (
     "item_item_cf_edges",
     "item_stats",
     "query_embedding_cache",
+    "seller_product_drafts",
+    "web_enrichment_requests",
     "synthetic_personas",
     "evaluation_runs",
+    "job_runs",
 )
 
 
@@ -234,12 +237,60 @@ def build_index_specs(event_ttl_days: int = 0) -> list[IndexSpec]:
             (("last_used_at", DESCENDING),),
             "idx_query_embedding_cache_last_used_at",
         ),
+        _idx("seller_product_drafts", (("draft_id", ASCENDING),), "uniq_seller_product_drafts_draft_id", unique=True),
+        _idx(
+            "seller_product_drafts",
+            (("seller_id", ASCENDING), ("created_at", DESCENDING)),
+            "idx_seller_product_drafts_seller_created",
+        ),
+        _idx(
+            "seller_product_drafts",
+            (("status", ASCENDING), ("updated_at", DESCENDING)),
+            "idx_seller_product_drafts_status_updated",
+        ),
+        _idx(
+            "seller_product_drafts",
+            (("proposed_item_id", ASCENDING),),
+            "idx_seller_product_drafts_proposed_item_id",
+        ),
+        _idx(
+            "web_enrichment_requests",
+            (("request_id", ASCENDING),),
+            "uniq_web_enrichment_requests_request_id",
+            unique=True,
+        ),
+        _idx(
+            "web_enrichment_requests",
+            (("draft_id", ASCENDING), ("created_at", DESCENDING)),
+            "idx_web_enrichment_requests_draft_created",
+        ),
+        _idx(
+            "web_enrichment_requests",
+            (("provider", ASCENDING), ("status", ASCENDING)),
+            "idx_web_enrichment_requests_provider_status",
+        ),
+        _idx(
+            "web_enrichment_requests",
+            (("status", ASCENDING), ("updated_at", DESCENDING)),
+            "idx_web_enrichment_requests_status_updated",
+        ),
         _idx("synthetic_personas", (("persona_id", ASCENDING),), "uniq_synthetic_personas_persona_id", unique=True),
         _idx("evaluation_runs", (("run_id", ASCENDING),), "uniq_evaluation_runs_run_id", unique=True),
         _idx(
             "evaluation_runs",
             (("algorithm_version", ASCENDING), ("ranking_version", ASCENDING), ("created_at", DESCENDING)),
             "idx_evaluation_runs_algorithm_ranking_created",
+        ),
+        _idx("job_runs", (("job_run_id", ASCENDING),), "uniq_job_runs_job_run_id", unique=True),
+        _idx(
+            "job_runs",
+            (("job_type", ASCENDING), ("created_at", DESCENDING)),
+            "idx_job_runs_type_created",
+        ),
+        _idx(
+            "job_runs",
+            (("status", ASCENDING), ("created_at", DESCENDING)),
+            "idx_job_runs_status_created",
         ),
     ]
     if ttl_seconds is not None:

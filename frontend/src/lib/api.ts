@@ -311,6 +311,73 @@ export type EvaluationRunDetailResponse = {
     run: EvaluationRun;
 };
 
+export type JobDefinition = {
+    job_type: string;
+    label: string;
+    description: string;
+    category: string;
+    dry_run_default: boolean;
+    write_capable: boolean;
+    confirmation_required?: string | null;
+    triggerable_from_api: boolean;
+    adapter: string;
+    command?: string | null;
+    current_status: string;
+};
+
+export type JobRun = {
+    id?: string | null;
+    job_run_id: string;
+    job_type: string;
+    status: string;
+    dry_run: boolean;
+    write_requested: boolean;
+    confirm?: string | null;
+    params: Record<string, unknown>;
+    summary: Record<string, unknown>;
+    error?: string | null;
+    started_at?: string | null;
+    finished_at?: string | null;
+    created_at: string;
+    created_by: string;
+    source: string;
+    version: string;
+};
+
+export type JobRegistryResponse = {
+    ok: boolean;
+    enabled: boolean;
+    trigger_api_enabled: boolean;
+    jobs: JobDefinition[];
+};
+
+export type JobRunsResponse = {
+    ok: boolean;
+    enabled: boolean;
+    empty: boolean;
+    runs: JobRun[];
+    limit: number;
+};
+
+export type JobRunDetailResponse = {
+    ok: boolean;
+    enabled: boolean;
+    run: JobRun | null;
+};
+
+export type RunJobPayload = {
+    job_type: string;
+    dry_run?: boolean;
+    write?: boolean;
+    params?: Record<string, unknown>;
+    confirm?: string | null;
+};
+
+export type RunJobResponse = {
+    ok: boolean;
+    run: JobRun;
+};
+
 export type EventPayload = {
     user_id_hash: string;
     session_id: string;
@@ -400,6 +467,176 @@ export type CompleteOnboardingResponse = {
     events_attempted: number;
     events_inserted: number;
     message: string;
+};
+
+export type SellerDraftPayload = {
+    seller_id?: string;
+    title: string;
+    description: string;
+    brand?: string;
+    category_id: string;
+    price_vnd?: number | null;
+    price_bucket?: string;
+    image_url?: string | null;
+    attributes?: Record<string, unknown>;
+};
+
+export type SellerRetrievalUnitPreview = {
+    _id: string;
+    item_id: string;
+    unit_type: "proposition" | "hype_question";
+    raw_text: string;
+    text_search?: string;
+    source: string;
+    category_id: string;
+    price_bucket: string;
+    seller_confirmed: boolean;
+    [key: string]: unknown;
+};
+
+export type SellerIndexingPreview = {
+    preview_only: boolean;
+    catalog_write_performed: boolean;
+    valid: boolean;
+    validation_errors: string[];
+    validation_warnings: string[];
+    proposed_item_id: string;
+    estimated_retrieval_units: number;
+    retrieval_units: SellerRetrievalUnitPreview[];
+    embedding_model?: string | null;
+    vector_units_generated?: number;
+    requires_hype_profile_rebuild?: boolean;
+    message?: string;
+};
+
+export type SellerDraft = SellerDraftPayload & {
+    draft_id: string;
+    status: "draft" | "validated" | "previewed" | "approved" | "indexed" | "failed" | "rejected";
+    validation_errors: string[];
+    validation_warnings: string[];
+    proposed_item_id: string;
+    indexing_preview?: SellerIndexingPreview | null;
+    enrichment?: {
+        status?: "none" | "available" | "applied" | "failed" | string;
+        latest_request_id?: string | null;
+        applied_request_ids?: string[];
+        applied_fields?: string[];
+        source_urls?: string[];
+        [key: string]: unknown;
+    } | null;
+    source?: Record<string, unknown>;
+    created_at: string;
+    updated_at: string;
+    approved_at?: string | null;
+    indexed_at?: string | null;
+};
+
+export type SellerDraftsResponse = {
+    ok: boolean;
+    enabled: boolean;
+    drafts: SellerDraft[];
+    message?: string;
+    required_confirmation?: string;
+};
+
+export type SellerDraftResponse = {
+    ok: boolean;
+    enabled: boolean;
+    draft: SellerDraft;
+    write_scope?: string[];
+    required_confirmation?: string;
+};
+
+export type SellerPreviewResponse = {
+    ok: boolean;
+    enabled: boolean;
+    draft_id: string;
+    preview: SellerIndexingPreview;
+    write_scope: string[];
+    catalog_write_performed: boolean;
+};
+
+export type SellerApproveIndexResponse = {
+    ok: boolean;
+    enabled: boolean;
+    write_performed: boolean;
+    catalog_write_performed: boolean;
+    draft_id: string;
+    item_id: string;
+    inserted_items: number;
+    inserted_retrieval_units: number;
+    writes: string[];
+    forbidden_writes_performed: string[];
+    message: string;
+};
+
+export type WebEnrichmentSuggestion = {
+    value: unknown;
+    confidence: number;
+    source_urls: string[];
+    reason: string;
+};
+
+export type WebEnrichmentRequest = {
+    id?: string;
+    request_id: string;
+    draft_id: string;
+    seller_id?: string;
+    provider: string;
+    query: string;
+    status: "completed" | "failed" | "applied" | string;
+    results: Array<{
+        title: string;
+        url: string;
+        snippet: string;
+        score?: number | null;
+        source: string;
+    }>;
+    suggested_fields: Record<string, WebEnrichmentSuggestion>;
+    applied_fields: string[];
+    created_at: string;
+    updated_at: string;
+    error?: string | null;
+};
+
+export type WebEnrichmentPreviewResponse = {
+    ok: boolean;
+    enabled: boolean;
+    status: "ready" | "disabled" | "provider_not_configured" | string;
+    draft_id?: string;
+    provider: string;
+    provider_configured?: boolean;
+    query?: string;
+    write_performed?: boolean;
+    message?: string;
+    required_confirmation?: string;
+};
+
+export type WebEnrichmentRequestResponse = {
+    ok: boolean;
+    enabled: boolean;
+    status: string;
+    request: WebEnrichmentRequest;
+    write_scope: string[];
+    catalog_write_performed: boolean;
+};
+
+export type WebEnrichmentDetailResponse = {
+    ok: boolean;
+    request: WebEnrichmentRequest;
+};
+
+export type ApplyWebEnrichmentResponse = {
+    ok: boolean;
+    enabled: boolean;
+    status: string;
+    request_id: string;
+    draft_id: string;
+    applied_fields: string[];
+    source_urls: string[];
+    draft: SellerDraft;
+    write_scope: string[];
+    catalog_write_performed: boolean;
 };
 
 type QueryValue = string | number | boolean | null | undefined;
@@ -583,6 +820,116 @@ export function getEvaluationRun(runId: string) {
 }
 
 
+export function getJobRegistry(adminToken?: string) {
+    return fetchJson<JobRegistryResponse>("/api/jobs/registry", {
+        headers: adminHeaders(adminToken),
+    });
+}
+
+
+export function getJobRuns(params: { limit?: number; adminToken?: string } = {}) {
+    return fetchJson<JobRunsResponse>(`/api/jobs/runs${toQueryString({ limit: params.limit ?? 20 })}`, {
+        headers: adminHeaders(params.adminToken),
+    });
+}
+
+
+export function getJobRun(jobRunId: string, adminToken?: string) {
+    return fetchJson<JobRunDetailResponse>(`/api/jobs/runs/${encodeURIComponent(jobRunId)}`, {
+        headers: adminHeaders(adminToken),
+    });
+}
+
+
+export function runJob(payload: RunJobPayload, adminToken?: string) {
+    return fetchJson<RunJobResponse>("/api/jobs/run", {
+        method: "POST",
+        headers: adminHeaders(adminToken),
+        body: JSON.stringify(payload),
+    });
+}
+
+
+export function listSellerDrafts(params: { sellerId?: string; limit?: number } = {}) {
+    return fetchJson<SellerDraftsResponse>(
+        `/api/seller/drafts${toQueryString({
+            seller_id: params.sellerId,
+            limit: params.limit ?? 20,
+        })}`,
+    );
+}
+
+
+export function createSellerDraft(payload: SellerDraftPayload) {
+    return fetchJson<SellerDraftResponse>("/api/seller/drafts", {
+        method: "POST",
+        body: JSON.stringify(payload),
+    });
+}
+
+
+export function getSellerDraft(draftId: string) {
+    return fetchJson<SellerDraftResponse>(`/api/seller/drafts/${encodeURIComponent(draftId)}`);
+}
+
+
+export function validateSellerDraft(draftId: string) {
+    return fetchJson<SellerDraftResponse>(`/api/seller/drafts/${encodeURIComponent(draftId)}/validate`, {
+        method: "POST",
+    });
+}
+
+
+export function previewSellerDraftIndexing(draftId: string) {
+    return fetchJson<SellerPreviewResponse>(`/api/seller/drafts/${encodeURIComponent(draftId)}/index-preview`, {
+        method: "POST",
+    });
+}
+
+
+export function approveSellerDraftIndexing(params: { draftId: string; write: boolean; confirm: string; adminToken?: string }) {
+    return fetchJson<SellerApproveIndexResponse>(
+        `/api/seller/drafts/${encodeURIComponent(params.draftId)}/approve-index${toQueryString({
+            write: params.write,
+            confirm: params.confirm,
+        })}`,
+        { method: "POST", headers: adminHeaders(params.adminToken) },
+    );
+}
+
+
+export function previewSellerDraftEnrichment(draftId: string) {
+    return fetchJson<WebEnrichmentPreviewResponse>(`/api/enrichment/seller-drafts/${encodeURIComponent(draftId)}/preview`, {
+        method: "POST",
+    });
+}
+
+
+export function requestSellerDraftEnrichment(draftId: string, adminToken?: string) {
+    return fetchJson<WebEnrichmentRequestResponse>(`/api/enrichment/seller-drafts/${encodeURIComponent(draftId)}/request`, {
+        method: "POST",
+        headers: adminHeaders(adminToken),
+    });
+}
+
+
+export function getEnrichmentRequest(requestId: string) {
+    return fetchJson<WebEnrichmentDetailResponse>(`/api/enrichment/requests/${encodeURIComponent(requestId)}`);
+}
+
+
+export function applyEnrichmentRequest(params: { requestId: string; fieldsToApply: string[]; confirm: string; adminToken?: string }) {
+    return fetchJson<ApplyWebEnrichmentResponse>(
+        `/api/enrichment/requests/${encodeURIComponent(params.requestId)}/apply${toQueryString({ confirm: params.confirm })}`,
+        {
+            method: "POST",
+            headers: adminHeaders(params.adminToken),
+            body: JSON.stringify({ fields_to_apply: params.fieldsToApply }),
+        },
+    );
+}
+
+
 export function postEvent(payload: EventPayload) {
     return fetchJson<Record<string, unknown>>("/api/events", {
         method: "POST",
@@ -609,6 +956,7 @@ export function seedDemo(params: {
     itemsPerRequest?: number;
     seed?: number;
     write?: boolean;
+    confirm?: string;
     adminToken?: string;
 }) {
     return fetchJson<Record<string, unknown>>(
@@ -618,41 +966,45 @@ export function seedDemo(params: {
             items_per_request: params.itemsPerRequest ?? 10,
             seed: params.seed ?? 42,
             write: params.write ?? false,
+            confirm: params.confirm,
         })}`,
         { method: "POST", headers: adminHeaders(params.adminToken) },
     );
 }
 
 
-export function processEvents(params: { limit?: number; rebuildItemStats?: boolean; write?: boolean; adminToken?: string }) {
+export function processEvents(params: { limit?: number; rebuildItemStats?: boolean; write?: boolean; confirm?: string; adminToken?: string }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/process-events${toQueryString({
             limit: params.limit,
             rebuild_item_stats: params.rebuildItemStats ?? true,
             write: params.write ?? false,
+            confirm: params.confirm,
         })}`,
         { method: "POST", headers: adminHeaders(params.adminToken) },
     );
 }
 
 
-export function applyPendingBehavior(params: { maxEvents?: number; rebuildItemStats?: boolean; write?: boolean; adminToken?: string }) {
+export function applyPendingBehavior(params: { maxEvents?: number; rebuildItemStats?: boolean; write?: boolean; confirm?: string; adminToken?: string }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/apply-pending-behavior${toQueryString({
             max_events: params.maxEvents ?? 100,
             rebuild_item_stats: params.rebuildItemStats ?? true,
             write: params.write ?? false,
+            confirm: params.confirm,
         })}`,
         { method: "POST", headers: adminHeaders(params.adminToken) },
     );
 }
 
 
-export function rebuildProfiles(params: { limitUsers?: number; write?: boolean; adminToken?: string }) {
+export function rebuildProfiles(params: { limitUsers?: number; write?: boolean; confirm?: string; adminToken?: string }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/rebuild-profiles${toQueryString({
             limit_users: params.limitUsers,
             write: params.write ?? false,
+            confirm: params.confirm,
         })}`,
         { method: "POST", headers: adminHeaders(params.adminToken) },
     );
@@ -666,6 +1018,7 @@ export function rebuildCf(params: {
     topNeighborsPerItem?: number;
     inputPolicy?: "current_supported" | "qualified_deliberate";
     write?: boolean;
+    confirm?: string;
     adminToken?: string;
 }) {
     return fetchJson<Record<string, unknown>>(
@@ -676,6 +1029,7 @@ export function rebuildCf(params: {
             top_neighbors_per_item: params.topNeighborsPerItem ?? 50,
             input_policy: params.inputPolicy,
             write: params.write ?? false,
+            confirm: params.confirm,
         })}`,
         { method: "POST", headers: adminHeaders(params.adminToken) },
     );

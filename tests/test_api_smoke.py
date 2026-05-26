@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import create_app
@@ -50,6 +51,69 @@ def test_evaluation_latest_route_returns_empty_state(monkeypatch) -> None:
     assert payload["ok"] is True
     assert payload["empty"] is True
     assert payload["latest"] is None
+
+
+def test_seller_drafts_route_returns_disabled_state(monkeypatch) -> None:
+    import src.api.routes_seller as routes_seller
+
+    monkeypatch.setattr(
+        routes_seller,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "enable_seller_tools": False,
+                "seller_index_confirmation": "INDEX_SELLER_DRAFT",
+            },
+        )(),
+    )
+    client = TestClient(create_app())
+    response = client.get("/api/seller/drafts")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enabled"] is False
+
+
+def test_web_enrichment_preview_route_returns_disabled_state(monkeypatch) -> None:
+    import src.api.routes_enrichment as routes_enrichment
+
+    monkeypatch.setattr(
+        routes_enrichment,
+        "get_settings",
+        lambda: type(
+            "Settings",
+            (),
+            {
+                "enable_seller_tools": True,
+                "enable_web_enrichment": False,
+                "web_enrichment_provider": "tavily",
+                "web_enrichment_apply_confirmation": "APPLY_WEB_ENRICHMENT",
+            },
+        )(),
+    )
+    client = TestClient(create_app())
+    response = client.post("/api/enrichment/seller-drafts/draft_missing/preview")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enabled"] is False
+    assert payload["status"] == "disabled"
+
+
+def test_jobs_registry_route_requires_admin_and_returns_registry(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_JOB_TRIGGER_API", "false")
+    client = _admin_client(monkeypatch)
+    response = client.get("/api/jobs/registry", headers=_admin_headers())
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["trigger_api_enabled"] is False
+    assert any(job["job_type"] == "fusion_comparison_dry_run" for job in payload["jobs"])
 
 
 def test_demo_users_route_returns_users_and_personas(monkeypatch) -> None:
@@ -716,6 +780,23 @@ def test_demo_reset_write_clears_catalog_cache(monkeypatch) -> None:
     assert cache_clears == [True]
 
 
+def test_demo_seed_write_requires_confirmation(monkeypatch) -> None:
+    import src.api.routes_debug as routes_debug
+
+    def fail_load_candidates(**_kwargs):
+        raise AssertionError("seed plan should not be built without confirmation")
+
+    monkeypatch.setattr(routes_debug, "load_candidates_from_collections", fail_load_candidates)
+
+    client = _admin_client(monkeypatch)
+    response = client.post("/api/demo/seed?write=true", headers=_admin_headers())
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "confirmation_required"
+    assert detail["expected_confirm"] == "SEED_DEMO_BEHAVIOR"
+
+
 def test_demo_status_reports_counts_and_protected_collections(monkeypatch) -> None:
     class FakeCollection:
         def __init__(self, count):
@@ -748,6 +829,25 @@ def test_demo_status_reports_counts_and_protected_collections(monkeypatch) -> No
     assert "seeded/precomputed synthetic behavior" in payload["precomputed_cf_note"]
 
 
+@pytest.mark.parametrize(
+    ("path", "expected_confirm"),
+    [
+        ("/api/debug/process-events?write=true", "PROCESS_EVENTS_WRITE"),
+        ("/api/debug/apply-pending-behavior?write=true", "APPLY_PENDING_BEHAVIOR_WRITE"),
+        ("/api/debug/rebuild-profiles?write=true", "REBUILD_PROFILES_WRITE"),
+        ("/api/debug/rebuild-cf?write=true", "REBUILD_CF_WRITE"),
+    ],
+)
+def test_debug_write_endpoints_require_confirmation(monkeypatch, path: str, expected_confirm: str) -> None:
+    client = _admin_client(monkeypatch)
+    response = client.post(path, headers=_admin_headers())
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["error"] == "confirmation_required"
+    assert detail["expected_confirm"] == expected_confirm
+
+
 def test_process_events_full_write_without_limit_clears_catalog_cache(monkeypatch) -> None:
     import src.api.routes_debug as routes_debug
 
@@ -773,7 +873,10 @@ def test_process_events_full_write_without_limit_clears_catalog_cache(monkeypatc
     monkeypatch.setattr(routes_debug, "clear_catalog_snapshot_cache", lambda: cache_clears.append(True))
 
     client = _admin_client(monkeypatch)
-    response = client.post("/api/debug/process-events?rebuild_item_stats=true&write=true", headers=_admin_headers())
+    response = client.post(
+        "/api/debug/process-events?rebuild_item_stats=true&write=true&confirm=PROCESS_EVENTS_WRITE",
+        headers=_admin_headers(),
+    )
 
     assert response.status_code == 200
     assert build_calls[0]["limit_events"] is None
@@ -800,7 +903,7 @@ def test_process_events_rejects_any_limited_write_before_building_derived_data(m
 
     client = _admin_client(monkeypatch)
     response = client.post(
-        "/api/debug/process-events?limit=26&rebuild_item_stats=true&write=true",
+        "/api/debug/process-events?limit=26&rebuild_item_stats=true&write=true&confirm=PROCESS_EVENTS_WRITE",
         headers=_admin_headers(),
     )
 
@@ -837,7 +940,7 @@ def test_apply_pending_behavior_delegates_to_incremental_processor_and_clears_st
 
     client = _admin_client(monkeypatch)
     response = client.post(
-        "/api/debug/apply-pending-behavior?max_events=40&rebuild_item_stats=true&write=true",
+        "/api/debug/apply-pending-behavior?max_events=40&rebuild_item_stats=true&write=true&confirm=APPLY_PENDING_BEHAVIOR_WRITE",
         headers=_admin_headers(),
     )
 
@@ -865,8 +968,11 @@ def test_rebuild_cf_replaces_existing_edges_only_for_full_write(monkeypatch) -> 
     )
 
     client = _admin_client(monkeypatch)
-    full_response = client.post("/api/debug/rebuild-cf?write=true", headers=_admin_headers())
-    limited_response = client.post("/api/debug/rebuild-cf?write=true&limit_users=5", headers=_admin_headers())
+    full_response = client.post("/api/debug/rebuild-cf?write=true&confirm=REBUILD_CF_WRITE", headers=_admin_headers())
+    limited_response = client.post(
+        "/api/debug/rebuild-cf?write=true&limit_users=5&confirm=REBUILD_CF_WRITE",
+        headers=_admin_headers(),
+    )
 
     assert full_response.status_code == 200
     assert limited_response.status_code == 400
@@ -886,7 +992,10 @@ def test_rebuild_profiles_rejects_limited_write(monkeypatch) -> None:
     )
 
     client = _admin_client(monkeypatch)
-    response = client.post("/api/debug/rebuild-profiles?write=true&limit_users=5", headers=_admin_headers())
+    response = client.post(
+        "/api/debug/rebuild-profiles?write=true&limit_users=5&confirm=REBUILD_PROFILES_WRITE",
+        headers=_admin_headers(),
+    )
 
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "partial_profile_write_blocked"

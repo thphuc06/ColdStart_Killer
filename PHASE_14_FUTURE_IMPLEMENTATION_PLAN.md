@@ -19,7 +19,7 @@ Mục tiêu của future implementation:
 
 - Mở rộng UX onboarding, seller flow, observability và production hardening mà không phá demo-ready core.
 - Thêm cache/job/auth/enrichment theo feature flag và optional dependency.
-- Chứng minh thêm MongoDB Aggregation Pipeline cho CF mà không thay thế Python-side CF hiện tại.
+- Giữ CF hiện tại là Python-side behavior-derived CF từ `user_item_signals`; sau clarification từ giám khảo, MongoDB Aggregation Pipeline CF proof là optional research, không còn là blocker hoặc priority bắt buộc.
 - Giữ default search/recommendation path ổn định: `process_query()` + `run_search()` + personalized wrapper.
 
 Nguyên tắc không phá architecture:
@@ -38,13 +38,16 @@ Thứ tự batch khuyến nghị:
 2. 14.2 Query Embedding Cache.
 3. 14.3 Evaluation Runs Persistence.
 4. 14.4 Evaluation Dashboard UI.
-5. Cross-cutting Aggregation Pipeline CF Proof.
-6. 14.10 Fusion Comparison.
-7. 14.5 Seller Add Product Flow.
-8. 14.6 Tavily / Web Enrichment.
-9. 14.7 Async / Batch Workers.
-10. 14.8 Redis / Cache Layer.
-11. 14.9 Production Auth / Privacy.
+5. 14.10 Fusion Comparison.
+6. 14.5 Seller Add Product Flow.
+7. 14.6 Tavily / Web Enrichment.
+8. 14.7 Async / Batch Workers.
+9. 14.8 Redis / Cache Layer.
+10. 14.9 Production Auth / Privacy.
+
+Optional research only:
+
+- Cross-cutting Aggregation Pipeline CF Proof is deferred after judge clarification. The project can satisfy the challenge by combining MongoDB Vector Search for semantic similarity, MongoDB Aggregation Pipeline for retrieval/ranking/filtering/evaluation/debug processing, and Python-side behavior-derived CF for collaborative filtering.
 
 ## 1. Current Architecture Baseline
 
@@ -241,7 +244,7 @@ This table records the current repo names that future implementation prompts mus
 | Item-item CF edges | `item_item_cf_edges` | `src.mongodb.get_item_item_cf_edges_collection()` | Existing | No |
 | Item stats | `item_stats` | `src.mongodb.get_item_stats_collection()` | Existing | No |
 | Query embedding cache | `query_embedding_cache` | `src.mongodb.get_query_embedding_cache_collection()`, `QueryEmbeddingCacheDocument` | Collection/schema/index exist; runtime cache wrapper proposed | No |
-| Evaluation runs | `evaluation_runs` | `src.mongodb.get_evaluation_runs_collection()`, `EvaluationRunDocument`, `--write-evaluation-run` | Collection/schema/script flag exist; dashboard and confirmation hardening proposed | No |
+| Evaluation runs | `evaluation_runs` | `src.mongodb.get_evaluation_runs_collection()`, `EvaluationRunDocument`, `--write-evaluation-run --confirm EVAL_RUN_WRITE`, `/api/evaluation/runs/*` | Implemented in Batch 14.3/14.4 | Dashboard is read-only |
 | Vector index | `vector_index` | `src.search_pipeline.VECTOR_INDEX_NAME`, `VECTOR_INDEX_NAME` env | Existing | No |
 | Text index | `text_index` | `src.search_pipeline.TEXT_INDEX_NAME`, `TEXT_INDEX_NAME` env | Existing | No |
 | Algorithm version | `ALGORITHM_VERSION` | `src.config.Settings.algorithm_version` | Existing | No |
@@ -255,11 +258,11 @@ This table records the current repo names that future implementation prompts mus
 | Debug/demo API | `/api/debug/user/{user_id}`, `/api/demo/status`, `/api/demo/reset`, `/api/demo/seed`, rebuild endpoints | `src/api/routes_debug.py` | Existing | No |
 | Frontend pages | Login/home/search/detail/debug | `frontend/src/pages/ShopperLoginPage.tsx`, `HomePage.tsx`, `SearchPage.tsx`, `ItemDetailPage.tsx`, `DebugPage.tsx` | Existing | No |
 | Generated artifacts ignore | `frontend/node_modules/`, `frontend/dist/`, `*.tsbuildinfo`, generated Vite JS/DTS | `.gitignore` | Existing | No |
-| Seller drafts | `seller_product_drafts` | no getter/module yet | Proposed | Implement only in Batch 14.5 |
-| Web enrichment requests | `web_enrichment_requests` | no getter/module yet | Proposed | Implement only in Batch 14.6 |
-| Job runs | `job_runs` | no getter/module yet | Proposed | Implement only in Batch 14.7 |
-| Auth mode | `AUTH_MODE` | no current setting | Proposed | Implement only in Batch 14.9 |
-| Redis/cache backend | `CACHE_BACKEND`, `REDIS_URL` | no current setting/dependency | Proposed optional | Implement only in Batch 14.8 |
+| Seller drafts | `seller_product_drafts` | `src.mongodb.get_seller_product_drafts_collection()`, `src.seller.*`, `/api/seller/drafts` | Implemented in Batch 14.5 | Disabled by default with `ENABLE_SELLER_TOOLS=false` |
+| Web enrichment requests | `web_enrichment_requests` | `src.mongodb.get_web_enrichment_requests_collection()`, `src.enrichment.*`, `/api/enrichment/*` | Implemented in Batch 14.6 | Disabled by default with `ENABLE_WEB_ENRICHMENT=false` |
+| Job runs | `job_runs` | `src.mongodb.get_job_runs_collection()`, `src.jobs.*`, `/api/jobs/*`, Debug job panel | Implemented in Batch 14.7 | Lightweight registry/status layer only; no Celery/Redis |
+| Auth mode | `AUTH_MODE` | `src.auth.*`, `src.api.request_guards`, `.env.example` | Implemented in Batch 14.9 | Default `demo`; public reads stay open |
+| Redis/cache backend | `CACHE_BACKEND`, `REDIS_URL` | `src.cache.*`, read-only wrappers in evaluation/jobs API | Implemented in Batch 14.8 | Default `CACHE_BACKEND=none`; Redis optional/lazy |
 
 Important naming nuance:
 
@@ -349,13 +352,13 @@ Each batch must include:
 | 2 | 14.2 Query Embedding Cache | Latency/reliability improvement around query processing; existing collection/schema/getter already present | Medium | Stable `process_query()`, `query_embedding_cache` indexes |
 | 3 | 14.3 Evaluation Runs Persistence | Current script already supports explicit persistence; harden with API/read UI later | Low/Medium | Evaluation dry-run green, `evaluation_runs` indexes |
 | 4 | 14.4 Evaluation Dashboard UI | Read-only UI on top of persisted evaluation runs; safe if empty state exists | Low/Medium | Batch 14.3 or empty-state API |
-| 5 | Cross-cutting Aggregation Pipeline CF Proof | Adds MongoDB story value without replacing Python CF | Medium | `user_item_signals`, current CF tests |
-| 6 | 14.10 Fusion Comparison | Compares native-fusion experiments only: implemented `$rankFusion` path first, proposed `$scoreFusion` branch only if supported; default unchanged | Medium/High | Atlas tier support, current search pipeline tests |
-| 7 | 14.5 Seller Add Product Flow | Product expansion, but touches catalog/indexing boundary; do after low-risk observability | High | Auth/admin guard preferred, indexing preview |
-| 8 | 14.6 Tavily / Web Enrichment | External API/provenance; should attach to seller drafts after staging exists | High | Seller draft staging, API key, provenance schema |
-| 9 | 14.7 Async / Batch Workers | Operational hardening around existing scripts; avoid external worker first | Medium/High | Reset/rebuild scripts stable, job_runs schema |
-| 10 | 14.8 Redis / Cache Layer | Optional infra only after in-process cache semantics are clear | High | Cache abstraction, deployment plan |
-| 11 | 14.9 Production Auth / Privacy | Important before public deployment; may affect many endpoints | High | Role model, admin/seller flows, privacy policy |
+| 5 | 14.10 Fusion Comparison | Compares native-fusion experiments only: implemented `$rankFusion` path first, proposed `$scoreFusion` branch only if supported; default unchanged | Medium/High | Atlas tier support, current search pipeline tests |
+| 6 | 14.5 Seller Add Product Flow | Product expansion, but touches catalog/indexing boundary; do after low-risk observability | High | Auth/admin guard preferred, indexing preview |
+| 7 | 14.6 Tavily / Web Enrichment | External API/provenance; should attach to seller drafts after staging exists | High | Seller draft staging, API key, provenance schema |
+| 8 | 14.7 Async / Batch Workers | Operational hardening around existing scripts; avoid external worker first | Medium/High | Reset/rebuild scripts stable, job_runs schema |
+| 9 | 14.8 Redis / Cache Layer | Optional infra only after in-process cache semantics are clear | High | Cache abstraction, deployment plan |
+| 10 | 14.9 Production Auth / Privacy | Important before public deployment; may affect many endpoints | High | Role model, admin/seller flows, privacy policy |
+| Deferred | Cross-cutting Aggregation Pipeline CF Proof | Optional research only after judge clarification; not required for the current roadmap or Phase 14 completion | Medium | `user_item_signals`, current CF tests |
 
 ## 4. Batch 14.1 — Onboarding Polish
 
@@ -900,7 +903,7 @@ Persist compact evaluation run summaries in `evaluation_runs` safely and intenti
 - `scripts/run_personalization_evaluation.py` supports `--write-evaluation-run`.
 - `scripts/create_behavior_indexes.py` has `evaluation_runs` indexes.
 - Current `evaluation_runs` may be empty; this is acceptable.
-- Current `--write-evaluation-run` is explicit but does not currently require a confirmation string; this batch proposes adding confirmation before encouraging live persistence.
+- Batch 14.3 is implemented: `--write-evaluation-run` requires `--confirm EVAL_RUN_WRITE` before MongoDB persistence.
 
 ### Proposed design
 
@@ -913,7 +916,7 @@ run evaluation
   -> optionally persist compact evaluation_runs with --write-evaluation-run --confirm EVAL_RUN_WRITE
 ```
 
-If current script has `--write-evaluation-run` without confirmation, add a confirmation requirement before future live use.
+The confirmation requirement is now part of the implemented script contract.
 
 ### MongoDB collections/schema
 
@@ -1152,7 +1155,7 @@ Empty state:
   "ok": true,
   "latest": null,
   "empty": true,
-  "message": "No persisted evaluation runs yet. Use scripts/run_personalization_evaluation.py --write-evaluation-run after human approval."
+  "message": "No persisted evaluation runs yet. Use scripts/run_personalization_evaluation.py --write-evaluation-run --confirm EVAL_RUN_WRITE after human approval."
 }
 ```
 
@@ -1271,7 +1274,30 @@ Add a safe seller product draft flow that can preview validation, HyPE/propositi
 - `src/schemas.py` has item/retrieval-unit related models and seller-enriched fields such as `seller_confirmed`.
 - `src/indexing.py` handles existing indexing flow.
 - `items` and `retrieval_units` are protected core collections.
-- No production seller UI/API is implemented.
+- Batch 14.5 is implemented as an optional, disabled-by-default seller draft flow. It stages drafts in `seller_product_drafts`, previews text proposition retrieval units, and requires explicit confirmation before additive catalog writes.
+
+### Implementation status
+
+Implemented files:
+
+- `src/seller/schemas.py`
+- `src/seller/drafts.py`
+- `src/seller/indexing_preview.py`
+- `src/api/routes_seller.py`
+- `frontend/src/pages/SellerDraftPage.tsx`
+- `frontend/src/components/SellerDraftForm.tsx`
+- `frontend/src/components/IndexingPreview.tsx`
+- `tests/test_seller_drafts.py`
+- `tests/test_api_seller.py`
+
+Safety status:
+
+- `ENABLE_SELLER_TOOLS=false` by default.
+- Draft creation writes only `seller_product_drafts`.
+- Preview writes only preview metadata to the draft and does not write catalog collections.
+- Approve-index requires `write=true&confirm=INDEX_SELLER_DRAFT`.
+- Approve-index inserts additively into `items` and `retrieval_units`, refuses collisions, and does not touch `item_hype_profiles`, `user_profiles`, or `item_item_cf_edges`.
+- Current implementation creates seller-submitted text proposition units only. HyPE vectors and item profile rebuild remain separate reviewed steps.
 
 ### Proposed design
 
@@ -1315,10 +1341,11 @@ Draft schema:
   "validation_warnings": [],
   "proposed_item_id": "seller_demo_001_slug_hash",
   "indexing_preview": {
-    "hype_units": [],
-    "proposition_units": [],
-    "embedding_model": "BAAI/bge-m3",
-    "estimated_retrieval_units": 0
+    "retrieval_units": [],
+    "embedding_model": null,
+    "vector_units_generated": 0,
+    "estimated_retrieval_units": 0,
+    "preview_only": true
   },
   "source": {
     "type": "seller",
@@ -1538,9 +1565,9 @@ Optionally enrich seller drafts with external web context while preserving prove
 
 ### Current repo state
 
-- No Tavily/web enrichment provider is implemented.
-- Canonical plan classifies Tavily/web enrichment as Advanced/Future.
-- Seller flow is not production-ready; enrichment should attach to staged drafts, not catalog directly.
+- Batch 14.6 is implemented as an optional, disabled-by-default enrichment flow.
+- Tavily/web enrichment remains optional and provider-backed; tests use fake providers only.
+- Enrichment attaches to staged drafts and `web_enrichment_requests`, not catalog directly.
 
 ### Proposed design
 
@@ -1609,7 +1636,7 @@ Possible files:
   - `get_web_enrichment_requests_collection()`
 - `src/enrichment/providers.py` (new)
   - interface/protocol.
-- `src/enrichment/tavily_provider.py` (new)
+- `src/enrichment/tavily_client.py` (implemented)
   - lazy import/http client; no call if key missing.
 - `src/enrichment/service.py` (new)
   - dry-run and write modes.
@@ -1636,9 +1663,10 @@ UI:
 ### API changes
 
 ```text
-POST /api/enrichment/drafts/{draft_id}/preview
-POST /api/enrichment/drafts/{draft_id}/request
-POST /api/enrichment/drafts/{draft_id}/apply
+POST /api/enrichment/seller-drafts/{draft_id}/preview
+POST /api/enrichment/seller-drafts/{draft_id}/request
+GET  /api/enrichment/requests/{request_id}
+POST /api/enrichment/requests/{request_id}/apply
 ```
 
 `request` requires:
@@ -1655,14 +1683,16 @@ POST /api/enrichment/drafts/{draft_id}/apply
 ENABLE_WEB_ENRICHMENT=false
 WEB_ENRICHMENT_PROVIDER=tavily
 TAVILY_API_KEY=
+TAVILY_MAX_RESULTS=3
 WEB_ENRICHMENT_TIMEOUT_SECONDS=10
+WEB_ENRICHMENT_APPLY_CONFIRMATION=APPLY_WEB_ENRICHMENT
 ```
 
 Do not commit real API key.
 
 ### Tests to add/update
 
-- `tests/test_web_enrichment.py`
+- `tests/test_enrichment_service.py`
   - disabled without key.
   - fake provider returns suggestions.
   - provenance required.
@@ -1685,7 +1715,7 @@ Frontend:
 ### Commands to verify
 
 ```bash
-python -m pytest tests/test_web_enrichment.py tests/test_api_enrichment.py -q -p no:cacheprovider
+python -m pytest tests/test_enrichment_service.py tests/test_api_enrichment.py -q -p no:cacheprovider
 cd frontend
 npm run build
 npm run test:ui -- --run
@@ -1803,27 +1833,29 @@ Schema:
 
 ```json
 {
-  "job_run_id": "job_...",
-  "job_name": "build_user_profiles",
-  "mode": "dry_run|write",
-  "status": "queued|running|succeeded|failed|cancelled",
-  "requested_by": "admin|script",
-  "confirmation": "redacted_or_boolean",
+  "job_run_id": "jobrun_...",
+  "job_type": "fusion_comparison_dry_run",
+  "status": "queued|running|succeeded|failed|cancelled|dry_run_completed",
+  "dry_run": true,
+  "write_requested": false,
+  "confirm": "provided|null",
   "params": {},
   "summary": {},
   "error": null,
   "started_at": "...",
   "finished_at": null,
   "created_at": "...",
-  "updated_at": "..."
+  "created_by": "debug_admin|cli|system",
+  "source": "jobs_v1",
+  "version": "job_registry_v1"
 }
 ```
 
 Indexes:
 
 - unique `{ job_run_id: 1 }`
-- `{ job_name: 1, created_at: -1 }`
-- `{ status: 1, updated_at: -1 }`
+- `{ job_type: 1, created_at: -1 }`
+- `{ status: 1, created_at: -1 }`
 
 ### Backend changes
 
@@ -1876,9 +1908,10 @@ Write run requires:
 ### Config/env changes
 
 ```text
-ENABLE_JOB_RUNS=false
-JOB_RUNS_WRITE_CONFIRMATION=RUN_JOB_WRITE
-JOB_RUNS_MAX_LIMIT=5000
+ENABLE_JOB_RUNS=true
+ENABLE_JOB_TRIGGER_API=false
+JOB_RUN_CONFIRMATION=RUN_JOB
+JOB_RUN_MAX_HISTORY=50
 ```
 
 ### Tests to add/update
@@ -2027,7 +2060,10 @@ Possible files:
   - `redis_url`
   - `cache_version`
   - TTL settings.
-- `src/cache/backends.py` (new)
+- `src/cache/base.py` (new)
+- `src/cache/memory_cache.py` (new)
+- `src/cache/redis_cache.py` (new)
+- `src/cache/service.py` (new)
 - `src/cache/keys.py` (new)
 - `src/cache/__init__.py`
 - Integration points only after tests:
@@ -2055,19 +2091,24 @@ POST /api/debug/cache/clear
 
 ```text
 CACHE_BACKEND=none
-CACHE_VERSION=cache_v1
-REDIS_URL=
 CACHE_DEFAULT_TTL_SECONDS=300
+CACHE_KEY_VERSION=v1
+REDIS_URL=
+REDIS_SOCKET_TIMEOUT_SECONDS=2
+REDIS_CONNECT_TIMEOUT_SECONDS=2
+CACHE_DEBUG_HEADERS=false
 ```
 
 ### Tests to add/update
 
-- `tests/test_cache_backend.py`
-  - none backend always misses.
-  - memory backend set/get/delete/TTL.
-  - redis backend skipped if dependency/config absent.
-  - versioned keys.
-  - app works with missing Redis package.
+- `tests/test_cache_keys.py`
+  - deterministic/versioned keys and secret redaction.
+- `tests/test_memory_cache.py`
+  - memory backend set/get/delete/TTL/namespace clear.
+- `tests/test_cache_service.py`
+  - none/memory/redis fallback and fail-open compute behavior.
+- `tests/test_api_cache_behavior.py`
+  - evaluation/jobs API cache behavior and no admin token in keys.
 - integration tests only for one safe call path.
 
 ### Docs to update
@@ -2079,7 +2120,7 @@ CACHE_DEFAULT_TTL_SECONDS=300
 ### Commands to verify
 
 ```bash
-python -m pytest tests/test_cache_backend.py -q -p no:cacheprovider
+python -m pytest tests/test_cache_keys.py tests/test_memory_cache.py tests/test_cache_service.py tests/test_api_cache_behavior.py -q -p no:cacheprovider
 python -m pytest tests/test_api_smoke.py tests/test_pipeline.py -q -p no:cacheprovider
 ```
 
@@ -2097,7 +2138,7 @@ python -m pytest tests/test_api_smoke.py tests/test_pipeline.py -q -p no:cachepr
 | Risk | Mitigation |
 |---|---|
 | Redis dependency breaks teammate machines | optional lazy import; default none |
-| Stale cache after ranking/version change | versioned keys include `CACHE_VERSION` and algorithm/ranking when relevant |
+| Stale cache after ranking/version change | versioned keys include `CACHE_KEY_VERSION`; keep personalized search/feed uncached until a stricter invalidation design exists |
 | Cache hides live DB issue | disable flag and tests for none backend |
 | Overbroad clear endpoint | defer API clear until auth batch |
 
@@ -2115,7 +2156,10 @@ Implement Phase 14.8 Redis/Cache Layer foundation only.
 Allowed files:
 - src/config.py
 - src/cache/*
-- tests/test_cache_backend.py
+- tests/test_cache_keys.py
+- tests/test_memory_cache.py
+- tests/test_cache_service.py
+- tests/test_api_cache_behavior.py
 - optional safe integration file only after tests
 - .env.example, RUNBOOK.md, TESTING.md
 
@@ -2149,9 +2193,10 @@ Add role-based guards and privacy masking for production-like usage while preser
 ### Current repo state
 
 - `users` schema includes privacy flags.
-- API currently behaves as local/demo system.
-- Debug/admin endpoints exist and can trigger writes when flags/confirmations are provided.
-- No production auth is implemented.
+- Batch 14.9 is implemented as a lightweight guard layer, not full OAuth/session auth.
+- Debug/admin endpoints are protected through `src.api.request_guards.require_admin_token`.
+- Seller approve-index and enrichment request/apply require admin/seller auth before write-capable work.
+- Public shopper reads remain open.
 
 ### Proposed design
 
@@ -2167,11 +2212,11 @@ Roles:
 - `admin`
 - `seller`
 
-First pass:
+Implemented first pass:
 
-- Demo mode header/token guard for admin endpoints.
+- Demo mode header/token guard for admin endpoints, with Bearer support and `X-Admin-Token` compatibility.
 - No hardcoded secret.
-- Production mode rejects missing/invalid role credentials.
+- Production/demo modes reject missing/invalid role credentials on protected endpoints.
 - Privacy masking for debug user data.
 
 ### MongoDB collections/schema
@@ -2188,25 +2233,30 @@ Do not implement full user auth database in first pass unless necessary.
 
 ### Backend changes
 
-Possible files:
+Implemented files:
 
 - `src/config.py`
   - `auth_mode`
-  - `demo_admin_enabled`
-  - `admin_token_hash`
-  - `seller_tools_auth_required`
-- `src/api/auth.py` (new)
+  - `admin_token`
+  - `seller_token`
+  - `auth_require_admin_for_debug`
+  - `auth_require_admin_for_writes`
+  - `privacy_mask_debug_data`
+- `src/auth/dependencies.py`
   - dependency helpers:
     - `require_admin`
-    - `require_seller`
-    - `current_demo_user`
-  - token hash check.
+    - `require_admin_for_write`
+    - `require_seller_or_admin`
+- `src/auth/privacy.py`
+  - privacy masking helpers.
+- `src/api/request_guards.py`
+  - compatibility bridge for existing debug/demo/job guards.
 - `src/api/routes_debug.py`
-  - protect write/debug endpoints.
+  - protect write/debug endpoints and sanitize debug user payloads.
 - `src/api/routes_seller.py`
-  - seller role guard if seller batch exists.
-- `src/api/routes_users.py`
-  - respect privacy flags.
+  - seller/admin guard for approve-index.
+- `src/api/routes_enrichment.py`
+  - seller/admin guard for request/apply.
 
 Never hardcode token in source.
 
@@ -2237,22 +2287,27 @@ Protect:
 ### Config/env changes
 
 ```text
-AUTH_MODE=disabled
-DEMO_ADMIN_ENABLED=true
-ADMIN_TOKEN_HASH=
-SELLER_TOOLS_AUTH_REQUIRED=true
+AUTH_MODE=demo
+ADMIN_TOKEN=
+SELLER_TOKEN=
+AUTH_REQUIRE_ADMIN_FOR_DEBUG=true
+AUTH_REQUIRE_ADMIN_FOR_WRITES=true
 PRIVACY_MASK_DEBUG_DATA=true
 ```
 
 ### Tests to add/update
 
-- `tests/test_api_auth.py`
-  - disabled mode allows existing demo tests.
-  - production mode rejects debug write without token.
-  - admin token hash passes.
+- `tests/test_auth_dependencies.py`
+  - disabled mode allows admin dependency.
+  - demo/production mode rejects protected endpoints without token.
+  - bearer/admin/seller tokens pass.
+- `tests/test_api_auth_guards.py`
+  - public search/feed/items remain open.
+  - debug, seller approve-index, enrichment request/apply, and job trigger are protected.
+- `tests/test_privacy_masking.py`
   - no raw token printed.
   - privacy masking hides raw event/profile details when requested.
-- update API smoke to account for default disabled mode.
+- update API smoke to account for default demo mode.
 
 Frontend:
 
@@ -2268,7 +2323,8 @@ Frontend:
 ### Commands to verify
 
 ```bash
-python -m pytest tests/test_api_auth.py tests/test_api_smoke.py -q -p no:cacheprovider
+python -m pytest tests/test_auth_dependencies.py tests/test_api_auth_guards.py tests/test_privacy_masking.py -q -p no:cacheprovider
+python -m pytest tests/test_api_smoke.py -q -p no:cacheprovider
 python -m pytest tests/test_demo_reset.py tests/test_reset_demo_behavior_data.py -q -p no:cacheprovider
 cd frontend
 npm run build
@@ -2288,8 +2344,8 @@ npm run test:ui -- --run
 
 | Risk | Mitigation |
 |---|---|
-| Auth breaks local demo | default `AUTH_MODE=disabled`; tests for demo mode |
-| Secret leaks | only token hash env; never print token |
+| Auth breaks local demo | default `AUTH_MODE=demo`, public reads open, local emergency rollback `AUTH_MODE=disabled` |
+| Secret leaks | token env only; never print token |
 | Debug UI unusable | clear locked state and docs |
 | Incomplete production security | label as guard, not full enterprise auth |
 
@@ -2306,7 +2362,8 @@ Implement Phase 14.9 Production Auth/Privacy guard only.
 
 Allowed files:
 - src/config.py
-- src/api/auth.py
+- src/auth/*.py
+- src/api/request_guards.py
 - src/api/routes_debug.py
 - src/api/routes_users.py if privacy masking needed
 - seller route files if already implemented
@@ -2328,6 +2385,7 @@ Requirements:
 - AUTH_MODE disabled/demo/production.
 - Default local demo still works.
 - Protect debug/write endpoints in production mode.
+- Protect seller approve-index, enrichment request/apply and job trigger API.
 - No secret printed.
 - Privacy masking for debug data.
 - Add tests/docs.
@@ -2353,6 +2411,19 @@ Compare native `$rankFusion` / `$scoreFusion` against the current `$unionWith` +
 - Canonical plan says `$rankFusion` / `$scoreFusion` is future comparison only.
 - Current repo has an implemented `$rankFusion` pipeline builder. It does **not** have an implemented `$scoreFusion` branch.
 
+### Implementation status
+
+Batch 14.10 is implemented as a read-only comparison utility:
+
+- `src/evaluation/fusion_comparison.py`
+- `scripts/compare_fusion_strategies.py`
+- `tests/test_fusion_comparison.py`
+
+It compares `unionWith` and `rankFusion` when supported, reports `scoreFusion` as `not_implemented`, and does not change production defaults.
+The default CLI smoke uses a catalog-backed fixture from `item_hype_profiles`
+to avoid loading the local embedding model; `--live-query-processing` explicitly
+switches to `process_query()`.
+
 ### Proposed design
 
 Add comparison script/report:
@@ -2361,7 +2432,7 @@ Add comparison script/report:
 for each query
   -> run unionWith mode
   -> run rankFusion mode if supported by current code/Atlas tier
-  -> optionally add a proposed scoreFusion branch only in this comparison batch, never as default
+  -> report scoreFusion as proposed/not implemented unless a future branch explicitly adds support
   -> compare latency, top-k overlap, score distribution, explanation completeness
   -> write local report only if --write-artifacts
   -> no MongoDB writes
@@ -2434,7 +2505,8 @@ Can be CLI-only instead of env.
 
 ```bash
 python -m pytest tests/test_fusion_comparison.py tests/test_pipeline.py -q -p no:cacheprovider
-python scripts/compare_fusion_strategies.py --dry-run --limit 5
+python scripts/compare_fusion_strategies.py --dry-run
+python scripts/compare_fusion_strategies.py --dry-run --live-query-processing  # optional, exercises process_query()
 ```
 
 ### Acceptance criteria
@@ -2486,17 +2558,24 @@ Requirements:
 - Add tests/docs.
 ```
 
-## 14. Cross-cutting — Aggregation Pipeline CF Proof
+## 14. Cross-cutting — Aggregation Pipeline CF Proof (Deferred / Optional Research)
+
+Judge clarification update:
+
+- Aggregation Pipeline and Collaborative Filtering can be separate components.
+- Current Python-side item-item CF from `user_item_signals` remains valid.
+- MongoDB Aggregation Pipeline remains important in retrieval/ranking/filtering/evaluation/debug processing.
+- This proof is no longer required for current Phase 14 completion and should not be treated as a blocker.
 
 ### Goal
 
-Add a proof path for item-item collaborative filtering built with MongoDB Aggregation Pipeline, without removing or replacing the current Python-side CF builder.
+Optional future research: add a proof path for item-item collaborative filtering built with MongoDB Aggregation Pipeline, without removing or replacing the current Python-side CF builder.
 
 ### Why it matters
 
 - Current true CF is implemented in `src/recommendation/item_item_cf.py` from `user_item_signals`.
-- If judges expect “Aggregation Pipeline for CF,” this batch creates a clear MongoDB-native proof.
-- It should be comparison/proof first, not default production replacement.
+- After judge clarification, this is not needed for the current challenge requirement.
+- If revisited later, it should be comparison/proof first, not default production replacement.
 
 ### Current state
 
@@ -2688,10 +2767,14 @@ without human confirmation.
 - Delete/ignore preview collection only after human confirmation if ever created.
 - Existing `item_item_cf_edges` and Python builder stay unchanged.
 
-### AI coding prompt for implementation
+### AI coding prompt for optional research only
+
+Do not use this prompt as part of the current Phase 14 priority path. Use it
+only if a human explicitly reopens the optional MongoDB-native CF research
+track after the judge clarification.
 
 ```text
-Implement Cross-cutting Aggregation Pipeline CF Proof only.
+Implement optional Cross-cutting Aggregation Pipeline CF Proof research only.
 
 Allowed files:
 - src/recommendation/item_item_cf_aggregation.py
@@ -2985,7 +3068,7 @@ Phase 14 Future Improvements can be called 100% complete when:
 - Redis/cache layer is optional and app works without Redis.
 - Auth/privacy guards protect debug/write endpoints in production mode.
 - Fusion comparison does not change default `$unionWith`/RRF behavior.
-- Aggregation Pipeline CF proof reads from `user_item_signals` and does not replace Python-side CF by default.
+- Optional Aggregation Pipeline CF proof remains deferred and is not a Phase 14 completion blocker.
 - Backend targeted tests pass.
 - Frontend build/tests pass for UI batches.
 - Docs and `.env.example` are current.
@@ -3011,8 +3094,8 @@ Why:
 
 ### Sprint 2 — Proof / Evaluation Enhancements
 
-1. Cross-cutting Aggregation Pipeline CF Proof.
-2. Batch 14.10 Fusion Comparison.
+1. Batch 14.10 Fusion Comparison.
+2. Optional later research: Cross-cutting Aggregation Pipeline CF Proof, only if the team wants an additional MongoDB-native CF proof after the judge clarification.
 
 Why:
 
