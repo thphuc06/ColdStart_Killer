@@ -84,34 +84,6 @@ Recommended browser demo flow:
 8. Run a search query and verify query-first results with personalized reranking.
 9. Open Debug/Admin and verify lineage, demo counts, protected collections, and reset warnings.
 
-## Knowledge Graph Sharing (Team)
-
-This repo includes an Understand Anything knowledge graph for faster architecture Q&A and onboarding.
-
-Keep these files in git so teammates can pull and use the same graph snapshot:
-
-- `.understand-anything/knowledge-graph.json`
-- `.understand-anything/meta.json`
-- `.understand-anything/fingerprints.json`
-- `.understand-anything/.understandignore` (optional but recommended)
-
-Do not commit temporary analysis artifacts:
-
-- `.understand-anything/intermediate/`
-- `.understand-anything/tmp/`
-
-After pull, teammates can open the graph dashboard from VS Code Copilot Chat:
-
-```text
-/understand-dashboard
-```
-
-Important notes:
-
-- The dashboard URL token is local to each machine/session. Do not reuse another person's token URL.
-- `/understand-chat` can use `.understand-anything/knowledge-graph.json` for graph-aware codebase Q&A.
-- If code changed significantly after the stored `meta.json` commit, re-run `/understand` to refresh the graph.
-
 Demo safety commands:
 
 ```bash

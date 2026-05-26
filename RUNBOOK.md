@@ -86,36 +86,6 @@ Important CF wording:
 - `item_semantic_neighbors` is semantic similarity, not CF.
 - True CF is `item_item_cf_edges` built from `user_item_signals`.
 
-## Knowledge Graph Operations
-
-The repository may include a prebuilt knowledge graph for architecture exploration.
-
-Expected shared files:
-
-- `.understand-anything/knowledge-graph.json`
-- `.understand-anything/meta.json`
-- `.understand-anything/fingerprints.json`
-
-After pull, open the graph dashboard from VS Code Copilot Chat:
-
-```text
-/understand-dashboard
-```
-
-Graph-assisted Q&A:
-
-```text
-/understand-chat <your question>
-```
-
-Checks before using the graph:
-
-1. Confirm `.understand-anything/knowledge-graph.json` exists.
-2. Confirm the commit in `.understand-anything/meta.json` is close to your current checkout.
-3. If the codebase has changed materially, re-run `/understand` to regenerate graph artifacts.
-
-Do not rely on tokenized dashboard URLs from another machine. Each run generates a local URL with a machine-local token.
-
 ## Demo Reset and Recovery
 
 Dry-run reset commands are safe and should be run before any live reset:

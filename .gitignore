@@ -48,7 +48,3 @@ frontend/vite.config.d.ts
 
 # Local VS Code MCP config
 .vscode/
-
-# Understand Anything temporary artifacts (keep core graph files tracked)
-.understand-anything/intermediate/
-.understand-anything/tmp/
