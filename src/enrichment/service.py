@@ -3,8 +3,11 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import os
+import re
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 from src.config import PROJECT_ROOT, Settings, get_settings
 from src.enrichment.providers import ProviderConfigurationError, WebEnrichmentProvider
@@ -17,12 +20,20 @@ from src.utils import utc_now_iso
 
 COMPACT_RESULT_LIMIT = 10
 PRODUCT_CONTEXT_MAX_CHARS = 9_000
+DEFAULT_QUERY_LLM_TIMEOUT_SECONDS = 30
+DEFAULT_SYNTHESIS_LLM_TIMEOUT_SECONDS = 180
+DEFAULT_MAX_EVIDENCE_FOR_SYNTHESIS = 3
+DEFAULT_QUERY_MAX_TOKENS = 500
+DEFAULT_SYNTHESIS_MAX_TOKENS = 900
+DEFAULT_REQUEST_HARD_TIMEOUT_SECONDS = 240
+DEFAULT_BLOCKED_EVIDENCE_DOMAINS = "youtube.com,youtu.be,tiktok.com,facebook.com,instagram.com"
 QUERY_PROMPT_VERSION = "seller_web_query_plan_v1"
-SYNTHESIS_PROMPT_VERSION = "seller_web_synthesis_v1"
+SYNTHESIS_PROMPT_VERSION = "seller_web_synthesis_v2"
 QUERY_PROMPT_PATH = PROJECT_ROOT / "prompts" / "plan_enrichment_queries.txt"
 SYNTHESIS_PROMPT_PATH = PROJECT_ROOT / "prompts" / "synthesize_web_enrichment.txt"
 _MISSING = object()
 _INDEXABLE_ENRICHMENT_FIELDS = {"description", "brand", "features", "attributes.web_evidence_summary"}
+_BACKGROUND_ENRICHMENT_TASKS: set[asyncio.Task[Any]] = set()
 _QUERY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -146,6 +157,9 @@ def build_provider(settings: Settings | None = None) -> WebEnrichmentProvider:
     return TavilyProvider(
         api_key=active_settings.tavily_api_key,
         timeout_seconds=active_settings.web_enrichment_timeout_seconds,
+        search_depth=getattr(active_settings, "web_enrichment_search_depth", "basic"),
+        include_raw_content=bool(getattr(active_settings, "web_enrichment_include_raw_content", False)),
+        snippet_char_limit=int(getattr(active_settings, "web_enrichment_snippet_char_limit", 1200) or 1200),
     )
 
 
@@ -217,6 +231,82 @@ def normalize_search_results(results: list[WebSearchResult | dict[str, Any]]) ->
     return normalized
 
 
+def _tokenize(value: str) -> set[str]:
+    return {token for token in re.findall(r"\w+", value.lower()) if len(token) >= 3}
+
+
+def _env_domain_suffixes(name: str, default: str) -> tuple[str, ...]:
+    raw = os.getenv(name, default)
+    if raw is None:
+        return ()
+    domains: list[str] = []
+    for value in str(raw).replace(";", ",").split(","):
+        normalized = value.strip().lower().lstrip("*.")
+        if normalized:
+            domains.append(normalized)
+    return tuple(dict.fromkeys(domains))
+
+
+def _url_hostname(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    parsed = urlparse(value if "://" in value else f"https://{value}")
+    return str(parsed.hostname or "").lower()
+
+
+def _host_matches_suffixes(hostname: str, suffixes: tuple[str, ...]) -> bool:
+    if not hostname or not suffixes:
+        return False
+    return any(hostname == suffix or hostname.endswith(f".{suffix}") for suffix in suffixes)
+
+
+def select_relevant_evidence(draft: dict[str, Any], evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    anchor_tokens: set[str] = set()
+    anchor_tokens.update(_tokenize(str(draft.get("title") or "")))
+    anchor_tokens.update(_tokenize(str(draft.get("brand") or "")))
+    anchor_tokens.update(_tokenize(str(draft.get("category_id") or "")))
+    for feature in draft.get("features") or []:
+        anchor_tokens.update(_tokenize(str(feature)))
+
+    blocked_domains = _env_domain_suffixes("WEB_ENRICHMENT_BLOCKED_DOMAINS", DEFAULT_BLOCKED_EVIDENCE_DOMAINS)
+    preferred_domains = _env_domain_suffixes("WEB_ENRICHMENT_PREFERRED_DOMAINS", "")
+
+    scored: list[tuple[float, dict[str, Any], int, bool]] = []
+    for result in evidence:
+        text = " ".join(
+            [
+                str(result.get("title") or ""),
+                str(result.get("snippet") or ""),
+                str(result.get("url") or ""),
+            ]
+        )
+        tokens = _tokenize(text)
+        overlap = len(tokens & anchor_tokens) if anchor_tokens else 0
+        base_score = result.get("score")
+        try:
+            numeric_score = float(base_score) if base_score is not None else 0.0
+        except (TypeError, ValueError):
+            numeric_score = 0.0
+        hostname = _url_hostname(str(result.get("url") or ""))
+        is_blocked = _host_matches_suffixes(hostname, blocked_domains)
+        is_preferred = _host_matches_suffixes(hostname, preferred_domains)
+        score = overlap * 1.5 + numeric_score
+        if is_preferred:
+            score += 1.5
+        if is_blocked:
+            score -= 2.0
+        scored.append((score, result, overlap, is_blocked))
+
+    scored.sort(key=lambda item: item[0], reverse=True)
+    non_blocked = [item for item in scored if not item[3]]
+    candidates = non_blocked if non_blocked else scored
+    overlapped = [item[1] for item in candidates if item[2] > 0]
+    if overlapped:
+        return overlapped[:COMPACT_RESULT_LIMIT]
+    return [item[1] for item in candidates[:COMPACT_RESULT_LIMIT]]
+
+
 def build_suggested_fields_from_results(results: list[dict[str, Any]], draft: dict[str, Any]) -> dict[str, dict[str, Any]]:
     evidenced = [result for result in results if result.get("url") and result.get("snippet")]
     if not evidenced:
@@ -261,6 +351,94 @@ def _read_prompt(path: Any) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _env_bounded_int(name: str, default: int, *, min_value: int, max_value: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(min_value, min(max_value, value))
+
+
+def _query_llm_timeout_seconds() -> int:
+    return _env_bounded_int(
+        "WEB_ENRICHMENT_QUERY_LLM_TIMEOUT_SECONDS",
+        DEFAULT_QUERY_LLM_TIMEOUT_SECONDS,
+        min_value=5,
+        max_value=600,
+    )
+
+
+def _synthesis_llm_timeout_seconds() -> int:
+    return _env_bounded_int(
+        "WEB_ENRICHMENT_SYNTHESIS_LLM_TIMEOUT_SECONDS",
+        DEFAULT_SYNTHESIS_LLM_TIMEOUT_SECONDS,
+        min_value=10,
+        max_value=1200,
+    )
+
+
+def _max_evidence_for_synthesis() -> int:
+    return _env_bounded_int(
+        "WEB_ENRICHMENT_MAX_EVIDENCE",
+        DEFAULT_MAX_EVIDENCE_FOR_SYNTHESIS,
+        min_value=1,
+        max_value=COMPACT_RESULT_LIMIT,
+    )
+
+
+def _query_llm_max_tokens() -> int:
+    return _env_bounded_int(
+        "WEB_ENRICHMENT_QUERY_MAX_TOKENS",
+        DEFAULT_QUERY_MAX_TOKENS,
+        min_value=100,
+        max_value=4000,
+    )
+
+
+def _synthesis_llm_max_tokens() -> int:
+    return _env_bounded_int(
+        "WEB_ENRICHMENT_SYNTHESIS_MAX_TOKENS",
+        DEFAULT_SYNTHESIS_MAX_TOKENS,
+        min_value=200,
+        max_value=6000,
+    )
+
+
+def _request_hard_timeout_seconds() -> int:
+    return _env_bounded_int(
+        "WEB_ENRICHMENT_REQUEST_HARD_TIMEOUT_SECONDS",
+        DEFAULT_REQUEST_HARD_TIMEOUT_SECONDS,
+        min_value=60,
+        max_value=3600,
+    )
+
+
+def _build_synthesis_fallback(
+    draft: dict[str, Any],
+    evidence: list[dict[str, Any]],
+    *,
+    settings: Settings,
+    warning: str,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    suggestions = build_suggested_fields_from_results(evidence, draft)
+    return (
+        {
+            "model": getattr(settings, "ollama_model", "qwen3:8b"),
+            "prompt_version": SYNTHESIS_PROMPT_VERSION,
+            "synthesis_source": "fallback_snippet_summary",
+            "quality": "low",
+            "enriched_description": suggestions.get("description", {}).get("value", ""),
+            "key_facts": [],
+            "unsupported_claims": [],
+            "warnings": [warning],
+        },
+        suggestions,
+    )
+
+
 def _fallback_query_plan(draft: dict[str, Any], settings: Settings) -> dict[str, Any]:
     return {
         "model": getattr(settings, "ollama_model", "qwen3:8b"),
@@ -277,7 +455,7 @@ def plan_enrichment_queries(draft: dict[str, Any], *, settings: Settings) -> dic
         json.dumps(context, ensure_ascii=True, sort_keys=True),
     )
     try:
-        raw = call_qwen(prompt, max_tokens=500, temperature=0.1, format_schema=_QUERY_SCHEMA)
+        raw = call_qwen(prompt, max_tokens=_query_llm_max_tokens(), temperature=0.1, format_schema=_QUERY_SCHEMA)
         payload = extract_json_from_text(raw)
         raw_queries = payload.get("queries") if isinstance(payload, dict) else None
         if not isinstance(raw_queries, list):
@@ -310,9 +488,15 @@ async def _run_searches(
     *,
     max_results: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    search_callable = getattr(provider, "search", None)
+    search_is_async = bool(search_callable) and inspect.iscoroutinefunction(search_callable)
+
     async def run_one(query_item: dict[str, str]) -> dict[str, Any]:
         try:
-            response = provider.search(query_item["query"], max_results=max_results)
+            if search_is_async:
+                response = provider.search(query_item["query"], max_results=max_results)
+            else:
+                response = await asyncio.to_thread(provider.search, query_item["query"], max_results=max_results)
             results = await response if inspect.isawaitable(response) else response
             return {**query_item, "status": "completed", "results": normalize_search_results(results), "error": None}
         except Exception as exc:
@@ -364,7 +548,7 @@ def synthesize_enrichment(
     )
     allowed_urls = {str(result["url"]) for result in evidence if result.get("url")}
     try:
-        raw = call_qwen(prompt, max_tokens=900, temperature=0.1, format_schema=_SYNTHESIS_SCHEMA)
+        raw = call_qwen(prompt, max_tokens=_synthesis_llm_max_tokens(), temperature=0.1, format_schema=_SYNTHESIS_SCHEMA)
         payload = extract_json_from_text(raw)
         if not isinstance(payload, dict):
             raise ValueError("synthesis output is not an object")
@@ -473,6 +657,200 @@ def preview_seller_draft_enrichment(
     }
 
 
+def _track_background_task(task: asyncio.Task[Any]) -> None:
+    _BACKGROUND_ENRICHMENT_TASKS.add(task)
+
+    def _cleanup(done_task: asyncio.Task[Any]) -> None:
+        _BACKGROUND_ENRICHMENT_TASKS.discard(done_task)
+        try:
+            done_task.result()
+        except Exception:
+            # The request record already captures failures; avoid bubbling task errors.
+            return
+
+    task.add_done_callback(_cleanup)
+
+
+def _build_queued_request_doc(
+    *,
+    request_id: str,
+    draft: dict[str, Any],
+    provider_name: str,
+    settings: Settings,
+) -> dict[str, Any]:
+    now = utc_now_iso()
+    return {
+        "request_id": request_id,
+        "draft_id": str(draft.get("draft_id") or ""),
+        "seller_id": draft.get("seller_id"),
+        "provider": provider_name,
+        "query": build_enrichment_query_from_draft(draft),
+        "query_plan": {
+            "model": getattr(settings, "ollama_model", "qwen3:8b"),
+            "prompt_version": QUERY_PROMPT_VERSION,
+            "planner_source": "pending",
+            "queries": [],
+        },
+        "search_runs": [],
+        "evidence": [],
+        "synthesis": {
+            "model": getattr(settings, "ollama_model", "qwen3:8b"),
+            "prompt_version": SYNTHESIS_PROMPT_VERSION,
+            "synthesis_source": "pending",
+            "quality": "low",
+            "enriched_description": "",
+            "key_facts": [],
+            "unsupported_claims": [],
+            "warnings": [],
+        },
+        "status": "queued",
+        "results": [],
+        "suggested_fields": {},
+        "applied_fields": [],
+        "created_at": now,
+        "updated_at": now,
+        "error": None,
+    }
+
+
+async def _complete_request_web_enrichment(
+    request_doc: dict[str, Any],
+    *,
+    draft: dict[str, Any],
+    drafts_collection: Any,
+    requests_collection: Any,
+    settings: Settings,
+    provider: WebEnrichmentProvider,
+) -> dict[str, Any]:
+    request_id = str(request_doc["request_id"])
+    draft_id = str(request_doc["draft_id"])
+    running_at = utc_now_iso()
+    requests_collection.update_one(
+        {"request_id": request_id},
+        {"$set": {"status": "running", "updated_at": running_at}},
+    )
+    drafts_collection.update_one(
+        {"draft_id": draft_id},
+        {
+            "$set": {
+                "enrichment.latest_request_id": request_id,
+                "enrichment.status": "running",
+                "enrichment.provider": request_doc.get("provider"),
+                "enrichment.updated_at": running_at,
+                "updated_at": running_at,
+            }
+        },
+    )
+
+    try:
+        enrichment_warnings: list[str] = []
+        try:
+            query_plan = await asyncio.wait_for(
+                asyncio.to_thread(plan_enrichment_queries, draft, settings=settings),
+                timeout=_query_llm_timeout_seconds(),
+            )
+        except asyncio.TimeoutError:
+            query_plan = _fallback_query_plan(draft, settings)
+            enrichment_warnings.append("Query planner timed out; fallback template query was used.")
+
+        search_runs, evidence, search_errors = await _run_searches(
+            provider,
+            query_plan,
+            max_results=settings.tavily_max_results,
+        )
+        evidence = select_relevant_evidence(draft, evidence)[: _max_evidence_for_synthesis()]
+        status = "completed" if evidence else "failed"
+
+        try:
+            synthesis, suggestions = await asyncio.wait_for(
+                asyncio.to_thread(synthesize_enrichment, draft, evidence, settings=settings),
+                timeout=_synthesis_llm_timeout_seconds(),
+            )
+        except asyncio.TimeoutError:
+            synthesis, suggestions = _build_synthesis_fallback(
+                draft,
+                evidence,
+                settings=settings,
+                warning="LLM synthesis timed out; fallback snippet-derived summary was used.",
+            )
+            enrichment_warnings.append("LLM synthesis timed out; fallback suggestions were used.")
+
+        error = "; ".join(search_errors) if status == "failed" and search_errors else None
+        if enrichment_warnings:
+            error = "; ".join(part for part in [error, *enrichment_warnings] if part)
+
+        finished_at = utc_now_iso()
+        query_value = query_plan["queries"][0]["query"] if query_plan.get("queries") else request_doc.get("query", "")
+        final_request_doc = {
+            **request_doc,
+            "query": query_value,
+            "query_plan": query_plan,
+            "search_runs": search_runs,
+            "evidence": evidence,
+            "synthesis": synthesis,
+            "status": status,
+            "results": evidence,
+            "suggested_fields": suggestions if status == "completed" else {},
+            "updated_at": finished_at,
+            "error": error,
+        }
+        requests_collection.update_one(
+            {"request_id": request_id},
+            {
+                "$set": {
+                    "query": final_request_doc["query"],
+                    "query_plan": final_request_doc["query_plan"],
+                    "search_runs": final_request_doc["search_runs"],
+                    "evidence": final_request_doc["evidence"],
+                    "synthesis": final_request_doc["synthesis"],
+                    "status": final_request_doc["status"],
+                    "results": final_request_doc["results"],
+                    "suggested_fields": final_request_doc["suggested_fields"],
+                    "error": final_request_doc["error"],
+                    "updated_at": final_request_doc["updated_at"],
+                }
+            },
+        )
+        drafts_collection.update_one(
+            {"draft_id": draft_id},
+            {
+                "$set": {
+                    "enrichment.latest_request_id": request_id,
+                    "enrichment.status": "available" if status == "completed" and suggestions else status,
+                    "enrichment.provider": final_request_doc["provider"],
+                    "enrichment.updated_at": finished_at,
+                    "updated_at": finished_at,
+                }
+            },
+        )
+        return final_request_doc
+    except Exception as exc:
+        failed_at = utc_now_iso()
+        failure_error = f"{exc.__class__.__name__}: {str(exc)[:240]}"
+        requests_collection.update_one(
+            {"request_id": request_id},
+            {
+                "$set": {
+                    "status": "failed",
+                    "error": failure_error,
+                    "updated_at": failed_at,
+                }
+            },
+        )
+        drafts_collection.update_one(
+            {"draft_id": draft_id},
+            {
+                "$set": {
+                    "enrichment.latest_request_id": request_id,
+                    "enrichment.status": "failed",
+                    "enrichment.updated_at": failed_at,
+                    "updated_at": failed_at,
+                }
+            },
+        )
+        raise
+
+
 async def request_web_enrichment_async(
     draft_id: str,
     *,
@@ -481,6 +859,7 @@ async def request_web_enrichment_async(
     settings: Settings | None = None,
     provider: WebEnrichmentProvider | None = None,
     dry_run: bool = False,
+    wait_for_completion: bool = False,
 ) -> dict[str, Any]:
     active_settings = settings or get_settings()
     if not active_settings.enable_web_enrichment:
@@ -489,62 +868,177 @@ async def request_web_enrichment_async(
         return provider_not_configured_response(active_settings)
     draft = get_seller_draft(draft_id, drafts_collection=drafts_collection)
     request_id = f"enrich_{uuid.uuid4().hex}"
-    now = utc_now_iso()
     active_provider = provider or build_provider(active_settings)
-    query_plan = await asyncio.to_thread(plan_enrichment_queries, draft, settings=active_settings)
-    search_runs, evidence, search_errors = await _run_searches(
-        active_provider,
-        query_plan,
-        max_results=active_settings.tavily_max_results,
+    request_doc = _build_queued_request_doc(
+        request_id=request_id,
+        draft=draft,
+        provider_name=getattr(active_provider, "name", active_settings.web_enrichment_provider),
+        settings=active_settings,
     )
-    status = "completed" if evidence else "failed"
-    synthesis, suggestions = await asyncio.to_thread(synthesize_enrichment, draft, evidence, settings=active_settings)
-    error = "; ".join(search_errors) if status == "failed" and search_errors else None
-    request_doc = {
-        "request_id": request_id,
-        "draft_id": draft_id,
-        "seller_id": draft.get("seller_id"),
-        "provider": getattr(active_provider, "name", active_settings.web_enrichment_provider),
-        "query": query_plan["queries"][0]["query"],
-        "query_plan": query_plan,
-        "search_runs": search_runs,
-        "evidence": evidence,
-        "synthesis": synthesis,
-        "status": status,
-        "results": evidence,
-        "suggested_fields": suggestions if status == "completed" else {},
-        "applied_fields": [],
-        "created_at": now,
-        "updated_at": now,
-        "error": error,
-    }
+    if dry_run:
+        enrichment_warnings: list[str] = []
+        try:
+            query_plan = await asyncio.wait_for(
+                asyncio.to_thread(plan_enrichment_queries, draft, settings=active_settings),
+                timeout=_query_llm_timeout_seconds(),
+            )
+        except asyncio.TimeoutError:
+            query_plan = _fallback_query_plan(draft, active_settings)
+            enrichment_warnings.append("Query planner timed out; fallback template query was used.")
+        search_runs, evidence, search_errors = await _run_searches(
+            active_provider,
+            query_plan,
+            max_results=active_settings.tavily_max_results,
+        )
+        evidence = select_relevant_evidence(draft, evidence)[: _max_evidence_for_synthesis()]
+        status = "completed" if evidence else "failed"
+        try:
+            synthesis, suggestions = await asyncio.wait_for(
+                asyncio.to_thread(synthesize_enrichment, draft, evidence, settings=active_settings),
+                timeout=_synthesis_llm_timeout_seconds(),
+            )
+        except asyncio.TimeoutError:
+            synthesis, suggestions = _build_synthesis_fallback(
+                draft,
+                evidence,
+                settings=active_settings,
+                warning="LLM synthesis timed out; fallback snippet-derived summary was used.",
+            )
+            enrichment_warnings.append("LLM synthesis timed out; fallback suggestions were used.")
+        error = "; ".join(search_errors) if status == "failed" and search_errors else None
+        if enrichment_warnings:
+            error = "; ".join(part for part in [error, *enrichment_warnings] if part)
+        final_doc = {
+            **request_doc,
+            "query": query_plan["queries"][0]["query"] if query_plan.get("queries") else request_doc.get("query", ""),
+            "query_plan": query_plan,
+            "search_runs": search_runs,
+            "evidence": evidence,
+            "synthesis": synthesis,
+            "status": status,
+            "results": evidence,
+            "suggested_fields": suggestions if status == "completed" else {},
+            "updated_at": utc_now_iso(),
+            "error": error,
+        }
+        return {
+            "ok": final_doc.get("status") != "failed",
+            "enabled": True,
+            "status": final_doc.get("status"),
+            "request": sanitize_enrichment_request(final_doc),
+            "write_scope": [],
+            "catalog_write_performed": False,
+        }
+
     if not dry_run:
         inserted_request = False
         try:
             requests_collection.insert_one(dict(request_doc))
             inserted_request = True
-            draft_update_result = drafts_collection.update_one(
+            drafts_collection.update_one(
                 {"draft_id": draft_id},
                 {
                     "$set": {
                         "enrichment.latest_request_id": request_id,
-                        "enrichment.status": "available" if status == "completed" and suggestions else status,
+                        "enrichment.status": "queued",
                         "enrichment.provider": request_doc["provider"],
-                        "enrichment.updated_at": now,
-                        "updated_at": now,
+                        "enrichment.updated_at": request_doc["updated_at"],
+                        "updated_at": request_doc["updated_at"],
                     }
                 },
             )
-            if _matched_count(draft_update_result) <= 0:
-                raise RuntimeError("seller draft update failed during enrichment request")
         except Exception:
             if inserted_request:
                 _safe_delete_one(requests_collection, {"request_id": request_id})
             raise
+
+    if wait_for_completion:
+        try:
+            final_doc = await asyncio.wait_for(
+                _complete_request_web_enrichment(
+                    request_doc,
+                    draft=draft,
+                    drafts_collection=drafts_collection,
+                    requests_collection=requests_collection,
+                    settings=active_settings,
+                    provider=active_provider,
+                ),
+                timeout=_request_hard_timeout_seconds(),
+            )
+        except asyncio.TimeoutError:
+            failed_at = utc_now_iso()
+            timeout_error = "Enrichment job timed out before completion."
+            requests_collection.update_one(
+                {"request_id": request_id},
+                {"$set": {"status": "failed", "error": timeout_error, "updated_at": failed_at}},
+            )
+            drafts_collection.update_one(
+                {"draft_id": draft_id},
+                {
+                    "$set": {
+                        "enrichment.latest_request_id": request_id,
+                        "enrichment.status": "failed",
+                        "enrichment.updated_at": failed_at,
+                        "updated_at": failed_at,
+                    }
+                },
+            )
+            failed_doc = dict(request_doc)
+            failed_doc.update({"status": "failed", "error": timeout_error, "updated_at": failed_at})
+            return {
+                "ok": False,
+                "enabled": True,
+                "status": "failed",
+                "request": sanitize_enrichment_request(failed_doc),
+                "write_scope": ["web_enrichment_requests", "seller_product_drafts"],
+                "catalog_write_performed": False,
+            }
+        return {
+            "ok": final_doc.get("status") != "failed",
+            "enabled": True,
+            "status": final_doc.get("status"),
+            "request": sanitize_enrichment_request(final_doc),
+            "write_scope": [] if dry_run else ["web_enrichment_requests", "seller_product_drafts"],
+            "catalog_write_performed": False,
+        }
+
+    async def _background_job() -> None:
+        try:
+            await asyncio.wait_for(
+                _complete_request_web_enrichment(
+                    request_doc,
+                    draft=draft,
+                    drafts_collection=drafts_collection,
+                    requests_collection=requests_collection,
+                    settings=active_settings,
+                    provider=active_provider,
+                ),
+                timeout=_request_hard_timeout_seconds(),
+            )
+        except asyncio.TimeoutError:
+            failed_at = utc_now_iso()
+            timeout_error = "Enrichment job timed out before completion."
+            requests_collection.update_one(
+                {"request_id": request_id},
+                {"$set": {"status": "failed", "error": timeout_error, "updated_at": failed_at}},
+            )
+            drafts_collection.update_one(
+                {"draft_id": draft_id},
+                {
+                    "$set": {
+                        "enrichment.latest_request_id": request_id,
+                        "enrichment.status": "failed",
+                        "enrichment.updated_at": failed_at,
+                        "updated_at": failed_at,
+                    }
+                },
+            )
+
+    _track_background_task(asyncio.create_task(_background_job()))
     return {
-        "ok": status != "failed",
+        "ok": True,
         "enabled": True,
-        "status": status,
+        "status": "queued",
         "request": sanitize_enrichment_request(request_doc),
         "write_scope": [] if dry_run else ["web_enrichment_requests", "seller_product_drafts"],
         "catalog_write_performed": False,
@@ -568,6 +1062,7 @@ def request_web_enrichment(
             settings=settings,
             provider=provider,
             dry_run=dry_run,
+            wait_for_completion=True,
         )
     )
 

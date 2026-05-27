@@ -58,6 +58,7 @@ def preview_seller_draft(
 @router.post("/seller-drafts/{draft_id}/request")
 async def request_seller_draft_enrichment(
     draft_id: str,
+    wait: bool = False,
     _auth: AuthContext = Depends(require_seller_or_admin_for_seller_tools),
 ) -> dict[str, Any]:
     settings = _require_seller_tools_enabled()
@@ -73,6 +74,7 @@ async def request_seller_draft_enrichment(
             drafts_collection=get_seller_product_drafts_collection(),
             requests_collection=get_web_enrichment_requests_collection(),
             settings=settings,
+            wait_for_completion=wait,
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -188,4 +188,42 @@ describe("SellerDraftPage", () => {
         expect(await screen.findByText("Seller access token required")).toBeInTheDocument();
         expect(fetchMock).not.toHaveBeenCalled();
     });
+
+    it("sends json content-type for create draft while preserving bearer auth", async () => {
+        window.sessionStorage.setItem(SELLER_ACCESS_TOKEN_STORAGE_KEY, "seller-token");
+        let createAuthorization: string | null = null;
+        let createContentType: string | null = null;
+
+        vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+            const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+            if (url.endsWith("/api/seller/drafts") && init?.method === "POST") {
+                createAuthorization = readHeader(init, "Authorization");
+                createContentType = readHeader(init, "Content-Type");
+                return jsonResponse({
+                    ok: true,
+                    enabled: true,
+                    draft: buildDraft("previewed"),
+                });
+            }
+            if (url.includes("/api/seller/drafts")) {
+                return jsonResponse({
+                    ok: true,
+                    enabled: true,
+                    drafts: [buildDraft("previewed")],
+                    required_confirmation: "INDEX_SELLER_DRAFT",
+                });
+            }
+            return jsonResponse({ ok: true, enabled: true });
+        });
+
+        renderPage();
+
+        fireEvent.change(await screen.findByLabelText("Product title"), { target: { value: "Seller Sunscreen" } });
+        fireEvent.change(screen.getByLabelText("Brand"), { target: { value: "DemoSun" } });
+        fireEvent.change(screen.getByLabelText("Category ID"), { target: { value: "all_beauty" } });
+        fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
+
+        await waitFor(() => expect(createAuthorization).toBe("Bearer seller-token"));
+        expect(createContentType).toBe("application/json");
+    });
 });

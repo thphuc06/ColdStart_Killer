@@ -711,12 +711,12 @@ async function readJson(response: Response) {
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${API_BASE_URL}${path}`, {
+        ...init,
         headers: {
             Accept: "application/json",
             ...(init?.body ? { "Content-Type": "application/json" } : {}),
             ...(init?.headers || {}),
         },
-        ...init,
     });
 
     if (!response.ok) {

@@ -158,7 +158,7 @@ def test_missing_key_returns_provider_not_configured_without_crash(monkeypatch) 
     _drafts, requests, draft = _install(monkeypatch, key="")
     client = TestClient(create_app())
 
-    response = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request")
+    response = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request?wait=true")
 
     assert response.status_code == 200
     payload = response.json()
@@ -173,7 +173,7 @@ def test_request_stores_enrichment_request_not_catalog(monkeypatch) -> None:
     monkeypatch.setattr(service, "build_provider", lambda _settings: FakeProvider())
     client = TestClient(create_app())
 
-    response = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request")
+    response = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request?wait=true")
 
     assert response.status_code == 200
     payload = response.json()
@@ -189,7 +189,7 @@ def test_apply_requires_confirmation(monkeypatch) -> None:
 
     monkeypatch.setattr(service, "build_provider", lambda _settings: FakeProvider())
     client = TestClient(create_app())
-    request = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request").json()["request"]
+    request = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request?wait=true").json()["request"]
 
     response = client.post(
         f"/api/enrichment/requests/{request['request_id']}/apply?confirm=WRONG",
@@ -205,7 +205,7 @@ def test_apply_with_confirm_updates_only_draft_and_request(monkeypatch) -> None:
 
     monkeypatch.setattr(service, "build_provider", lambda _settings: FakeProvider())
     client = TestClient(create_app())
-    request = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request").json()["request"]
+    request = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request?wait=true").json()["request"]
 
     response = client.post(
         f"/api/enrichment/requests/{request['request_id']}/apply?confirm=APPLY_WEB_ENRICHMENT",
@@ -231,7 +231,7 @@ def test_request_requires_token_when_seller_tools_enabled(monkeypatch) -> None:
 
     unauthorized = client.post(f"/api/enrichment/seller-drafts/{draft['draft_id']}/request")
     authorized = client.post(
-        f"/api/enrichment/seller-drafts/{draft['draft_id']}/request",
+        f"/api/enrichment/seller-drafts/{draft['draft_id']}/request?wait=true",
         headers={"Authorization": "Bearer seller-token"},
     )
 
@@ -355,7 +355,7 @@ def test_protected_full_seller_enrichment_flow_with_token(monkeypatch) -> None:
     assert preview_response.status_code == 200
     assert preview_response.json()["status"] in {"ready", "provider_not_configured"}
 
-    request_response = client.post(f"/api/enrichment/seller-drafts/{draft_id}/request", headers=headers)
+    request_response = client.post(f"/api/enrichment/seller-drafts/{draft_id}/request?wait=true", headers=headers)
     assert request_response.status_code == 200
     request_payload = request_response.json()
     assert request_payload["status"] == "completed"

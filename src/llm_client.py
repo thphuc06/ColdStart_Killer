@@ -31,10 +31,20 @@ def call_qwen(
 ) -> str:
     settings = get_settings()
     chat = _ollama_chat()
+    options: dict[str, Any] = {
+        "num_predict": max_tokens,
+        "temperature": temperature,
+    }
+    num_ctx = int(getattr(settings, "ollama_num_ctx", 0) or 0)
+    if 2048 <= num_ctx <= 262144:
+        options["num_ctx"] = num_ctx
+    num_thread = int(getattr(settings, "ollama_num_thread", 0) or 0)
+    if 1 <= num_thread <= 128:
+        options["num_thread"] = num_thread
     kwargs: dict[str, Any] = {
         "model": settings.ollama_model,
         "messages": [{"role": "user", "content": prompt}],
-        "options": {"num_predict": max_tokens, "temperature": temperature},
+        "options": options,
         "think": False,
     }
     if format_schema:

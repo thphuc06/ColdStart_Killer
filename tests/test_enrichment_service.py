@@ -12,6 +12,7 @@ from src.enrichment.service import (
     build_product_context_from_draft,
     build_suggested_fields_from_results,
     request_web_enrichment,
+    select_relevant_evidence,
 )
 from src.seller.drafts import create_seller_draft
 
@@ -303,6 +304,51 @@ def test_suggested_fields_require_source_urls() -> None:
     )
 
     assert suggestions == {}
+
+
+def test_select_relevant_evidence_skips_blocked_domains_when_alternatives_exist(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_ENRICHMENT_BLOCKED_DOMAINS", "youtube.com")
+    draft = _payload()
+    evidence = [
+        {
+            "title": "Video review",
+            "url": "https://www.youtube.com/watch?v=abc",
+            "snippet": "Seller Sunscreen breakdown and unboxing.",
+            "score": 0.99,
+            "source": "tavily",
+        },
+        {
+            "title": "Brand specs",
+            "url": "https://www.demosun.com/products/seller-sunscreen",
+            "snippet": "Seller Sunscreen SPF 50 details and ingredients.",
+            "score": 0.80,
+            "source": "tavily",
+        },
+    ]
+
+    selected = select_relevant_evidence(draft, evidence)
+
+    assert selected
+    assert all("youtube.com" not in item["url"] for item in selected)
+
+
+def test_select_relevant_evidence_keeps_blocked_domains_as_last_resort(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_ENRICHMENT_BLOCKED_DOMAINS", "youtube.com")
+    draft = _payload()
+    evidence = [
+        {
+            "title": "Only available source",
+            "url": "https://www.youtube.com/watch?v=only-source",
+            "snippet": "Seller Sunscreen overview.",
+            "score": 0.70,
+            "source": "tavily",
+        }
+    ]
+
+    selected = select_relevant_evidence(draft, evidence)
+
+    assert len(selected) == 1
+    assert "youtube.com" in selected[0]["url"]
 
 
 @pytest.mark.parametrize("confirm", [None, "", "WRONG"])

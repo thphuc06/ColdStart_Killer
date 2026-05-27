@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
     applyEnrichmentRequest,
+    getEnrichmentRequest,
     previewSellerDraftEnrichment,
     requestSellerDraftEnrichment,
     type ApplyWebEnrichmentResponse,
@@ -77,6 +78,39 @@ export function EnrichmentPanel({ accessToken, draftId, onApplied }: EnrichmentP
         requestMutation.reset();
         applyMutation.reset();
     }, [draftId]);
+
+    useEffect(() => {
+        const requestId = request?.request_id;
+        const status = request?.status;
+        if (!requestId) {
+            return;
+        }
+        if (status === "completed" || status === "failed" || status === "applied") {
+            return;
+        }
+
+        let cancelled = false;
+        const poll = async () => {
+            try {
+                const response = await getEnrichmentRequest(requestId, accessToken);
+                if (cancelled || !response.request) {
+                    return;
+                }
+                setRequest(response.request);
+            } catch {
+                // Keep UI responsive; the user can retry manually if polling fails.
+            }
+        };
+
+        void poll();
+        const timer = window.setInterval(() => {
+            void poll();
+        }, 2000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(timer);
+        };
+    }, [accessToken, request?.request_id, request?.status]);
 
     const confirmation = preview?.required_confirmation || DEFAULT_CONFIRMATION;
     const suggestions = useMemo(() => Object.entries(request?.suggested_fields || {}), [request]);

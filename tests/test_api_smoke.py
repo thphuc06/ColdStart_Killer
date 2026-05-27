@@ -71,10 +71,7 @@ def test_seller_drafts_route_returns_disabled_state(monkeypatch) -> None:
     client = TestClient(create_app())
     response = client.get("/api/seller/drafts")
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["ok"] is True
-    assert payload["enabled"] is False
+    assert response.status_code == 403
 
 
 def test_web_enrichment_preview_route_returns_disabled_state(monkeypatch) -> None:
@@ -97,11 +94,7 @@ def test_web_enrichment_preview_route_returns_disabled_state(monkeypatch) -> Non
     client = TestClient(create_app())
     response = client.post("/api/enrichment/seller-drafts/draft_missing/preview")
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["ok"] is True
-    assert payload["enabled"] is False
-    assert payload["status"] == "disabled"
+    assert response.status_code == 403
 
 
 def test_jobs_registry_route_requires_admin_and_returns_registry(monkeypatch) -> None:

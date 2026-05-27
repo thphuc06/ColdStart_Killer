@@ -55,6 +55,8 @@ class Settings:
     auth_require_admin_for_writes: bool
     privacy_mask_debug_data: bool
     ollama_model: str
+    ollama_num_ctx: int
+    ollama_num_thread: int
     embedding_model: str
     use_cuda: bool
     embedding_storage_format: str
@@ -81,6 +83,9 @@ class Settings:
     tavily_max_results: int
     web_enrichment_max_queries: int
     web_enrichment_timeout_seconds: int
+    web_enrichment_search_depth: str
+    web_enrichment_include_raw_content: bool
+    web_enrichment_snippet_char_limit: int
     web_enrichment_apply_confirmation: str
     enable_query_embedding_cache: bool
     query_cache_write_enabled: bool
@@ -137,6 +142,8 @@ def get_settings() -> Settings:
         auth_require_admin_for_writes=env_bool("AUTH_REQUIRE_ADMIN_FOR_WRITES", True),
         privacy_mask_debug_data=env_bool("PRIVACY_MASK_DEBUG_DATA", True),
         ollama_model=os.getenv("OLLAMA_MODEL", "qwen3:8b"),
+        ollama_num_ctx=env_int("OLLAMA_NUM_CTX", 0),
+        ollama_num_thread=env_int("OLLAMA_NUM_THREAD", 0),
         embedding_model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
         use_cuda=env_bool("USE_CUDA", True),
         embedding_storage_format=os.getenv("EMBEDDING_STORAGE_FORMAT", "list_float"),
@@ -163,6 +170,9 @@ def get_settings() -> Settings:
         tavily_max_results=env_int("TAVILY_MAX_RESULTS", 3),
         web_enrichment_max_queries=max(1, min(3, env_int("WEB_ENRICHMENT_MAX_QUERIES", 3))),
         web_enrichment_timeout_seconds=env_int("WEB_ENRICHMENT_TIMEOUT_SECONDS", 10),
+        web_enrichment_search_depth=os.getenv("WEB_ENRICHMENT_SEARCH_DEPTH", "basic"),
+        web_enrichment_include_raw_content=env_bool("WEB_ENRICHMENT_INCLUDE_RAW_CONTENT", False),
+        web_enrichment_snippet_char_limit=max(200, min(6000, env_int("WEB_ENRICHMENT_SNIPPET_CHAR_LIMIT", 1200))),
         web_enrichment_apply_confirmation=os.getenv(
             "WEB_ENRICHMENT_APPLY_CONFIRMATION",
             "APPLY_WEB_ENRICHMENT",
