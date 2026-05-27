@@ -472,11 +472,11 @@ Use this taxonomy instead of deleting future ideas.
 | multi-interest profile | Strongly Recommended; simplified MVP acceptable |
 | evaluation personalization + CF | Strongly Recommended |
 | debug/admin panel | Strongly Recommended |
-| onboarding | Advanced / Future |
-| seller add product | Advanced / Future |
-| Tavily/web enrichment | Advanced / Future |
-| query embedding cache | Advanced / Future |
-| Redis | Advanced / Future |
+| onboarding | Implemented but gated |
+| seller add product | Implemented but gated |
+| Tavily/web enrichment | Implemented but optional |
+| query embedding cache | Implemented but gated |
+| Redis | Implemented (read-only) |
 | rewrite `search_pipeline.py` | Guardrail / Do Not Violate |
 
 ---
@@ -522,9 +522,9 @@ retrieval_units:
 | `item_item_cf_edges` | Core Required | True item-item collaborative filtering graph |
 | `item_semantic_neighbors` | Strongly Recommended | Semantic item similarity graph |
 | `item_stats` | Strongly Recommended | Item-level behavioral aggregates |
-| `query_embedding_cache` | Advanced / Future | Cache hot query embeddings |
+| `query_embedding_cache` | Implemented but gated | Cache hot query embeddings |
 | `synthetic_personas` | Advanced / Future | Persist persona configs if useful |
-| `evaluation_runs` | Advanced / Future | Persist personalization evaluation runs |
+| `evaluation_runs` | Implemented but gated | Persist personalization evaluation runs |
 
 ---
 
@@ -3516,3 +3516,49 @@ This final plan resolves the earlier conflicts as follows:
 | G8 | Validation Test 3 bug fixed in plan |
 | G9 | Synthetic position factor consistency merged |
 | G10 | Demo reset/recovery spec merged |
+
+---
+
+## 8. Implemented Gated Features and Capabilities
+
+Based on the recent repo audit, the following capabilities are fully implemented in the codebase but are gated by config or tokens:
+
+### 8.1 Search Personalization
+Implemented via `src/recommendation/scoring.py` and `src/recommendation/search_personalizer.py`.
+- **Query-type classification**: Queries are dynamically classified into `specific`, `constraint_rich`, `normal`, `broad`, or `exploratory`. 
+- **Dynamic Rerank Weights**: Weights shift based on the query type. E.g., exploratory queries place heavy weight on profile and collaborative filtering, while specific queries rely heavily on the query hybrid score.
+- **Collaborative Filtering**: CF candidates are conditionally introduced only for broad/exploratory queries.
+- **Suppression**: Items with negative user interactions are excluded early.
+
+### 8.2 Diversity & Cold-start Guarantees
+Implemented via `src/recommendation/diversity.py`.
+- **Caps**: Category caps (max 5) and brand caps (max 3) are strictly enforced to promote diversity.
+- **Forced Cold Insertion**: Guarantees that at least 1 cold-start item is inserted into the top 10 if none surfaced naturally.
+
+### 8.3 Debug/Admin Access
+Implemented in `src/api/routes_debug.py`.
+- Exposes reset/seed/process/rebuild flows.
+- Requires `X-Admin-Token` and confirmation phrases for write actions, providing safe dry-run defaults.
+
+### 8.4 Evaluation Tooling and Persistence
+- **Tooling completeness**: Implemented diagnostics, pool builder, strict import, re-summarizer, and fusion comparison CLI (e.g. `scripts/run_eval_diagnostics.py`).
+- **Persistence**: `scripts/run_personalization_evaluation.py` writes compact `evaluation_runs` only with explicit confirmation, preventing artifact leakage.
+
+### 8.5 Onboarding Implementation
+- Read-only preview is supported.
+- Completion writes to `users.onboarding` plus onboarding clickstream events only (no direct profile or CF seeding).
+
+### 8.6 Demo Reset Safety
+- Soft/full reset scripts, protected collections, and confirmation strings are enforced to prevent accidental destruction of demo data.
+
+### 8.7 Auth Guardrails and Privacy
+- Public search/feed/items stay open in demo mode; debug/seller/enrichment/jobs require admin/seller auth.
+- `src/api/routes_users.py` stores `allow_personalization` + `allow_clickstream_logging`.
+- Recursive redaction/masking utilities are implemented for debug payloads.
+
+### 8.8 Cache Clarification
+- **Cache backend** (`memory`/`redis`): Currently wraps read-only job/eval endpoints.
+- **Query embedding cache**: A separate feature implemented in `src/recommendation/query_cache.py`, gated by `ENABLE_QUERY_EMBEDDING_CACHE`.
+
+### 8.9 Release Hardening
+- Implemented seller scope isolation, approve-index rollback, enrichment rollback, search filter fixes, and a safe catalog snapshot cache.

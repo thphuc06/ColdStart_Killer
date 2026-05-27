@@ -206,7 +206,7 @@ Evaluation caveats:
 **Version:** v3.4 report update (canonical technical baseline remains v3.3)
 **Embedder:** BAAI/bge-m3 (1024-dim, fp16, local GPU — RTX 5060 8GB)
 **LLM:** Qwen3:8B via Ollama (local, `think=False` top-level param)
-**Dataset:** Amazon Reviews 2023 — `mvp_3000_items_diverse.csv` (3,000-item, 20-category diverse MVP slice, English canonical retrieval)
+**Dataset:** Amazon Reviews 2023 — `mvp_3000_items_diverse.csv` (3,000 items, 2 categories (All_Beauty, Cell_Phones_and_Accessories), English canonical retrieval)
 
 ---
 
