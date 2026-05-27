@@ -82,6 +82,10 @@ def get_web_enrichment_requests_collection() -> Collection:
     return get_database()["web_enrichment_requests"]
 
 
+def get_seller_indexing_previews_collection() -> Collection:
+    return get_database()["seller_indexing_previews"]
+
+
 def get_synthetic_personas_collection() -> Collection:
     return get_database()["synthetic_personas"]
 

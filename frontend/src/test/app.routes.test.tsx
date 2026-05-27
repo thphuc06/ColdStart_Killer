@@ -1109,9 +1109,16 @@ describe("Phase 11 routes", () => {
         fireEvent.change(screen.getByLabelText("Description"), {
             target: { value: "Lightweight daily sunscreen for oily skin with comfortable finish." },
         });
+        fireEvent.change(screen.getByLabelText("Features (one per line)"), {
+            target: { value: "SPF 50\nOil control finish" },
+        });
         fireEvent.click(screen.getByRole("button", { name: "Create draft" }));
 
         expect(await screen.findByText("Seller Sunscreen")).toBeInTheDocument();
+        const createCall = vi
+            .mocked(globalThis.fetch)
+            .mock.calls.find(([input, init]) => String(input).endsWith("/api/seller/drafts") && init?.method === "POST");
+        expect(JSON.parse(String(createCall?.[1]?.body)).features).toEqual(["SPF 50", "Oil control finish"]);
         fireEvent.click(screen.getByRole("button", { name: "Validate draft" }));
         fireEvent.click(await screen.findByRole("button", { name: "Preview indexing" }));
         expect(await screen.findByText("Preview valid")).toBeInTheDocument();

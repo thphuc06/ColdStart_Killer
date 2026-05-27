@@ -37,6 +37,7 @@ export function EnrichmentPanel({ accessToken, draftId, onApplied }: EnrichmentP
     const [preview, setPreview] = useState<WebEnrichmentPreviewResponse | null>(null);
     const [selectedFields, setSelectedFields] = useState<string[]>([]);
     const [confirmText, setConfirmText] = useState("");
+    const [applyResponse, setApplyResponse] = useState<ApplyWebEnrichmentResponse | null>(null);
     const hasAccessToken = Boolean(accessToken?.trim());
 
     const previewMutation = useMutation({
@@ -61,6 +62,7 @@ export function EnrichmentPanel({ accessToken, draftId, onApplied }: EnrichmentP
                 authToken: accessToken,
             }),
         onSuccess: (response) => {
+            setApplyResponse(response);
             onApplied?.(response);
         },
     });
@@ -70,6 +72,7 @@ export function EnrichmentPanel({ accessToken, draftId, onApplied }: EnrichmentP
         setPreview(null);
         setSelectedFields([]);
         setConfirmText("");
+        setApplyResponse(null);
         previewMutation.reset();
         requestMutation.reset();
         applyMutation.reset();
@@ -170,6 +173,40 @@ export function EnrichmentPanel({ accessToken, draftId, onApplied }: EnrichmentP
                         <span className="break-all text-xs text-[var(--ink-soft)]">{request.request_id}</span>
                     </div>
                     {request.error ? <p className="rounded-lg bg-[var(--rose-soft)] p-3 text-sm text-[var(--rose)]">{request.error}</p> : null}
+                    {request.query_plan?.queries?.length ? (
+                        <div className="rounded-lg bg-[var(--surface-muted)] p-3 text-sm">
+                            <p className="soft-label">Query plan ({request.query_plan.planner_source || "unknown"})</p>
+                            {request.query_plan.queries.map((plannedQuery) => (
+                                <p key={`${plannedQuery.purpose}:${plannedQuery.query}`} className="mt-2 text-[var(--ink-soft)]">
+                                    <span className="font-medium text-[var(--ink-strong)]">{plannedQuery.purpose}:</span> {plannedQuery.query}
+                                </p>
+                            ))}
+                        </div>
+                    ) : null}
+                    {request.synthesis ? (
+                        <div className="rounded-lg border border-[var(--border)] p-3 text-sm">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <p className="soft-label">Grounded synthesis</p>
+                                <StatusBadge tone={request.synthesis.quality === "high" ? "mint" : "amber"}>
+                                    {request.synthesis.quality || "low"}
+                                </StatusBadge>
+                            </div>
+                            {request.synthesis.enriched_description ? (
+                                <p className="mt-2 text-[var(--ink-soft)]">{request.synthesis.enriched_description}</p>
+                            ) : null}
+                            {(request.synthesis.key_facts || []).map((fact) => (
+                                <p key={`${fact.field}:${stringifyValue(fact.value)}`} className="mt-2 text-xs text-[var(--ink-soft)]">
+                                    <span className="font-medium text-[var(--ink-strong)]">{fact.field}:</span> {stringifyValue(fact.value)}
+                                    {" "}({Number(fact.confidence).toFixed(2)})
+                                </p>
+                            ))}
+                            {request.synthesis.unsupported_claims?.length ? (
+                                <p className="mt-2 text-xs text-[var(--amber)]">
+                                    Unsupported claims: {request.synthesis.unsupported_claims.join("; ")}
+                                </p>
+                            ) : null}
+                        </div>
+                    ) : null}
                     <div className="space-y-2">
                         {request.results.map((result) => (
                             <a
@@ -230,6 +267,11 @@ export function EnrichmentPanel({ accessToken, draftId, onApplied }: EnrichmentP
                                 <ShieldCheck className="h-4 w-4" />
                                 Apply selected suggestions
                             </button>
+                            {applyResponse?.requires_repreview ? (
+                                <div className="rounded-lg bg-[var(--amber-soft)] p-3 text-sm text-[var(--amber)]">
+                                    Content changed; generate indexing preview again before approval.
+                                </div>
+                            ) : null}
                         </div>
                     ) : request.status === "completed" ? (
                         <p className="rounded-lg bg-[var(--amber-soft)] p-3 text-sm text-[var(--amber)]">

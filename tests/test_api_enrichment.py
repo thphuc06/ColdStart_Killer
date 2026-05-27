@@ -90,10 +90,12 @@ def _settings(*, seller_enabled=True, enrichment_enabled=True, key="test-key"):
         web_enrichment_provider="tavily",
         tavily_api_key=key,
         tavily_max_results=3,
+        web_enrichment_max_queries=3,
         web_enrichment_timeout_seconds=10,
         web_enrichment_apply_confirmation="APPLY_WEB_ENRICHMENT",
         seller_index_confirmation="INDEX_SELLER_DRAFT",
         seller_draft_max_preview_units=20,
+        ollama_model="qwen3:8b",
         cors_allow_origins="http://localhost:5173",
         algorithm_version="test_algo",
         ranking_version="test_rank",
@@ -111,6 +113,7 @@ def _payload():
         "price_bucket": "100k_300k",
         "image_url": "https://example.test/sunscreen.jpg",
         "attributes": {"spf": "50"},
+        "features": ["SPF 50"],
     }
 
 
@@ -120,11 +123,22 @@ def _install(monkeypatch, *, seller_enabled=True, enrichment_enabled=True, key="
     monkeypatch.setenv("ENABLE_WEB_ENRICHMENT", "true" if enrichment_enabled else "false")
     drafts = FakeCollection()
     requests = FakeCollection()
+    previews = FakeCollection()
     settings = _settings(seller_enabled=seller_enabled, enrichment_enabled=enrichment_enabled, key=key)
     draft = create_seller_draft(_payload(), drafts_collection=drafts, settings=settings)["draft"]
     monkeypatch.setattr(routes_enrichment, "get_settings", lambda: settings)
     monkeypatch.setattr(routes_enrichment, "get_seller_product_drafts_collection", lambda: drafts)
     monkeypatch.setattr(routes_enrichment, "get_web_enrichment_requests_collection", lambda: requests)
+    monkeypatch.setattr(routes_enrichment, "get_seller_indexing_previews_collection", lambda: previews)
+    monkeypatch.setattr(
+        "src.enrichment.service.call_qwen",
+        lambda prompt, **_kwargs: (
+            '{"queries":[{"purpose":"identity","query":"DemoSun Seller Sunscreen"}]}'
+            if "plan web searches" in prompt
+            else '{"enriched_description":"Sourced sunscreen description.","key_facts":[],'
+            '"quality":"medium","unsupported_claims":[]}'
+        ),
+    )
     return drafts, requests, draft
 
 
@@ -311,6 +325,7 @@ def test_protected_full_seller_enrichment_flow_with_token(monkeypatch) -> None:
     monkeypatch.setattr(routes_enrichment, "get_settings", lambda: settings)
     monkeypatch.setattr(routes_enrichment, "get_seller_product_drafts_collection", lambda: drafts)
     monkeypatch.setattr(routes_enrichment, "get_web_enrichment_requests_collection", lambda: requests)
+    monkeypatch.setattr(routes_enrichment, "get_seller_indexing_previews_collection", lambda: FakeCollection())
     monkeypatch.setattr(routes_seller, "get_settings", lambda: settings)
     monkeypatch.setattr(routes_seller, "get_seller_product_drafts_collection", lambda: drafts)
     monkeypatch.setattr(routes_seller, "get_items_collection", lambda: items)
@@ -319,6 +334,16 @@ def test_protected_full_seller_enrichment_flow_with_token(monkeypatch) -> None:
     import src.enrichment.service as service
 
     monkeypatch.setattr(service, "build_provider", lambda _settings: FakeProvider())
+    monkeypatch.setattr(
+        service,
+        "call_qwen",
+        lambda prompt, **_kwargs: (
+            '{"queries":[{"purpose":"identity","query":"DemoSun Seller Sunscreen"}]}'
+            if "plan web searches" in prompt
+            else '{"enriched_description":"Sourced sunscreen description.","key_facts":[],'
+            '"quality":"medium","unsupported_claims":[]}'
+        ),
+    )
     client = TestClient(create_app())
     headers = {"Authorization": "Bearer seller-token"}
 

@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from src.auth.schemas import AuthContext
 from src.config import get_settings
 from src.mongodb import (
+    get_item_hype_profiles_collection,
     get_items_collection,
     get_retrieval_units_collection,
+    get_seller_indexing_previews_collection,
     get_seller_product_drafts_collection,
 )
 from src.seller.drafts import (
@@ -116,6 +118,7 @@ def preview_indexing(
         return preview_seller_draft_indexing(
             draft_id,
             drafts_collection=get_seller_product_drafts_collection(),
+            previews_collection=get_seller_indexing_previews_collection(),
             settings=settings,
             persist_preview=True,
         )
@@ -140,8 +143,10 @@ def approve_indexing(
             write=write,
             confirm=confirm,
             drafts_collection=get_seller_product_drafts_collection(),
+            previews_collection=get_seller_indexing_previews_collection(),
             items_collection=get_items_collection(),
             retrieval_units_collection=get_retrieval_units_collection(),
+            item_hype_profiles_collection=get_item_hype_profiles_collection(),
             settings=settings,
         )
     except LookupError as exc:

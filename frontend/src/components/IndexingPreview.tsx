@@ -21,7 +21,7 @@ export function IndexingPreview({ preview }: IndexingPreviewProps) {
                         <p className="soft-label">Indexing preview</p>
                         <h3 className="mt-1 text-base font-medium text-[var(--ink-strong)]">No preview generated yet</h3>
                         <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
-                            Generate a preview before any catalog write. Preview writes only to the seller draft record.
+                            Generate a full preview before any catalog write. The private preview bundle contains vectors; this view never exposes them.
                         </p>
                     </div>
                 </div>
@@ -43,18 +43,22 @@ export function IndexingPreview({ preview }: IndexingPreviewProps) {
                 </StatusBadge>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-4">
                 <div className="metric-block">
                     <p className="soft-label">Catalog writes</p>
                     <p className="metric-value">{preview.catalog_write_performed ? "yes" : "no"}</p>
                 </div>
                 <div className="metric-block">
-                    <p className="soft-label">Text units</p>
-                    <p className="metric-value">{preview.estimated_retrieval_units}</p>
+                    <p className="soft-label">Propositions</p>
+                    <p className="metric-value">{preview.proposition_units_generated ?? 0}</p>
                 </div>
                 <div className="metric-block">
-                    <p className="soft-label">Vector units</p>
+                    <p className="soft-label">HyPE vectors</p>
                     <p className="metric-value">{preview.vector_units_generated ?? 0}</p>
+                </div>
+                <div className="metric-block">
+                    <p className="soft-label">Embedding model</p>
+                    <p className="text-sm font-medium text-[var(--ink-strong)]">{preview.embedding_model || "unknown"}</p>
                 </div>
             </div>
 

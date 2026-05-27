@@ -72,8 +72,11 @@ function buildDraft(status: "previewed" | "indexed") {
                     seller_confirmed: status === "indexed",
                 },
             ],
-            vector_units_generated: 0,
-            message: "Preview uses seller-provided text proposition units only.",
+            proposition_units_generated: 1,
+            hype_units_generated: 1,
+            vector_units_generated: 1,
+            embedding_model: "BAAI/bge-m3",
+            message: "Full preview includes generated propositions, HyPE vectors, and a commit-ready private bundle.",
         },
         enrichment: {
             status: "none",

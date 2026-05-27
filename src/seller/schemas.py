@@ -17,6 +17,7 @@ class SellerDraftPayload(BaseModel):
     description: str = Field(default="", max_length=5000)
     brand: str = Field(default="", max_length=160)
     category_id: str = Field(default="", max_length=120)
+    features: list[str] = Field(default_factory=list)
     price_vnd: int | None = Field(default=None, ge=0)
     price_bucket: str = Field(default="unknown", max_length=80)
     image_url: str | None = None

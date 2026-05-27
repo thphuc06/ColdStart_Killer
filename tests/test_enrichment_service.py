@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,7 @@ from src.enrichment.schemas import WebSearchResult
 from src.enrichment.service import (
     apply_enrichment_to_draft,
     build_enrichment_query_from_draft,
+    build_product_context_from_draft,
     build_suggested_fields_from_results,
     request_web_enrichment,
 )
@@ -111,6 +113,29 @@ class FakeProvider:
         return self.results
 
 
+class ConcurrentProvider:
+    name = "concurrent_provider"
+
+    def __init__(self):
+        self.active = 0
+        self.max_active = 0
+
+    async def search(self, query: str, *, max_results: int):
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await asyncio.sleep(0)
+        self.active -= 1
+        return [
+            WebSearchResult(
+                title=query,
+                url="https://example.test/shared-source",
+                snippet="Same sourced evidence.",
+                score=0.7,
+                source=self.name,
+            )
+        ]
+
+
 def _settings(*, enabled=True, key="test-key"):
     return SimpleNamespace(
         enable_seller_tools=True,
@@ -118,10 +143,12 @@ def _settings(*, enabled=True, key="test-key"):
         web_enrichment_provider="tavily",
         tavily_api_key=key,
         tavily_max_results=3,
+        web_enrichment_max_queries=3,
         web_enrichment_timeout_seconds=10,
         web_enrichment_apply_confirmation="APPLY_WEB_ENRICHMENT",
         seller_index_confirmation="INDEX_SELLER_DRAFT",
         seller_draft_max_preview_units=20,
+        ollama_model="qwen3:8b",
     )
 
 
@@ -136,11 +163,27 @@ def _payload():
         "price_bucket": "100k_300k",
         "image_url": "https://example.test/sunscreen.jpg",
         "attributes": {"spf": "50"},
+        "features": ["Oil-control finish", "SPF 50"],
     }
 
 
 def _draft(drafts: FakeCollection):
     return create_seller_draft(_payload(), drafts_collection=drafts, settings=_settings())["draft"]
+
+
+@pytest.fixture(autouse=True)
+def _fake_qwen(monkeypatch):
+    def reply(prompt, **_kwargs):
+        if "plan web searches" in prompt:
+            return '{"queries":[{"purpose":"identity","query":"DemoSun Seller Sunscreen"},{"purpose":"specifications","query":"DemoSun Seller Sunscreen SPF 50"}]}'
+        return (
+            '{"enriched_description":"Sourced sunscreen description.",'
+            '"key_facts":[{"field":"spf","value":"50","confidence":0.8,'
+            '"source_urls":["https://example.test/source"]}],'
+            '"quality":"medium","unsupported_claims":[]}'
+        )
+
+    monkeypatch.setattr("src.enrichment.service.call_qwen", reply)
 
 
 def test_feature_disabled_does_not_call_provider_or_write() -> None:
@@ -187,6 +230,15 @@ def test_build_query_uses_draft_fields_without_secret() -> None:
     assert "API_KEY" not in query
 
 
+def test_product_context_contains_index_fields_and_omits_internal_fields() -> None:
+    context = build_product_context_from_draft({**_payload(), "seller_id": "secret", "draft_id": "internal"})
+
+    assert context["features"] == ["Oil-control finish", "SPF 50"]
+    assert context["attributes"] == {"spf": "50"}
+    assert "seller_id" not in context
+    assert "draft_id" not in context
+
+
 def test_fake_provider_success_stores_request_without_catalog_writes() -> None:
     drafts = FakeCollection()
     requests = FakeCollection()
@@ -205,6 +257,25 @@ def test_fake_provider_success_stores_request_without_catalog_writes() -> None:
     assert result["request"]["suggested_fields"]["description"]["source_urls"] == ["https://example.test/source"]
     assert len(requests.insert_one_calls) == 1
     assert drafts.update_one_calls[-1][1]["$set"]["enrichment.status"] == "available"
+
+
+def test_search_queries_run_concurrently_and_deduplicate_evidence() -> None:
+    drafts = FakeCollection()
+    requests = FakeCollection()
+    provider = ConcurrentProvider()
+    draft = _draft(drafts)
+
+    result = request_web_enrichment(
+        draft["draft_id"],
+        drafts_collection=drafts,
+        requests_collection=requests,
+        settings=_settings(),
+        provider=provider,
+    )
+
+    assert provider.max_active == 2
+    assert len(result["request"]["search_runs"]) == 2
+    assert len(result["request"]["evidence"]) == 1
 
 
 def test_provider_error_is_stored_as_failed_without_crash() -> None:
@@ -288,6 +359,64 @@ def test_apply_with_confirm_updates_only_selected_draft_fields_and_request() -> 
     assert updated_draft["enrichment"]["source_urls"] == ["https://example.test/source"]
     updated_request = requests.find_one({"request_id": request_id})
     assert updated_request["status"] == "applied"
+
+
+def test_apply_invalidates_existing_indexing_preview() -> None:
+    drafts = FakeCollection()
+    requests = FakeCollection()
+    previews = FakeCollection([{"preview_id": "preview_old", "status": "ready"}])
+    draft = _draft(drafts)
+    drafts.update_one(
+        {"draft_id": draft["draft_id"]},
+        {"$set": {"status": "previewed", "indexing_preview": {"preview_id": "preview_old"}}},
+    )
+    request_web_enrichment(
+        draft["draft_id"],
+        drafts_collection=drafts,
+        requests_collection=requests,
+        settings=_settings(),
+        provider=FakeProvider(),
+    )
+
+    result = apply_enrichment_to_draft(
+        requests.docs[-1]["request_id"],
+        fields_to_apply=["description"],
+        confirm="APPLY_WEB_ENRICHMENT",
+        drafts_collection=drafts,
+        requests_collection=requests,
+        previews_collection=previews,
+        settings=_settings(),
+    )
+
+    updated_draft = drafts.find_one({"draft_id": draft["draft_id"]})
+    assert result["requires_repreview"] is True
+    assert updated_draft["status"] == "validated"
+    assert updated_draft["indexing_preview"] is None
+    assert previews.find_one({"preview_id": "preview_old"})["status"] == "invalidated"
+
+
+def test_apply_refuses_after_draft_is_already_indexed() -> None:
+    drafts = FakeCollection()
+    requests = FakeCollection()
+    draft = _draft(drafts)
+    request_web_enrichment(
+        draft["draft_id"],
+        drafts_collection=drafts,
+        requests_collection=requests,
+        settings=_settings(),
+        provider=FakeProvider(),
+    )
+    drafts.update_one({"draft_id": draft["draft_id"]}, {"$set": {"status": "indexed"}})
+
+    with pytest.raises(ValueError, match="before approve-index"):
+        apply_enrichment_to_draft(
+            requests.docs[-1]["request_id"],
+            fields_to_apply=["description"],
+            confirm="APPLY_WEB_ENRICHMENT",
+            drafts_collection=drafts,
+            requests_collection=requests,
+            settings=_settings(),
+        )
 
 
 def test_request_rolls_back_inserted_request_when_draft_update_fails() -> None:

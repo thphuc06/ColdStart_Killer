@@ -39,17 +39,21 @@ class FakeCollection:
         self.docs.extend(docs)
         return SimpleNamespace(inserted_ids=[doc.get("_id") for doc in docs])
 
-    def update_one(self, filter_doc, update_doc):
+    def update_one(self, filter_doc, update_doc, upsert=False):
         self.update_one_calls.append((dict(filter_doc), dict(update_doc)))
         for doc in self.docs:
             if all(doc.get(key) == value for key, value in filter_doc.items()):
                 for key, value in update_doc.get("$set", {}).items():
-                    if "." in key:
-                        root, leaf = key.split(".", 1)
-                        doc.setdefault(root, {})[leaf] = value
-                    else:
-                        doc[key] = value
+                    _set_path(doc, key, value)
                 return SimpleNamespace(matched_count=1, modified_count=1)
+        if upsert:
+            doc = dict(filter_doc)
+            for key, value in update_doc.get("$setOnInsert", {}).items():
+                _set_path(doc, key, value)
+            for key, value in update_doc.get("$set", {}).items():
+                _set_path(doc, key, value)
+            self.docs.append(doc)
+            return SimpleNamespace(matched_count=0, modified_count=0, upserted_id=doc.get("_id"))
         return SimpleNamespace(matched_count=0, modified_count=0)
 
     def find_one(self, filter_doc, projection=None):
@@ -80,11 +84,21 @@ class FakeCollection:
         return SimpleNamespace(deleted_count=before - len(self.docs))
 
 
+def _set_path(doc, key, value):
+    current = doc
+    parts = key.split(".")
+    for part in parts[:-1]:
+        current = current.setdefault(part, {})
+    current[parts[-1]] = value
+
+
 def _settings(enabled=True):
     return SimpleNamespace(
         enable_seller_tools=enabled,
         seller_index_confirmation="INDEX_SELLER_DRAFT",
         seller_draft_max_preview_units=20,
+        ollama_model="qwen3:8b",
+        embedding_model="BAAI/bge-m3",
     )
 
 
@@ -99,6 +113,7 @@ def _payload():
         "price_bucket": "100k_300k",
         "image_url": "https://example.test/sunscreen.jpg",
         "attributes": {"spf": "50"},
+        "features": ["SPF 50"],
     }
 
 
@@ -108,10 +123,26 @@ def _install(monkeypatch, *, enabled=True):
     drafts = FakeCollection()
     items = FakeCollection()
     retrieval_units = FakeCollection()
+    previews = FakeCollection()
+    profiles = FakeCollection()
     monkeypatch.setattr(routes_seller, "get_settings", lambda: _settings(enabled))
     monkeypatch.setattr(routes_seller, "get_seller_product_drafts_collection", lambda: drafts)
     monkeypatch.setattr(routes_seller, "get_items_collection", lambda: items)
     monkeypatch.setattr(routes_seller, "get_retrieval_units_collection", lambda: retrieval_units)
+    monkeypatch.setattr(routes_seller, "get_seller_indexing_previews_collection", lambda: previews)
+    monkeypatch.setattr(routes_seller, "get_item_hype_profiles_collection", lambda: profiles)
+    monkeypatch.setattr(
+        "src.seller.indexing_preview.extract_propositions_llm",
+        lambda _item: [{"raw_text": "SPF 50 sunscreen.", "proposition_type": "spec", "confidence": 0.9}],
+    )
+    monkeypatch.setattr(
+        "src.seller.indexing_preview.generate_hype_queries_llm",
+        lambda _item, _props: [{"raw_text": "Which sunscreen has SPF 50?", "aspect": "constraint", "confidence": 0.9}],
+    )
+    monkeypatch.setattr(
+        "src.seller.indexing_preview.embed_texts",
+        lambda texts: [[1.0] + [0.0] * 1023 for _text in texts],
+    )
     return drafts, items, retrieval_units
 
 

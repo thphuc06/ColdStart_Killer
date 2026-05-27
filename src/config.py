@@ -79,6 +79,7 @@ class Settings:
     web_enrichment_provider: str
     tavily_api_key: str
     tavily_max_results: int
+    web_enrichment_max_queries: int
     web_enrichment_timeout_seconds: int
     web_enrichment_apply_confirmation: str
     enable_query_embedding_cache: bool
@@ -160,6 +161,7 @@ def get_settings() -> Settings:
         web_enrichment_provider=os.getenv("WEB_ENRICHMENT_PROVIDER", "tavily"),
         tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
         tavily_max_results=env_int("TAVILY_MAX_RESULTS", 3),
+        web_enrichment_max_queries=max(1, min(3, env_int("WEB_ENRICHMENT_MAX_QUERIES", 3))),
         web_enrichment_timeout_seconds=env_int("WEB_ENRICHMENT_TIMEOUT_SECONDS", 10),
         web_enrichment_apply_confirmation=os.getenv(
             "WEB_ENRICHMENT_APPLY_CONFIRMATION",

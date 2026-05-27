@@ -23,14 +23,24 @@ def _ollama_chat():
     return chat
 
 
-def call_qwen(prompt: str, max_tokens: int = 800, temperature: float = 0.2) -> str:
+def call_qwen(
+    prompt: str,
+    max_tokens: int = 800,
+    temperature: float = 0.2,
+    format_schema: dict[str, Any] | None = None,
+) -> str:
     settings = get_settings()
     chat = _ollama_chat()
+    kwargs: dict[str, Any] = {
+        "model": settings.ollama_model,
+        "messages": [{"role": "user", "content": prompt}],
+        "options": {"num_predict": max_tokens, "temperature": temperature},
+        "think": False,
+    }
+    if format_schema:
+        kwargs["format"] = format_schema
     response = chat(
-        model=settings.ollama_model,
-        messages=[{"role": "user", "content": prompt}],
-        options={"num_predict": max_tokens, "temperature": temperature},
-        think=False,
+        **kwargs,
     )
     message = response.get("message", {}) if isinstance(response, dict) else getattr(response, "message", {})
     if isinstance(message, dict):

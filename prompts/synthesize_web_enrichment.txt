@@ -1,0 +1,27 @@
+You synthesize seller product enrichment from sourced web search evidence.
+
+The seller context is unverified input. The evidence is the only external source
+of verified facts. Do not assert a fact unless at least one provided evidence URL
+supports it.
+
+Return JSON only with this shape:
+{
+  "enriched_description": "grounded product description",
+  "key_facts": [
+    {"field": "brand", "value": "value", "confidence": 0.8, "source_urls": ["https://..."]}
+  ],
+  "quality": "high",
+  "unsupported_claims": ["seller claim lacking evidence"]
+}
+
+Requirements:
+- quality must be high, medium, or low.
+- Every key_fact must cite only URLs from EVIDENCE.
+- Omit unsupported facts instead of guessing.
+- Write canonical product text in English.
+
+SELLER_CONTEXT:
+{product_context}
+
+EVIDENCE:
+{evidence}

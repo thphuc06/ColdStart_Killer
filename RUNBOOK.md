@@ -227,10 +227,10 @@ POST /api/seller/drafts/{draft_id}/approve-index?write=true&confirm=INDEX_SELLER
 Safety contract:
 
 - Draft creation writes only to `seller_product_drafts`.
-- Index preview writes only preview metadata back to the draft; it does not write `items` or `retrieval_units`.
-- Approve-index is the only catalog-write path and requires `write=true` plus the exact confirmation string.
+- Index preview runs Qwen proposition/HyPE generation and BGE-M3 embedding, stores the complete private bundle in `seller_indexing_previews`, and writes only a safe summary back to the draft; it does not write `items` or `retrieval_units`.
+- Approve-index is the only catalog-write path, requires `write=true` plus the exact confirmation string, and commits the exact ready preview bundle without regenerating text or embeddings.
 - Approve-index refuses existing `items._id` collisions and existing `retrieval_units.item_id` collisions.
-- Seller indexing adds text proposition retrieval units only. HyPE vectors and `item_hype_profiles` rebuild are separate reviewed steps.
+- Seller indexing adds both proposition and HyPE vector retrieval units. It immediately upserts `item_hype_profiles`; profile failure is retryable and does not roll back searchable catalog data.
 - Rollback is immediate: set `ENABLE_SELLER_TOOLS=false`; staged drafts can remain in `seller_product_drafts`.
 
 ## Optional Web Enrichment for Seller Drafts
@@ -242,17 +242,18 @@ ENABLE_WEB_ENRICHMENT=false
 WEB_ENRICHMENT_PROVIDER=tavily
 TAVILY_API_KEY=
 TAVILY_MAX_RESULTS=3
+WEB_ENRICHMENT_MAX_QUERIES=3
 WEB_ENRICHMENT_TIMEOUT_SECONDS=10
 WEB_ENRICHMENT_APPLY_CONFIRMATION=APPLY_WEB_ENRICHMENT
 ```
 
 Safety contract:
 
-- Preview builds the enrichment query only and performs no writes.
-- Requesting enrichment requires `ENABLE_WEB_ENRICHMENT=true` and a configured provider; it writes only `web_enrichment_requests` plus draft enrichment metadata.
+- Preview displays the filtered product context and deterministic query preview only; it performs no writes or provider calls.
+- Requesting enrichment requires `ENABLE_WEB_ENRICHMENT=true` and a configured provider; Qwen produces one to three queries, Tavily searches them concurrently, and Qwen synthesizes grounded output. It writes only `web_enrichment_requests` plus draft enrichment metadata.
 - Suggestions must include source URLs and confidence. Do not use suggestions without provenance.
-- Applying suggestions requires `confirm=APPLY_WEB_ENRICHMENT` and updates only selected `seller_product_drafts` fields.
-- Enrichment never writes `items`, `retrieval_units`, `user_profiles`, `item_item_cf_edges`, or `item_hype_profiles`.
+- Applying suggestions requires `confirm=APPLY_WEB_ENRICHMENT`, updates only selected `seller_product_drafts` fields, and invalidates any earlier indexing preview when indexed content changed.
+- Enrichment never writes `items`, `retrieval_units`, `user_profiles`, `item_item_cf_edges`, or `item_hype_profiles`; those last indexing artifacts are produced only by the separately confirmed indexing flow.
 - Seller validation, index preview, and approve-index remain separate steps.
 - Rollback is immediate: set `ENABLE_WEB_ENRICHMENT=false`; staged enrichment requests can remain ignored.
 

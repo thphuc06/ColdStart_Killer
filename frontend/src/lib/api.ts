@@ -475,6 +475,7 @@ export type SellerDraftPayload = {
     description: string;
     brand?: string;
     category_id: string;
+    features?: string[];
     price_vnd?: number | null;
     price_bucket?: string;
     image_url?: string | null;
@@ -495,6 +496,8 @@ export type SellerRetrievalUnitPreview = {
 };
 
 export type SellerIndexingPreview = {
+    preview_id?: string;
+    content_hash?: string;
     preview_only: boolean;
     catalog_write_performed: boolean;
     valid: boolean;
@@ -504,6 +507,9 @@ export type SellerIndexingPreview = {
     estimated_retrieval_units: number;
     retrieval_units: SellerRetrievalUnitPreview[];
     embedding_model?: string | null;
+    llm_model?: string | null;
+    proposition_units_generated?: number;
+    hype_units_generated?: number;
     vector_units_generated?: number;
     requires_hype_profile_rebuild?: boolean;
     message?: string;
@@ -584,6 +590,27 @@ export type WebEnrichmentRequest = {
     seller_id?: string;
     provider: string;
     query: string;
+    query_plan?: {
+        model?: string;
+        prompt_version?: string;
+        planner_source?: string;
+        queries: Array<{ purpose: string; query: string }>;
+    };
+    search_runs?: Array<{
+        purpose: string;
+        query: string;
+        status: string;
+        results: Array<{ title: string; url: string; snippet: string; score?: number | null; source: string }>;
+        error?: string | null;
+    }>;
+    synthesis?: {
+        model?: string;
+        quality?: "high" | "medium" | "low" | string;
+        enriched_description?: string;
+        key_facts?: Array<{ field: string; value: unknown; confidence: number; source_urls: string[] }>;
+        unsupported_claims?: string[];
+        warnings?: string[];
+    };
     status: "completed" | "failed" | "applied" | string;
     results: Array<{
         title: string;
@@ -607,6 +634,9 @@ export type WebEnrichmentPreviewResponse = {
     provider: string;
     provider_configured?: boolean;
     query?: string;
+    product_context?: Pick<SellerDraftPayload, "title" | "brand" | "category_id" | "features" | "attributes" | "description"> & {
+        trust_level?: string;
+    };
     write_performed?: boolean;
     message?: string;
     required_confirmation?: string;
@@ -635,6 +665,7 @@ export type ApplyWebEnrichmentResponse = {
     applied_fields: string[];
     source_urls: string[];
     draft: SellerDraft;
+    requires_repreview?: boolean;
     write_scope: string[];
     catalog_write_performed: boolean;
 };

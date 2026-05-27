@@ -92,6 +92,11 @@ def normalize_seller_payload(payload: dict[str, Any]) -> dict[str, Any]:
     data["description"] = str(data.get("description") or "").strip()
     data["brand"] = str(data.get("brand") or "").strip()
     data["category_id"] = _slug(str(data.get("category_id") or ""), fallback="")
+    data["features"] = [
+        str(feature).strip()
+        for feature in data.get("features") or []
+        if str(feature).strip()
+    ][:40]
     data["price_bucket"] = str(data.get("price_bucket") or "").strip() or derive_price_bucket(data.get("price_vnd"))
     if data["price_bucket"] == "unknown" and data.get("price_vnd") is not None:
         data["price_bucket"] = derive_price_bucket(data.get("price_vnd"))
@@ -142,6 +147,7 @@ def create_seller_draft(
             "applied_request_ids": [],
             "applied_fields": [],
             "source_urls": [],
+            "requires_repreview": False,
         },
         "source": {"type": "seller", "seller_confirmed": False},
         "created_at": now,

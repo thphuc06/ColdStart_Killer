@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Awaitable, Protocol
 
 from src.enrichment.schemas import WebSearchResult
 
@@ -8,7 +8,7 @@ from src.enrichment.schemas import WebSearchResult
 class WebEnrichmentProvider(Protocol):
     name: str
 
-    def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
+    def search(self, query: str, *, max_results: int) -> list[WebSearchResult] | Awaitable[list[WebSearchResult]]:
         ...
 
 

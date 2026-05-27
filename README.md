@@ -25,8 +25,8 @@ This phase includes:
 - A thin FastAPI layer for homepage feed, search, item detail, similar-items, users, events, and debug/demo operations.
 - A React + Vite frontend demo under `frontend/` for homepage, search, detail, similar-products, and debug/admin flows.
 - Optional cold-shopper onboarding for category, price, intent, and real catalog seed-item preferences. Preview is read-only; completion writes only `users.onboarding` and onboarding `clickstream_events`.
-- Optional seller draft staging is disabled by default. Drafts write only to `seller_product_drafts`; catalog indexing requires `write=true` and `confirm=INDEX_SELLER_DRAFT`.
-- Optional web enrichment for seller drafts is disabled by default. It stores sourced suggestions in `web_enrichment_requests` and applies selected fields only back to the draft with `confirm=APPLY_WEB_ENRICHMENT`; it never writes `items` / `retrieval_units`.
+- Optional seller draft staging is disabled by default. Full index-preview stores propositions, HyPE embeddings, and lineage in private `seller_indexing_previews`; catalog indexing requires `write=true` and `confirm=INDEX_SELLER_DRAFT`, then commits that exact reviewed bundle.
+- Optional web enrichment for seller drafts is disabled by default. Qwen plans up to three Tavily searches, Tavily I/O fans out in parallel, and Qwen synthesizes sourced suggestions into `web_enrichment_requests`; applying selected fields back to the draft with `confirm=APPLY_WEB_ENRICHMENT` never directly writes catalog data.
 - Lightweight job registry/status tracking is available for Debug/Admin. It stores compact `job_runs` records only when explicitly tracked, keeps the trigger API disabled by default, and does not replace the existing scripts.
 - Optional backend cache abstraction supports `none`, `memory`, and lazy `redis` backends. `CACHE_BACKEND=none` by default, Redis is not required, and the cache is currently limited to compact read-only evaluation/job status endpoints.
 - Demo/production auth guards protect Debug/Admin and write-capable Phase 14 actions. `AUTH_MODE=demo` is the default; public search/feed/item routes stay open.
@@ -105,7 +105,7 @@ Recommendation honesty:
 - True Collaborative Filtering is `item_item_cf_edges` built from multi-user `user_item_signals`.
 - Debug/Admin may label CF evidence as seeded/precomputed when it comes from synthetic demo behavior.
 - Onboarding is not direct profile or CF seeding. It captures explicit preferences and weak seed-item events; use the existing behavior/signal/profile pipeline to derive profiles afterward.
-- Seller add-product flow is staged. Preview does not write `items` / `retrieval_units`; approve-index is additive only and refuses existing item collisions.
+- Seller add-product flow is staged. Preview does not write `items` / `retrieval_units`; it prepares a private vector-ready bundle. Approve-index is additive only, refuses collisions, does not rerun LLM/embedding, and upserts the new item's HyPE profile after catalog commit.
 - Job orchestration is intentionally lightweight. `/api/jobs/*` is Admin-protected, job triggering is disabled unless `ENABLE_JOB_TRIGGER_API=true`, and CLI dry-runs default to `--no-track` unless a human explicitly requests compact `job_runs` tracking.
 - The backend cache layer is separate from Query Embedding Cache. It does not cache write endpoints, raw event histories, secrets, admin tokens, or personalized search/feed responses in the current implementation. Rollback is `CACHE_BACKEND=none`.
 - Auth/privacy guardrails keep public demo reads open while requiring admin/seller tokens for Debug/Admin controls, seller approve-index, enrichment request/apply, and job triggers. Live Debug/Admin write controls also require exact confirmation strings such as `SEED_DEMO_BEHAVIOR`, `PROCESS_EVENTS_WRITE`, `APPLY_PENDING_BEHAVIOR_WRITE`, `REBUILD_PROFILES_WRITE`, and `REBUILD_CF_WRITE`. Rollback for local-only emergency is `AUTH_MODE=disabled`.

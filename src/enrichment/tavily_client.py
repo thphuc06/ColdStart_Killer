@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
 from typing import Any
+
+import httpx
 
 from src.enrichment.providers import ProviderConfigurationError
 from src.enrichment.schemas import WebSearchResult
@@ -18,7 +17,7 @@ class TavilyProvider:
         self._api_key = api_key
         self._timeout_seconds = max(1, int(timeout_seconds or 10))
 
-    def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
+    async def search(self, query: str, *, max_results: int) -> list[WebSearchResult]:
         payload = {
             "api_key": self._api_key,
             "query": query,
@@ -27,19 +26,18 @@ class TavilyProvider:
             "include_answer": False,
             "include_raw_content": False,
         }
-        request = urllib.request.Request(
-            "https://api.tavily.com/search",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
-            method="POST",
-        )
         try:
-            with urllib.request.urlopen(request, timeout=self._timeout_seconds) as response:
-                body = response.read().decode("utf-8")
-        except urllib.error.URLError as exc:
+            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                response = await client.post(
+                    "https://api.tavily.com/search",
+                    json=payload,
+                    headers={"Accept": "application/json"},
+                )
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
             raise RuntimeError(f"Tavily request failed: {exc.__class__.__name__}") from exc
 
-        data = json.loads(body)
+        data = response.json()
         return _normalize_tavily_results(data.get("results", []))
 
 

@@ -23,6 +23,7 @@ def test_index_plan_includes_all_phase1_collections() -> None:
     assert "item_item_cf_edges" in plan["collections"]
     assert "seller_product_drafts" in plan["collections"]
     assert "web_enrichment_requests" in plan["collections"]
+    assert "seller_indexing_previews" in plan["collections"]
     assert "evaluation_runs" in plan["collections"]
     assert "job_runs" in plan["collections"]
 
@@ -51,6 +52,15 @@ def test_ttl_is_disabled_by_default_and_optional_for_demo_safety() -> None:
     ttl_specs = create_behavior_indexes.build_index_specs(event_ttl_days=90)
     ttl = next(spec for spec in ttl_specs if spec.name == "ttl_clickstream_events_timestamp")
     assert ttl.expire_after_seconds == 90 * 24 * 60 * 60
+
+
+def test_seller_preview_bundle_has_private_artifact_indexes() -> None:
+    unique = _spec_by_name("uniq_seller_indexing_previews_preview_id")
+    by_draft = _spec_by_name("idx_seller_indexing_previews_draft_created")
+
+    assert unique.collection == "seller_indexing_previews"
+    assert unique.unique is True
+    assert by_draft.keys == (("draft_id", 1), ("created_at", -1))
 
 
 def test_dry_run_main_prints_plan_without_requiring_mongodb(capsys) -> None:
@@ -118,6 +128,7 @@ def test_new_mongodb_getters_reuse_existing_get_database(monkeypatch) -> None:
     assert mongodb.get_query_embedding_cache_collection() == "collection:query_embedding_cache"
     assert mongodb.get_seller_product_drafts_collection() == "collection:seller_product_drafts"
     assert mongodb.get_web_enrichment_requests_collection() == "collection:web_enrichment_requests"
+    assert mongodb.get_seller_indexing_previews_collection() == "collection:seller_indexing_previews"
     assert mongodb.get_synthetic_personas_collection() == "collection:synthetic_personas"
     assert mongodb.get_evaluation_runs_collection() == "collection:evaluation_runs"
     assert mongodb.get_job_runs_collection() == "collection:job_runs"
@@ -135,6 +146,7 @@ def test_new_mongodb_getters_reuse_existing_get_database(monkeypatch) -> None:
         "query_embedding_cache",
         "seller_product_drafts",
         "web_enrichment_requests",
+        "seller_indexing_previews",
         "synthetic_personas",
         "evaluation_runs",
         "job_runs",

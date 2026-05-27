@@ -11,9 +11,14 @@ from src.enrichment.service import (
     apply_enrichment_to_draft,
     get_enrichment_request,
     preview_seller_draft_enrichment,
-    request_web_enrichment,
+    request_web_enrichment_async,
+    web_enrichment_disabled_response,
 )
-from src.mongodb import get_seller_product_drafts_collection, get_web_enrichment_requests_collection
+from src.mongodb import (
+    get_seller_indexing_previews_collection,
+    get_seller_product_drafts_collection,
+    get_web_enrichment_requests_collection,
+)
 
 from .request_guards import enforce_seller_scope_for_doc, require_seller_or_admin_for_seller_tools
 
@@ -34,6 +39,8 @@ def preview_seller_draft(
     _auth: AuthContext = Depends(require_seller_or_admin_for_seller_tools),
 ) -> dict[str, Any]:
     settings = _require_seller_tools_enabled()
+    if not settings.enable_web_enrichment:
+        return web_enrichment_disabled_response(settings)
     try:
         draft = get_seller_product_drafts_collection().find_one({"draft_id": draft_id})
         if not draft:
@@ -49,17 +56,19 @@ def preview_seller_draft(
 
 
 @router.post("/seller-drafts/{draft_id}/request")
-def request_seller_draft_enrichment(
+async def request_seller_draft_enrichment(
     draft_id: str,
     _auth: AuthContext = Depends(require_seller_or_admin_for_seller_tools),
 ) -> dict[str, Any]:
     settings = _require_seller_tools_enabled()
+    if not settings.enable_web_enrichment:
+        return web_enrichment_disabled_response(settings)
     try:
         draft = get_seller_product_drafts_collection().find_one({"draft_id": draft_id})
         if not draft:
             raise LookupError(f"seller draft not found: {draft_id}")
         enforce_seller_scope_for_doc(_auth, dict(draft), resource_name="seller draft")
-        return request_web_enrichment(
+        return await request_web_enrichment_async(
             draft_id,
             drafts_collection=get_seller_product_drafts_collection(),
             requests_collection=get_web_enrichment_requests_collection(),
@@ -99,6 +108,8 @@ def apply_request(
     _auth: AuthContext = Depends(require_seller_or_admin_for_seller_tools),
 ) -> dict[str, Any]:
     settings = _require_seller_tools_enabled()
+    if not settings.enable_web_enrichment:
+        return web_enrichment_disabled_response(settings)
     try:
         request_doc = get_enrichment_request(
             request_id,
@@ -111,6 +122,7 @@ def apply_request(
             confirm=confirm,
             drafts_collection=get_seller_product_drafts_collection(),
             requests_collection=get_web_enrichment_requests_collection(),
+            previews_collection=get_seller_indexing_previews_collection(),
             settings=settings,
         )
     except LookupError as exc:

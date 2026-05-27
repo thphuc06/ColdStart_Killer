@@ -16,6 +16,7 @@ export function SellerDraftForm({ disabled = false, isCreating, onCreate }: Sell
     const [description, setDescription] = useState("");
     const [brand, setBrand] = useState("");
     const [categoryId, setCategoryId] = useState("");
+    const [featuresText, setFeaturesText] = useState("");
     const [priceVnd, setPriceVnd] = useState("");
     const [priceBucket, setPriceBucket] = useState("unknown");
     const [imageUrl, setImageUrl] = useState("");
@@ -27,6 +28,7 @@ export function SellerDraftForm({ disabled = false, isCreating, onCreate }: Sell
             description,
             brand,
             category_id: categoryId,
+            features: featuresText.split(/\r?\n/).map((feature) => feature.trim()).filter(Boolean),
             price_vnd: priceVnd ? Number(priceVnd) : null,
             price_bucket: priceBucket,
             image_url: imageUrl || null,
@@ -87,6 +89,10 @@ export function SellerDraftForm({ disabled = false, isCreating, onCreate }: Sell
             <label className="mt-4 block space-y-1 text-sm font-medium text-[var(--ink-strong)]">
                 Description
                 <textarea className="form-input min-h-28" value={description} onChange={(event) => setDescription(event.target.value)} />
+            </label>
+            <label className="mt-4 block space-y-1 text-sm font-medium text-[var(--ink-strong)]">
+                Features (one per line)
+                <textarea className="form-input min-h-24" value={featuresText} onChange={(event) => setFeaturesText(event.target.value)} />
             </label>
 
             <div className="mt-5 flex flex-wrap gap-3">
