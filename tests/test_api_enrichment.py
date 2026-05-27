@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from fastapi.testclient import TestClient
 
 from src.api import routes_enrichment
+from src.api import routes_seller
 from src.api.app import create_app
 from src.enrichment.schemas import WebSearchResult
 from src.seller.drafts import create_seller_draft
@@ -292,3 +293,60 @@ def test_seller_token_cannot_access_foreign_enrichment_request(monkeypatch) -> N
     )
 
     assert response.status_code == 403
+
+
+def test_protected_full_seller_enrichment_flow_with_token(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_MODE", "demo")
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("SELLER_TOKEN", "seller-token")
+    monkeypatch.setenv("ENABLE_SELLER_TOOLS", "true")
+    monkeypatch.setenv("ENABLE_WEB_ENRICHMENT", "true")
+
+    drafts = FakeCollection()
+    requests = FakeCollection()
+    items = FakeCollection()
+    retrieval_units = FakeCollection()
+    settings = _settings(seller_enabled=True, enrichment_enabled=True, key="test-key")
+
+    monkeypatch.setattr(routes_enrichment, "get_settings", lambda: settings)
+    monkeypatch.setattr(routes_enrichment, "get_seller_product_drafts_collection", lambda: drafts)
+    monkeypatch.setattr(routes_enrichment, "get_web_enrichment_requests_collection", lambda: requests)
+    monkeypatch.setattr(routes_seller, "get_settings", lambda: settings)
+    monkeypatch.setattr(routes_seller, "get_seller_product_drafts_collection", lambda: drafts)
+    monkeypatch.setattr(routes_seller, "get_items_collection", lambda: items)
+    monkeypatch.setattr(routes_seller, "get_retrieval_units_collection", lambda: retrieval_units)
+
+    import src.enrichment.service as service
+
+    monkeypatch.setattr(service, "build_provider", lambda _settings: FakeProvider())
+    client = TestClient(create_app())
+    headers = {"Authorization": "Bearer seller-token"}
+
+    create_response = client.post("/api/seller/drafts", json=_payload(), headers=headers)
+    assert create_response.status_code == 200
+    draft_id = create_response.json()["draft"]["draft_id"]
+
+    preview_response = client.post(f"/api/enrichment/seller-drafts/{draft_id}/preview", headers=headers)
+    assert preview_response.status_code == 200
+    assert preview_response.json()["status"] in {"ready", "provider_not_configured"}
+
+    request_response = client.post(f"/api/enrichment/seller-drafts/{draft_id}/request", headers=headers)
+    assert request_response.status_code == 200
+    request_payload = request_response.json()
+    assert request_payload["status"] == "completed"
+    request_id = request_payload["request"]["request_id"]
+
+    apply_response = client.post(
+        f"/api/enrichment/requests/{request_id}/apply?confirm=APPLY_WEB_ENRICHMENT",
+        json={"fields_to_apply": ["description"]},
+        headers=headers,
+    )
+
+    assert apply_response.status_code == 200
+    body = apply_response.json()
+    assert body["status"] == "applied"
+    assert body["catalog_write_performed"] is False
+    assert requests.find_one({"request_id": request_id})["status"] == "applied"
+    assert drafts.find_one({"draft_id": draft_id})["enrichment"]["status"] == "applied"
+    assert items.insert_one_calls == []
+    assert retrieval_units.insert_many_calls == []

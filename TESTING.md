@@ -300,6 +300,18 @@ Expected behavior:
 - Apply updates only selected seller draft fields and never writes `items` / `retrieval_units`.
 - Frontend tests mock enrichment APIs; no live external API calls are made.
 
+Protected runtime smoke (real config + auth/token checks):
+
+```bash
+python scripts/smoke_seller_enrichment_flow.py
+```
+
+Notes:
+
+- The script runs `create draft -> enrichment preview -> enrichment request -> apply`, then cleans up temporary docs.
+- It fails fast when process-level env overrides for critical keys (`AUTH_MODE`, `ENABLE_SELLER_TOOLS`, `ENABLE_WEB_ENRICHMENT`) differ from `.env`.
+- If you intentionally want process overrides, run with `--allow-env-override`.
+
 ### Phase 14 job registry tests
 
 Batch 14.7 is a lightweight registry/status layer, not Celery/Redis. The API trigger is disabled by default and the Debug UI is read-only unless a human explicitly changes config:
