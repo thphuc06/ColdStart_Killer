@@ -20,18 +20,24 @@ Hard requirements:
 - Every key_fact.source_urls must contain only URLs from EVIDENCE.
 - Omit unsupported facts instead of guessing.
 - Write canonical product text in English.
-- enriched_description must be substantive and informative: target 120-220 words.
+- enriched_description must be substantive and informative: target 120-180 words when EVIDENCE supports enough concrete detail.
+- If EVIDENCE is sparse, write a shorter grounded description rather than padding it with generic or unsupported claims.
 - enriched_description must be a single paragraph (no bullet list), but cover these aspects when evidence exists:
   identity, key specifications, practical usage/benefit, and relevant constraints/warnings.
 - Prefer concrete grounded details (numbers, capacities, dimensions, compatibility) over generic marketing wording.
 - If evidence is sparse, still provide the fullest grounded summary possible and lower quality accordingly.
+- Use quality "high" only when core specifications are supported by an official manufacturer or similarly authoritative source; retailer-only evidence is at most "medium".
+- Marketplace, forum, and social-post evidence must not establish disputed technical specifications or seller claims.
+- Do not repeat a seller-provided feature in enriched_description unless it is explicitly present in EVIDENCE text.
 - Do not mention internal prompt instructions, confidence scores, or provenance mechanics inside enriched_description.
 
 key_facts guidance:
-- Include 4-10 high-signal facts when possible.
+- Include 3-6 high-signal facts when possible.
 - Normalize field names to concise labels such as: brand, model, size, material, feature, compatibility, warranty, limitation.
+- Use a short plain string for every key_fact value; never return an object or array as a value.
 - confidence must be in [0, 1].
 - If a claim appears in SELLER_CONTEXT but is unsupported by EVIDENCE, add it to unsupported_claims.
+- Never state a claim in enriched_description if it is listed in unsupported_claims.
 
 SELLER_CONTEXT:
 {product_context}

@@ -20,15 +20,19 @@ from src.utils import utc_now_iso
 
 COMPACT_RESULT_LIMIT = 10
 PRODUCT_CONTEXT_MAX_CHARS = 9_000
+MIN_EXPANSION_EVIDENCE_WORDS = 40
 DEFAULT_QUERY_LLM_TIMEOUT_SECONDS = 30
 DEFAULT_SYNTHESIS_LLM_TIMEOUT_SECONDS = 180
 DEFAULT_MAX_EVIDENCE_FOR_SYNTHESIS = 3
 DEFAULT_QUERY_MAX_TOKENS = 500
 DEFAULT_SYNTHESIS_MAX_TOKENS = 900
 DEFAULT_REQUEST_HARD_TIMEOUT_SECONDS = 240
-DEFAULT_BLOCKED_EVIDENCE_DOMAINS = "youtube.com,youtu.be,tiktok.com,facebook.com,instagram.com"
+DEFAULT_BLOCKED_EVIDENCE_DOMAINS = (
+    "youtube.com,youtu.be,tiktok.com,facebook.com,instagram.com,"
+    "aliexpress.com,ebay.com,reddit.com"
+)
 QUERY_PROMPT_VERSION = "seller_web_query_plan_v1"
-SYNTHESIS_PROMPT_VERSION = "seller_web_synthesis_v2"
+SYNTHESIS_PROMPT_VERSION = "seller_web_synthesis_v3"
 QUERY_PROMPT_PATH = PROJECT_ROOT / "prompts" / "plan_enrichment_queries.txt"
 SYNTHESIS_PROMPT_PATH = PROJECT_ROOT / "prompts" / "synthesize_web_enrichment.txt"
 _MISSING = object()
@@ -59,11 +63,12 @@ _SYNTHESIS_SCHEMA: dict[str, Any] = {
         "enriched_description": {"type": "string"},
         "key_facts": {
             "type": "array",
+            "maxItems": 6,
             "items": {
                 "type": "object",
                 "properties": {
                     "field": {"type": "string"},
-                    "value": {},
+                    "value": {"type": "string"},
                     "confidence": {"type": "number"},
                     "source_urls": {"type": "array", "items": {"type": "string"}},
                 },
@@ -235,6 +240,47 @@ def _tokenize(value: str) -> set[str]:
     return {token for token in re.findall(r"\w+", value.lower()) if len(token) >= 3}
 
 
+def _normalized_phrase(value: str) -> str:
+    return " ".join(re.findall(r"\w+", str(value or "").lower()))
+
+
+def _evidence_text_for_urls(evidence: list[dict[str, Any]], source_urls: list[str]) -> str:
+    allowed_urls = set(source_urls)
+    return " ".join(
+        " ".join(
+            [
+                str(result.get("title") or ""),
+                str(result.get("snippet") or ""),
+                str(result.get("url") or ""),
+            ]
+        )
+        for result in evidence
+        if str(result.get("url") or "") in allowed_urls
+    )
+
+
+def _asserted_unverified_seller_features(
+    draft: dict[str, Any],
+    description: str,
+    evidence: list[dict[str, Any]],
+) -> list[str]:
+    normalized_description = _normalized_phrase(description)
+    evidence_tokens = _tokenize(_evidence_text_for_urls(evidence, [str(item.get("url") or "") for item in evidence]))
+    assertions: list[str] = []
+    for feature in draft.get("features") or []:
+        claim = str(feature or "").strip()
+        normalized_claim = _normalized_phrase(claim)
+        claim_tokens = _tokenize(claim)
+        if (
+            normalized_claim
+            and normalized_claim in normalized_description
+            and claim_tokens
+            and not claim_tokens.issubset(evidence_tokens)
+        ):
+            assertions.append(claim)
+    return assertions
+
+
 def _env_domain_suffixes(name: str, default: str) -> tuple[str, ...]:
     raw = os.getenv(name, default)
     if raw is None:
@@ -272,7 +318,7 @@ def select_relevant_evidence(draft: dict[str, Any], evidence: list[dict[str, Any
     blocked_domains = _env_domain_suffixes("WEB_ENRICHMENT_BLOCKED_DOMAINS", DEFAULT_BLOCKED_EVIDENCE_DOMAINS)
     preferred_domains = _env_domain_suffixes("WEB_ENRICHMENT_PREFERRED_DOMAINS", "")
 
-    scored: list[tuple[float, dict[str, Any], int, bool]] = []
+    scored: list[tuple[float, dict[str, Any], int, bool, bool]] = []
     for result in evidence:
         text = " ".join(
             [
@@ -296,14 +342,15 @@ def select_relevant_evidence(draft: dict[str, Any], evidence: list[dict[str, Any
             score += 1.5
         if is_blocked:
             score -= 2.0
-        scored.append((score, result, overlap, is_blocked))
+        scored.append((score, result, overlap, is_blocked, is_preferred))
 
     scored.sort(key=lambda item: item[0], reverse=True)
     non_blocked = [item for item in scored if not item[3]]
     candidates = non_blocked if non_blocked else scored
-    overlapped = [item[1] for item in candidates if item[2] > 0]
-    if overlapped:
-        return overlapped[:COMPACT_RESULT_LIMIT]
+    preferred = [item[1] for item in candidates if item[4]]
+    relevant = preferred + [item[1] for item in candidates if item[2] > 0 and not item[4]]
+    if relevant:
+        return relevant[:COMPACT_RESULT_LIMIT]
     return [item[1] for item in candidates[:COMPACT_RESULT_LIMIT]]
 
 
@@ -345,6 +392,12 @@ def build_suggested_fields_from_results(results: list[dict[str, Any]], draft: di
                 )
             )
     return normalized
+
+
+def _review_only_fallback_suggestions(results: list[dict[str, Any]], draft: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    suggestions = build_suggested_fields_from_results(results, draft)
+    evidence_summary = suggestions.get("attributes.web_evidence_summary")
+    return {"attributes.web_evidence_summary": evidence_summary} if evidence_summary else {}
 
 
 def _read_prompt(path: Any) -> str:
@@ -423,17 +476,17 @@ def _build_synthesis_fallback(
     settings: Settings,
     warning: str,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
-    suggestions = build_suggested_fields_from_results(evidence, draft)
+    suggestions = _review_only_fallback_suggestions(evidence, draft)
     return (
         {
             "model": getattr(settings, "ollama_model", "qwen3:8b"),
             "prompt_version": SYNTHESIS_PROMPT_VERSION,
             "synthesis_source": "fallback_snippet_summary",
             "quality": "low",
-            "enriched_description": suggestions.get("description", {}).get("value", ""),
+            "enriched_description": "",
             "key_facts": [],
             "unsupported_claims": [],
-            "warnings": [warning],
+            "warnings": [warning, "Fallback evidence is review-only and cannot replace the seller description."],
         },
         suggestions,
     )
@@ -527,16 +580,19 @@ def synthesize_enrichment(
     *,
     settings: Settings,
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
-    fallback_suggestions = build_suggested_fields_from_results(evidence, draft)
+    fallback_suggestions = _review_only_fallback_suggestions(evidence, draft)
     fallback = {
         "model": getattr(settings, "ollama_model", "qwen3:8b"),
         "prompt_version": SYNTHESIS_PROMPT_VERSION,
         "synthesis_source": "fallback_snippet_summary",
         "quality": "low",
-        "enriched_description": fallback_suggestions.get("description", {}).get("value", ""),
+        "enriched_description": "",
         "key_facts": [],
         "unsupported_claims": [],
-        "warnings": ["LLM synthesis unavailable or invalid; review snippet-derived suggestions carefully."],
+        "warnings": [
+            "LLM synthesis unavailable or invalid; review snippet-derived evidence carefully.",
+            "Fallback evidence is review-only and cannot replace the seller description.",
+        ],
     }
     if not evidence:
         return fallback, {}
@@ -547,83 +603,171 @@ def synthesize_enrichment(
         .replace("{evidence}", json.dumps(evidence, ensure_ascii=True, sort_keys=True))
     )
     allowed_urls = {str(result["url"]) for result in evidence if result.get("url")}
-    try:
-        raw = call_qwen(prompt, max_tokens=_synthesis_llm_max_tokens(), temperature=0.1, format_schema=_SYNTHESIS_SCHEMA)
-        payload = extract_json_from_text(raw)
-        if not isinstance(payload, dict):
-            raise ValueError("synthesis output is not an object")
-        quality = str(payload.get("quality") or "low").lower()
-        if quality not in {"high", "medium", "low"}:
-            quality = "low"
-        key_facts: list[dict[str, Any]] = []
-        for fact in payload.get("key_facts") or []:
-            if not isinstance(fact, dict):
-                continue
-            source_urls = [str(url) for url in fact.get("source_urls") or [] if str(url) in allowed_urls]
-            if not source_urls:
-                continue
-            confidence = fact.get("confidence", 0.0)
-            try:
-                confidence = round(max(0.0, min(1.0, float(confidence))), 3)
-            except (TypeError, ValueError):
-                confidence = 0.0
-            key_facts.append(
-                {
-                    "field": str(fact.get("field") or "").strip(),
-                    "value": fact.get("value"),
-                    "confidence": confidence,
-                    "source_urls": source_urls,
-                }
+    base_max_tokens = _synthesis_llm_max_tokens()
+    compact_retry_prompt = (
+        prompt
+        + "\n\nRETRY REQUIREMENTS:\n"
+        + "- Correct validation issues or expand a grounded short response as instructed below.\n"
+        + "- Use a single paragraph targeting 120-180 words when EVIDENCE has enough supported detail; never pad with guesses.\n"
+        + "- Return at most 4 key_facts.\n"
+        + "- Each key_fact.value must be a short plain string, never an object or array.\n"
+        + "- Never assert a claim in the description if you list it as unsupported.\n"
+        + "- Do not assert seller-supplied features unless the evidence text explicitly supports them.\n"
+        + "- Return valid JSON only and do not copy navigation text or markdown headings from evidence.\n"
+    )
+    failures: list[str] = []
+    retry_feedback = ""
+    valid_short_candidate: tuple[dict[str, Any], dict[str, dict[str, Any]]] | None = None
+    for attempt_index in range(3):
+        attempt_prompt = prompt if attempt_index == 0 else compact_retry_prompt + retry_feedback
+        max_tokens = base_max_tokens if attempt_index == 0 else max(base_max_tokens, 1800)
+        try:
+            raw = call_qwen(
+                attempt_prompt,
+                max_tokens=max_tokens,
+                temperature=0.1,
+                format_schema=_SYNTHESIS_SCHEMA,
             )
-        description = str(payload.get("enriched_description") or "").strip()
-        if not description:
-            raise ValueError("synthesis did not return enriched_description")
-        all_urls = sorted({url for fact in key_facts for url in fact["source_urls"]}) or sorted(allowed_urls)
-        description_confidence = max((fact["confidence"] for fact in key_facts), default=0.55)
-        suggestions: dict[str, dict[str, Any]] = {
-            "description": _model_to_dict(
-                WebEnrichmentSuggestion(
-                    value=description,
-                    confidence=description_confidence,
-                    source_urls=all_urls,
-                    reason="Grounded Qwen synthesis from sourced web evidence; seller review is required.",
+            payload = extract_json_from_text(raw)
+            if not isinstance(payload, dict):
+                raise ValueError("synthesis output is not an object")
+            quality = str(payload.get("quality") or "low").lower()
+            if quality not in {"high", "medium", "low"}:
+                quality = "low"
+            key_facts: list[dict[str, Any]] = []
+            for fact in payload.get("key_facts") or []:
+                if not isinstance(fact, dict):
+                    continue
+                source_urls = [str(url) for url in fact.get("source_urls") or [] if str(url) in allowed_urls]
+                if not source_urls:
+                    continue
+                confidence = fact.get("confidence", 0.0)
+                try:
+                    confidence = round(max(0.0, min(1.0, float(confidence))), 3)
+                except (TypeError, ValueError):
+                    confidence = 0.0
+                value = fact.get("value")
+                if isinstance(value, dict) and len(value) == 1:
+                    value = next(iter(value.values()))
+                if isinstance(value, (dict, list)) or not str(value or "").strip():
+                    continue
+                value_tokens = _tokenize(str(value))
+                cited_evidence_tokens = _tokenize(_evidence_text_for_urls(evidence, source_urls))
+                if value_tokens and not value_tokens.issubset(cited_evidence_tokens):
+                    continue
+                key_facts.append(
+                    {
+                        "field": str(fact.get("field") or "").strip(),
+                        "value": str(value).strip()[:240],
+                        "confidence": confidence,
+                        "source_urls": source_urls,
+                    }
                 )
-            ),
-            "attributes.web_evidence_summary": _model_to_dict(
-                WebEnrichmentSuggestion(
-                    value=description[:500],
-                    confidence=description_confidence,
-                    source_urls=all_urls,
-                    reason="Stores the sourced synthesis summary used during seller review.",
+            description = str(payload.get("enriched_description") or "").strip()
+            if not description:
+                raise ValueError("synthesis did not return enriched_description")
+            normalized_description = description.lower()
+            if "your cart is empty" in normalized_description or "# specifications" in normalized_description:
+                raise ValueError("synthesis contains page-navigation text")
+            unverified_features = _asserted_unverified_seller_features(draft, description, evidence)
+            if unverified_features:
+                retry_feedback = (
+                    "\n- Explicitly omit these seller features because they were not supported by evidence text: "
+                    + "; ".join(unverified_features)
+                    + ".\n"
                 )
-            ),
-        }
-        if not str(draft.get("brand") or "").strip():
-            brand_fact = next((fact for fact in key_facts if fact["field"].lower() == "brand" and fact["value"]), None)
-            if brand_fact:
-                suggestions["brand"] = _model_to_dict(
-                    WebEnrichmentSuggestion(
-                        value=str(brand_fact["value"])[:160],
-                        confidence=brand_fact["confidence"],
-                        source_urls=brand_fact["source_urls"],
-                        reason="Grounded brand fact from sourced web evidence; seller review is required.",
-                    )
-                )
-        synthesis = {
-            "model": getattr(settings, "ollama_model", "qwen3:8b"),
-            "prompt_version": SYNTHESIS_PROMPT_VERSION,
-            "synthesis_source": "llm",
-            "quality": quality,
-            "enriched_description": description,
-            "key_facts": key_facts,
-            "unsupported_claims": [
+                raise ValueError("synthesis description asserts a seller feature absent from evidence text")
+            unsupported_claims = [
                 str(claim)[:300] for claim in payload.get("unsupported_claims") or [] if str(claim).strip()
-            ],
-            "warnings": [],
-        }
+            ]
+            contradicted_claims = [
+                claim for claim in unsupported_claims if claim.lower() in normalized_description
+            ]
+            if contradicted_claims:
+                retry_feedback = (
+                    "\n- Explicitly omit these unsupported claims from the description: "
+                    + "; ".join(contradicted_claims)
+                    + ".\n"
+                )
+                raise ValueError("synthesis description asserts an unsupported claim")
+            all_urls = sorted({url for fact in key_facts for url in fact["source_urls"]}) or sorted(allowed_urls)
+            description_confidence = max((fact["confidence"] for fact in key_facts), default=0.55)
+            suggestions: dict[str, dict[str, Any]] = {
+                "description": _model_to_dict(
+                    WebEnrichmentSuggestion(
+                        value=description,
+                        confidence=description_confidence,
+                        source_urls=all_urls,
+                        reason="Grounded Qwen synthesis from sourced web evidence; seller review is required.",
+                    )
+                ),
+                "attributes.web_evidence_summary": _model_to_dict(
+                    WebEnrichmentSuggestion(
+                        value=description[:500],
+                        confidence=description_confidence,
+                        source_urls=all_urls,
+                        reason="Stores the sourced synthesis summary used during seller review.",
+                    )
+                ),
+            }
+            if not str(draft.get("brand") or "").strip():
+                brand_fact = next((fact for fact in key_facts if fact["field"].lower() == "brand" and fact["value"]), None)
+                if brand_fact:
+                    suggestions["brand"] = _model_to_dict(
+                        WebEnrichmentSuggestion(
+                            value=str(brand_fact["value"])[:160],
+                            confidence=brand_fact["confidence"],
+                            source_urls=brand_fact["source_urls"],
+                            reason="Grounded brand fact from sourced web evidence; seller review is required.",
+                        )
+                    )
+            synthesis = {
+                "model": getattr(settings, "ollama_model", "qwen3:8b"),
+                "prompt_version": SYNTHESIS_PROMPT_VERSION,
+                "synthesis_source": "llm",
+                "quality": quality,
+                "enriched_description": description,
+                "key_facts": key_facts,
+                "unsupported_claims": unsupported_claims,
+                "warnings": [],
+            }
+            description_word_count = len(description.split())
+            evidence_word_count = len(_evidence_text_for_urls(evidence, sorted(allowed_urls)).split())
+            has_expansion_material = (
+                len(key_facts) >= 2 or evidence_word_count >= MIN_EXPANSION_EVIDENCE_WORDS
+            )
+            should_attempt_expansion = (
+                attempt_index < 2
+                and valid_short_candidate is None
+                and has_expansion_material
+                and quality in {"high", "medium"}
+                and description_word_count < 120
+            )
+            if should_attempt_expansion:
+                valid_short_candidate = (synthesis, suggestions)
+                retry_feedback = (
+                    "\n- The prior response was grounded but too brief for the available evidence. "
+                    "Rewrite it as one fuller paragraph of 120-180 words, expanding only concrete details "
+                    "supported by EVIDENCE. Do not add marketing filler or unsupported claims.\n"
+                )
+                continue
+            if valid_short_candidate is not None and description_word_count < 120:
+                synthesis["warnings"] = [
+                    "Expanded synthesis remained shorter than preferred; retained only grounded details."
+                ]
+            return synthesis, suggestions
+        except Exception as exc:
+            failures.append(f"{exc.__class__.__name__}: {str(exc)[:120]}")
+            if attempt_index >= 1 or valid_short_candidate is not None:
+                break
+    if valid_short_candidate is not None:
+        synthesis, suggestions = valid_short_candidate
+        synthesis["warnings"] = [
+            "A longer grounded rewrite was rejected; retained the shorter validated description."
+        ]
         return synthesis, suggestions
-    except Exception:
-        return fallback, fallback_suggestions
+    fallback["warnings"].append("Synthesis attempts failed validation: " + "; ".join(failures))
+    return fallback, fallback_suggestions
 
 
 def preview_seller_draft_enrichment(

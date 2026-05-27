@@ -74,7 +74,7 @@ export function IndexingPreview({ preview }: IndexingPreviewProps) {
             ) : null}
 
             <div className="mt-4 space-y-2">
-                {preview.retrieval_units.slice(0, 6).map((unit) => (
+                {preview.retrieval_units.map((unit) => (
                     <div key={unit._id} className="rounded-lg bg-[var(--surface-muted)] p-3 text-sm">
                         <div className="mb-1 flex items-center gap-2">
                             <Database className="h-3.5 w-3.5 text-[var(--sky)]" />

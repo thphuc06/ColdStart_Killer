@@ -13,6 +13,7 @@ from src.enrichment.service import (
     build_suggested_fields_from_results,
     request_web_enrichment,
     select_relevant_evidence,
+    synthesize_enrichment,
 )
 from src.seller.drafts import create_seller_draft
 
@@ -260,6 +261,271 @@ def test_fake_provider_success_stores_request_without_catalog_writes() -> None:
     assert drafts.update_one_calls[-1][1]["$set"]["enrichment.status"] == "available"
 
 
+def test_invalid_synthesis_is_retried_and_nested_fact_value_is_normalized(monkeypatch) -> None:
+    drafts = FakeCollection()
+    requests = FakeCollection()
+    draft = _draft(drafts)
+    synthesis_calls = []
+
+    def reply(prompt, **_kwargs):
+        if "plan web searches" in prompt:
+            return '{"queries":[{"purpose":"identity","query":"DemoSun Seller Sunscreen"}]}'
+        synthesis_calls.append(prompt)
+        if len(synthesis_calls) == 1:
+            return '{"enriched_description":"truncated output"'
+        return (
+            '{"enriched_description":"Compact sourced sunscreen description for seller review.",'
+            '"key_facts":[{"field":"brand","value":{"brand":"DemoSun"},"confidence":0.8,'
+            '"source_urls":["https://example.test/source"]}],'
+            '"quality":"medium","unsupported_claims":[]}'
+        )
+
+    monkeypatch.setattr("src.enrichment.service.call_qwen", reply)
+
+    result = request_web_enrichment(
+        draft["draft_id"],
+        drafts_collection=drafts,
+        requests_collection=requests,
+        settings=_settings(),
+        provider=FakeProvider(),
+    )
+
+    assert len(synthesis_calls) == 2
+    assert result["request"]["synthesis"]["synthesis_source"] == "llm"
+    assert result["request"]["synthesis"]["key_facts"][0]["value"] == "DemoSun"
+    assert "description" in result["request"]["suggested_fields"]
+
+
+def test_invalid_synthesis_fallback_is_evidence_only_not_description(monkeypatch) -> None:
+    drafts = FakeCollection()
+    requests = FakeCollection()
+    draft = _draft(drafts)
+
+    def reply(prompt, **_kwargs):
+        if "plan web searches" in prompt:
+            return '{"queries":[{"purpose":"identity","query":"DemoSun Seller Sunscreen"}]}'
+        return '{"quality":"low","key_facts":[],"unsupported_claims":[]}'
+
+    monkeypatch.setattr("src.enrichment.service.call_qwen", reply)
+
+    result = request_web_enrichment(
+        draft["draft_id"],
+        drafts_collection=drafts,
+        requests_collection=requests,
+        settings=_settings(),
+        provider=FakeProvider(),
+    )
+
+    synthesis = result["request"]["synthesis"]
+    assert synthesis["synthesis_source"] == "fallback_snippet_summary"
+    assert synthesis["enriched_description"] == ""
+    assert "description" not in result["request"]["suggested_fields"]
+    assert "attributes.web_evidence_summary" in result["request"]["suggested_fields"]
+    assert any("attempts failed validation" in warning.lower() for warning in synthesis["warnings"])
+
+
+def test_synthesis_retries_when_description_asserts_unsupported_claim(monkeypatch) -> None:
+    drafts = FakeCollection()
+    requests = FakeCollection()
+    draft = _draft(drafts)
+    synthesis_calls = []
+
+    def reply(prompt, **_kwargs):
+        if "plan web searches" in prompt:
+            return '{"queries":[{"purpose":"identity","query":"DemoSun Seller Sunscreen"}]}'
+        synthesis_calls.append(prompt)
+        if len(synthesis_calls) == 1:
+            return (
+                '{"enriched_description":"This product has SPF 90.",'
+                '"key_facts":[],"quality":"low","unsupported_claims":["SPF 90"]}'
+            )
+        return (
+            '{"enriched_description":"This sourced product is prepared for seller review.",'
+            '"key_facts":[],"quality":"medium","unsupported_claims":["SPF 90"]}'
+        )
+
+    monkeypatch.setattr("src.enrichment.service.call_qwen", reply)
+
+    result = request_web_enrichment(
+        draft["draft_id"],
+        drafts_collection=drafts,
+        requests_collection=requests,
+        settings=_settings(),
+        provider=FakeProvider(),
+    )
+
+    assert len(synthesis_calls) == 2
+    assert result["request"]["synthesis"]["synthesis_source"] == "llm"
+    assert "SPF 90" not in result["request"]["synthesis"]["enriched_description"]
+
+
+def test_synthesis_retries_when_description_asserts_unevidenced_seller_feature(monkeypatch) -> None:
+    drafts = FakeCollection()
+    requests = FakeCollection()
+    draft = _draft(drafts)
+    synthesis_calls = []
+
+    def reply(prompt, **_kwargs):
+        if "plan web searches" in prompt:
+            return '{"queries":[{"purpose":"identity","query":"DemoSun Seller Sunscreen"}]}'
+        synthesis_calls.append(prompt)
+        if len(synthesis_calls) == 1:
+            return (
+                '{"enriched_description":"This sunscreen provides SPF 50 protection.",'
+                '"key_facts":[],"quality":"high","unsupported_claims":[]}'
+            )
+        return (
+            '{"enriched_description":"This sourced sunscreen is available for seller review.",'
+            '"key_facts":[],"quality":"low","unsupported_claims":["SPF 50"]}'
+        )
+
+    monkeypatch.setattr("src.enrichment.service.call_qwen", reply)
+
+    result = request_web_enrichment(
+        draft["draft_id"],
+        drafts_collection=drafts,
+        requests_collection=requests,
+        settings=_settings(),
+        provider=FakeProvider(),
+    )
+
+    assert len(synthesis_calls) == 2
+    assert "SPF 50" in synthesis_calls[1]
+    assert result["request"]["synthesis"]["synthesis_source"] == "llm"
+    assert "SPF 50 protection" not in result["request"]["synthesis"]["enriched_description"]
+
+
+def test_synthesis_expands_short_grounded_description_with_two_verified_facts(monkeypatch) -> None:
+    calls = []
+    evidence = [
+        {
+            "title": "DemoSun Daily Shield SPF 50 50 ml",
+            "url": "https://demosun.example.test/product",
+            "snippet": "DemoSun Daily Shield sunscreen provides SPF 50 protection in a 50 ml bottle.",
+            "score": 0.9,
+            "source": "tavily",
+        },
+    ]
+    facts = (
+        '"key_facts":['
+        '{"field":"brand","value":"DemoSun","confidence":0.9,"source_urls":["https://demosun.example.test/product"]},'
+        '{"field":"feature","value":"SPF 50","confidence":0.9,"source_urls":["https://demosun.example.test/product"]}'
+        ']'
+    )
+    longer = " ".join(
+        [
+            "DemoSun Daily Shield SPF 50 is a lightweight sunscreen supplied in a 50 ml bottle for daily facial use."
+        ]
+        * 12
+    )
+
+    def reply(prompt, **_kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return f'{{"enriched_description":"Short grounded description.",{facts},"quality":"high","unsupported_claims":[]}}'
+        return f'{{"enriched_description":"{longer}",{facts},"quality":"high","unsupported_claims":[]}}'
+
+    monkeypatch.setattr("src.enrichment.service.call_qwen", reply)
+
+    synthesis, _suggestions = synthesize_enrichment(
+        {**_payload(), "features": []},
+        evidence,
+        settings=_settings(),
+    )
+
+    assert len(calls) == 2
+    assert "prior response was grounded but too brief" in calls[1]
+    assert synthesis["enriched_description"] == longer
+    assert synthesis["warnings"] == []
+
+
+def test_synthesis_keeps_short_grounded_description_when_expansion_is_invalid(monkeypatch) -> None:
+    evidence = [
+        {
+            "title": "DemoSun Daily Shield SPF 50 50 ml",
+            "url": "https://demosun.example.test/product",
+            "snippet": "DemoSun Daily Shield sunscreen provides SPF 50 protection in a 50 ml bottle.",
+            "score": 0.9,
+            "source": "tavily",
+        },
+        {
+            "title": "DemoSun Daily Shield usage details",
+            "url": "https://demosun.example.test/details",
+            "snippet": "Daily Shield is a lightweight sunscreen intended for daily facial use.",
+            "score": 0.8,
+            "source": "tavily",
+        },
+    ]
+    facts = (
+        '"key_facts":['
+        '{"field":"brand","value":"DemoSun","confidence":0.9,"source_urls":["https://demosun.example.test/product"]},'
+        '{"field":"feature","value":"SPF 50","confidence":0.9,"source_urls":["https://demosun.example.test/product"]},'
+        '{"field":"size","value":"50 ml","confidence":0.8,"source_urls":["https://demosun.example.test/product"]}'
+        ']'
+    )
+    replies = iter(
+        [
+            f'{{"enriched_description":"Short grounded description.",{facts},"quality":"high","unsupported_claims":[]}}',
+            '{"enriched_description":"truncated expansion"',
+        ]
+    )
+    monkeypatch.setattr("src.enrichment.service.call_qwen", lambda *_args, **_kwargs: next(replies))
+
+    synthesis, suggestions = synthesize_enrichment(
+        {**_payload(), "features": []},
+        evidence,
+        settings=_settings(),
+    )
+
+    assert synthesis["synthesis_source"] == "llm"
+    assert synthesis["enriched_description"] == "Short grounded description."
+    assert "description" in suggestions
+    assert any("longer grounded rewrite was rejected" in warning.lower() for warning in synthesis["warnings"])
+
+
+def test_synthesis_can_expand_after_correcting_an_invalid_first_response(monkeypatch) -> None:
+    calls = []
+    evidence = [
+        {
+            "title": "DemoSun Daily Shield SPF 50 50 ml",
+            "url": "https://demosun.example.test/product",
+            "snippet": "DemoSun Daily Shield sunscreen provides SPF 50 protection in a 50 ml bottle.",
+            "score": 0.9,
+            "source": "tavily",
+        },
+    ]
+    facts = (
+        '"key_facts":['
+        '{"field":"brand","value":"DemoSun","confidence":0.9,"source_urls":["https://demosun.example.test/product"]},'
+        '{"field":"feature","value":"SPF 50","confidence":0.9,"source_urls":["https://demosun.example.test/product"]}'
+        ']'
+    )
+    longer = " ".join(["DemoSun Daily Shield SPF 50 is supplied in a 50 ml bottle for seller review."] * 9)
+
+    def reply(prompt, **_kwargs):
+        calls.append(prompt)
+        if len(calls) == 1:
+            return (
+                '{"enriched_description":"This product has a waterproof finish.",'
+                '"key_facts":[],"quality":"high","unsupported_claims":["waterproof finish"]}'
+            )
+        if len(calls) == 2:
+            return f'{{"enriched_description":"Short grounded description.",{facts},"quality":"high","unsupported_claims":[]}}'
+        return f'{{"enriched_description":"{longer}",{facts},"quality":"high","unsupported_claims":[]}}'
+
+    monkeypatch.setattr("src.enrichment.service.call_qwen", reply)
+
+    synthesis, _suggestions = synthesize_enrichment(
+        {**_payload(), "features": []},
+        evidence,
+        settings=_settings(),
+    )
+
+    assert len(calls) == 3
+    assert "prior response was grounded but too brief" in calls[2]
+    assert synthesis["enriched_description"] == longer
+
+
 def test_search_queries_run_concurrently_and_deduplicate_evidence() -> None:
     drafts = FakeCollection()
     requests = FakeCollection()
@@ -349,6 +615,62 @@ def test_select_relevant_evidence_keeps_blocked_domains_as_last_resort(monkeypat
 
     assert len(selected) == 1
     assert "youtube.com" in selected[0]["url"]
+
+
+def test_select_relevant_evidence_retains_preferred_official_source_without_token_overlap(monkeypatch) -> None:
+    monkeypatch.setenv("WEB_ENRICHMENT_PREFERRED_DOMAINS", "apple.com")
+    draft = {
+        **_payload(),
+        "title": "iPhone 17 Pro 256GB Deep Blue",
+        "brand": "Apple",
+        "features": ["256GB storage"],
+    }
+    evidence = [
+        {
+            "title": "iPhone 17 Pro 256GB Deep Blue specifications",
+            "url": "https://carrier.example.test/iphone-17-pro",
+            "snippet": "iPhone 17 Pro Deep Blue with 256GB storage.",
+            "score": 0.9,
+            "source": "tavily",
+        },
+        {
+            "title": "Official technical specifications",
+            "url": "https://www.apple.com/iphone-17-pro/specs",
+            "snippet": "Technical specifications and compatibility details.",
+            "score": 0.8,
+            "source": "tavily",
+        },
+    ]
+
+    selected = select_relevant_evidence(draft, evidence)[:1]
+
+    assert any("apple.com" in item["url"] for item in selected)
+
+
+def test_default_blocked_marketplace_source_is_not_used_when_alternative_exists(monkeypatch) -> None:
+    monkeypatch.delenv("WEB_ENRICHMENT_BLOCKED_DOMAINS", raising=False)
+    draft = _payload()
+    evidence = [
+        {
+            "title": "Seller Sunscreen SPF 50 claim",
+            "url": "https://www.aliexpress.com/item/questionable",
+            "snippet": "Seller Sunscreen SPF 50 miracle claims.",
+            "score": 0.99,
+            "source": "tavily",
+        },
+        {
+            "title": "Brand product details",
+            "url": "https://www.demosun.com/seller-sunscreen",
+            "snippet": "Seller Sunscreen product details.",
+            "score": 0.70,
+            "source": "tavily",
+        },
+    ]
+
+    selected = select_relevant_evidence(draft, evidence)
+
+    assert selected
+    assert all("aliexpress.com" not in item["url"] for item in selected)
 
 
 @pytest.mark.parametrize("confirm", [None, "", "WRONG"])

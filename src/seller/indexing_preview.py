@@ -265,6 +265,8 @@ def preview_seller_draft_indexing(
         metadata=metadata,
         settings=settings,
     )
+    if not persist_preview:
+        preview["message"] = "In-memory full preview includes generated propositions and HyPE vectors; no preview bundle or catalog data was written."
     now = utc_now_iso()
     artifact = {
         "preview_id": preview_id,

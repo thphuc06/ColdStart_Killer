@@ -78,6 +78,7 @@ class Settings:
     seller_index_confirmation: str
     seller_draft_max_preview_units: int
     enable_web_enrichment: bool
+    enable_web_enrichment_live_preview: bool
     web_enrichment_provider: str
     tavily_api_key: str
     tavily_max_results: int
@@ -165,6 +166,7 @@ def get_settings() -> Settings:
         seller_index_confirmation=os.getenv("SELLER_INDEX_CONFIRMATION", "INDEX_SELLER_DRAFT"),
         seller_draft_max_preview_units=env_int("SELLER_DRAFT_MAX_PREVIEW_UNITS", 20),
         enable_web_enrichment=env_bool("ENABLE_WEB_ENRICHMENT", False),
+        enable_web_enrichment_live_preview=env_bool("ENABLE_WEB_ENRICHMENT_LIVE_PREVIEW", False),
         web_enrichment_provider=os.getenv("WEB_ENRICHMENT_PROVIDER", "tavily"),
         tavily_api_key=os.getenv("TAVILY_API_KEY", ""),
         tavily_max_results=env_int("TAVILY_MAX_RESULTS", 3),

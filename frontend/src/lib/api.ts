@@ -646,9 +646,19 @@ export type WebEnrichmentRequestResponse = {
     ok: boolean;
     enabled: boolean;
     status: string;
-    request: WebEnrichmentRequest;
+    request?: WebEnrichmentRequest;
     write_scope: string[];
     catalog_write_performed: boolean;
+    message?: string;
+};
+
+export type LiveWebEnrichmentPreviewResponse = WebEnrichmentRequestResponse & {
+    preview_only?: boolean;
+    database_write_performed?: boolean;
+    indexing_preview?: SellerIndexingPreview | null;
+    indexing_preview_error?: string;
+    indexing_write_scope?: string[];
+    indexing_input_source?: string;
 };
 
 export type WebEnrichmentDetailResponse = {
@@ -954,6 +964,18 @@ export function requestSellerDraftEnrichment(draftId: string, authToken?: string
         method: "POST",
         headers: accessHeaders(authToken),
     });
+}
+
+
+export function runLiveEnrichmentPreview(payload: SellerDraftPayload, authToken?: string, includeIndexingPreview = false) {
+    return fetchJson<LiveWebEnrichmentPreviewResponse>(
+        `/api/enrichment/live-preview${toQueryString({ include_indexing_preview: includeIndexingPreview })}`,
+        {
+        method: "POST",
+        headers: accessHeaders(authToken),
+        body: JSON.stringify(payload),
+        },
+    );
 }
 
 

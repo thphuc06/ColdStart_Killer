@@ -166,6 +166,124 @@ def test_missing_key_returns_provider_not_configured_without_crash(monkeypatch) 
     assert requests.insert_one_calls == []
 
 
+def test_live_preview_runs_full_enrichment_without_mongodb_collections(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("ENABLE_WEB_ENRICHMENT", "false")
+    monkeypatch.setenv("ENABLE_WEB_ENRICHMENT_LIVE_PREVIEW", "true")
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+
+    def refuse_mongodb_access():
+        raise AssertionError("live preview must not obtain a MongoDB collection")
+
+    monkeypatch.setattr(routes_enrichment, "get_seller_product_drafts_collection", refuse_mongodb_access)
+    monkeypatch.setattr(routes_enrichment, "get_web_enrichment_requests_collection", refuse_mongodb_access)
+
+    import src.enrichment.service as service
+
+    monkeypatch.setattr(service, "build_provider", lambda _settings: FakeProvider())
+    monkeypatch.setattr(
+        service,
+        "call_qwen",
+        lambda prompt, **_kwargs: (
+            '{"queries":[{"purpose":"identity","query":"Samsung Galaxy S25 Ultra official specs"}]}'
+            if "plan web searches" in prompt
+            else '{"enriched_description":"Evidence-backed Galaxy description.","key_facts":[],'
+            '"quality":"medium","unsupported_claims":[]}'
+        ),
+    )
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/api/enrichment/live-preview",
+        json={
+            **_payload(),
+            "title": "Samsung Galaxy S25 Ultra 512GB",
+            "brand": "Samsung",
+            "category_id": "cell_phones",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "completed"
+    assert body["preview_only"] is True
+    assert body["database_write_performed"] is False
+    assert body["write_scope"] == []
+    assert body["catalog_write_performed"] is False
+    assert body["request"]["query_plan"]["queries"][0]["query"] == "Samsung Galaxy S25 Ultra official specs"
+    assert body["request"]["synthesis"]["enriched_description"] == "Evidence-backed Galaxy description."
+
+
+def test_live_preview_requires_token_when_auth_is_enabled(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_MODE", "demo")
+    monkeypatch.setenv("AUTH_REQUIRE_ADMIN_FOR_WRITES", "true")
+    monkeypatch.setenv("ADMIN_TOKEN", "admin-token")
+    monkeypatch.setenv("SELLER_TOKEN", "seller-token")
+    monkeypatch.setenv("ENABLE_WEB_ENRICHMENT_LIVE_PREVIEW", "true")
+    client = TestClient(create_app())
+
+    response = client.post("/api/enrichment/live-preview", json=_payload())
+
+    assert response.status_code == 403
+
+
+def test_live_preview_can_run_enriched_full_indexing_preview_without_persistence(monkeypatch) -> None:
+    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.setenv("ENABLE_WEB_ENRICHMENT_LIVE_PREVIEW", "true")
+    monkeypatch.setenv("TAVILY_API_KEY", "test-key")
+
+    def refuse_mongodb_access():
+        raise AssertionError("full live preview must not obtain a MongoDB collection")
+
+    monkeypatch.setattr(routes_enrichment, "get_seller_product_drafts_collection", refuse_mongodb_access)
+    monkeypatch.setattr(routes_enrichment, "get_web_enrichment_requests_collection", refuse_mongodb_access)
+    monkeypatch.setattr(routes_enrichment, "get_seller_indexing_previews_collection", refuse_mongodb_access)
+
+    import src.enrichment.service as service
+
+    monkeypatch.setattr(service, "build_provider", lambda _settings: FakeProvider())
+    monkeypatch.setattr(
+        service,
+        "call_qwen",
+        lambda prompt, **_kwargs: (
+            '{"queries":[{"purpose":"identity","query":"Samsung Galaxy S25 Ultra official specs"}]}'
+            if "plan web searches" in prompt
+            else '{"enriched_description":"Evidence-backed Galaxy description for proposition generation.",'
+            '"key_facts":[],"quality":"medium","unsupported_claims":[]}'
+        ),
+    )
+    proposition_descriptions = []
+
+    def fake_propositions(item):
+        proposition_descriptions.append(item["source_text"]["description_text"])
+        return [{"raw_text": "Evidence-backed Galaxy description.", "proposition_type": "spec", "confidence": 0.9}]
+
+    monkeypatch.setattr("src.seller.indexing_preview.extract_propositions_llm", fake_propositions)
+    monkeypatch.setattr(
+        "src.seller.indexing_preview.generate_hype_queries_llm",
+        lambda _item, _props: [{"raw_text": "Which phone offers backed Galaxy features?", "aspect": "identity", "confidence": 0.9}],
+    )
+    monkeypatch.setattr("src.seller.indexing_preview.embed_texts", lambda texts: [[1.0] + [0.0] * 1023 for _text in texts])
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/api/enrichment/live-preview?include_indexing_preview=true",
+        json={**_payload(), "title": "Samsung Galaxy S25 Ultra 512GB", "brand": "Samsung", "category_id": "cell_phones"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["write_scope"] == []
+    assert body["database_write_performed"] is False
+    assert body["indexing_write_scope"] == []
+    assert body["indexing_input_source"] == "enriched_description"
+    assert body["indexing_preview"]["proposition_units_generated"] == 1
+    assert body["indexing_preview"]["hype_units_generated"] == 1
+    assert body["indexing_preview"]["vector_units_generated"] == 1
+    assert all("embedding" not in unit for unit in body["indexing_preview"]["retrieval_units"])
+    assert proposition_descriptions == ["Evidence-backed Galaxy description for proposition generation."]
+
+
 def test_request_stores_enrichment_request_not_catalog(monkeypatch) -> None:
     drafts, requests, draft = _install(monkeypatch)
     import src.enrichment.service as service

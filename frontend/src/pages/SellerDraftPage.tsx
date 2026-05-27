@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { EnrichmentPanel } from "../components/EnrichmentPanel";
 import { IndexingPreview } from "../components/IndexingPreview";
+import { LiveEnrichmentPreviewPanel } from "../components/LiveEnrichmentPreviewPanel";
 import { SellerDraftForm } from "../components/SellerDraftForm";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
@@ -301,6 +302,8 @@ export function SellerDraftPage() {
                     </div>
                 </div>
             </section>
+
+            <LiveEnrichmentPreviewPanel accessToken={authToken} />
 
             {content}
         </section>
