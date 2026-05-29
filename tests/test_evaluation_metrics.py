@@ -14,6 +14,7 @@ from src.evaluation.contracts import EvaluationResult
 from src.evaluation.metrics import (
     aggregate_metrics,
     binary_relevant,
+    compute_variant_comparisons,
     compute_query_metrics,
     dcg,
     ndcg,
@@ -140,3 +141,70 @@ class TestAggregateMetrics:
         assert summaries[0]["positive_judged_query_count"] == 1
         assert summaries[0]["query_judgment_coverage_rate"] == round(2 / 3, 4)
         assert summaries[0]["metric_confidence"] == "low"
+
+
+class TestVariantComparisons:
+    def test_paired_comparison_requires_enough_positive_pairs_for_support(self) -> None:
+        rows = []
+        for i in range(35):
+            rows.extend([
+                {
+                    "query_id": f"q{i}",
+                    "variant": "hybrid_union",
+                    "ndcg_at_10": 0.8,
+                    "has_judgments": True,
+                    "has_positive_judgment": True,
+                },
+                {
+                    "query_id": f"q{i}",
+                    "variant": "title_only",
+                    "ndcg_at_10": 0.6,
+                    "has_judgments": True,
+                    "has_positive_judgment": True,
+                },
+            ])
+
+        comparisons = compute_variant_comparisons(
+            rows,
+            comparisons=[("hybrid_union", "title_only")],
+            metric_keys=["ndcg_at_10"],
+            bootstrap_iterations=100,
+        )
+
+        comparison = comparisons[0]
+        assert comparison["comparison"] == "hybrid_union_vs_title_only"
+        assert comparison["paired_query_count"] == 35
+        assert comparison["positive_judged_pair_count"] == 35
+        assert comparison["mean_delta"] == 0.2
+        assert comparison["ci_lower"] > 0
+        assert comparison["significance"] == "positive"
+        assert comparison["blockers"] == []
+
+    def test_sparse_paired_comparison_is_directional_only(self) -> None:
+        rows = []
+        for i in range(3):
+            rows.extend([
+                {
+                    "query_id": f"q{i}",
+                    "variant": "hybrid_union",
+                    "ndcg_at_10": 0.9,
+                    "has_judgments": True,
+                    "has_positive_judgment": True,
+                },
+                {
+                    "query_id": f"q{i}",
+                    "variant": "title_only",
+                    "ndcg_at_10": 0.1,
+                    "has_judgments": True,
+                    "has_positive_judgment": True,
+                },
+            ])
+
+        comparison = compute_variant_comparisons(
+            rows,
+            comparisons=[("hybrid_union", "title_only")],
+            metric_keys=["ndcg_at_10"],
+        )[0]
+
+        assert comparison["significance"] == "directional_only"
+        assert "paired_query_count 3 < 30" in comparison["blockers"]

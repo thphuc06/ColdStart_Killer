@@ -11,6 +11,7 @@ from __future__ import annotations
 import csv
 import json
 import time
+from shutil import copyfile
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,111 @@ def decide_claim_status(
 
     # Check if variants are available
     failed_variants = {f.get("variant") for f in failures if f.get("error_type") == "variant_unavailable"}
+    comparison_diagnostics = []
+    for diag_source in (config.get("variant_comparisons", []), config.get("slice_variant_comparisons", [])):
+        if isinstance(diag_source, list):
+            comparison_diagnostics.extend(diag_source)
+    slice_confidence = config.get("slice_confidence", [])
+    slice_metrics = config.get("slice_metrics", {})
+
+    def _comparison_diag(comparison: str, metric: str, scope: str = "overall") -> dict[str, Any] | None:
+        if not isinstance(comparison_diagnostics, list):
+            return None
+        for diag in comparison_diagnostics:
+            if not isinstance(diag, dict):
+                continue
+            if (
+                diag.get("comparison") == comparison
+                and diag.get("metric") == metric
+                and diag.get("scope", "overall") == scope
+            ):
+                return diag
+        return None
+
+    def _paired_blockers(comparison: str, metrics: list[str], scope: str = "overall") -> list[str]:
+        blockers: list[str] = []
+        for metric in metrics:
+            diag = _comparison_diag(comparison, metric, scope=scope)
+            if diag is None:
+                blockers.append(f"paired comparison diagnostic missing for {comparison}/{metric}/{scope}")
+                continue
+            if diag.get("significance") != "positive":
+                diag_blockers = diag.get("blockers") or []
+                reason = "; ".join(str(b) for b in diag_blockers) if diag_blockers else "CI does not clear zero"
+                blockers.append(f"{metric} significance={diag.get('significance')} ({reason})")
+        return blockers
+
+    def _slice_diag(slice_name: str, variant: str) -> dict[str, Any] | None:
+        if not isinstance(slice_confidence, list):
+            return None
+        for diag in slice_confidence:
+            if not isinstance(diag, dict):
+                continue
+            if diag.get("slice") == slice_name and diag.get("variant") == variant:
+                return diag
+        return None
+
+    def _slice_metric(slice_name: str, variant: str, metric: str) -> Any:
+        if isinstance(slice_metrics, dict):
+            by_variant = slice_metrics.get(slice_name, {})
+            if isinstance(by_variant, dict):
+                row = by_variant.get(variant, {})
+                if isinstance(row, dict):
+                    return row.get(metric)
+        key = f"{slice_name}_{variant.replace('hybrid_union', 'hybrid').replace('title_only', 'title')}_{metric}"
+        return config.get(key)
+
+    def _slice_quality_claim(slice_name: str, claim_name: str) -> ClaimStatus:
+        if not judgment_gates_pass:
+            return ClaimStatus(
+                claim=claim_name,
+                status="needs_more_evidence",
+                blocker=f"Insufficient judgments: judged={judged_query_count}, positive={positive_judged_query_count}",
+            )
+        diag = _slice_diag(slice_name, "hybrid_union")
+        if diag is None:
+            return ClaimStatus(
+                claim=claim_name,
+                status="needs_more_evidence",
+                blocker=f"{slice_name} slice confidence diagnostic missing",
+            )
+        if diag.get("confidence") == "low" or diag.get("blockers"):
+            blockers = diag.get("blockers") or ["low slice confidence"]
+            return ClaimStatus(
+                claim=claim_name,
+                status="needs_more_evidence",
+                blocker=f"{slice_name} slice evidence is sparse: " + "; ".join(str(b) for b in blockers),
+            )
+        hybrid_ndcg = _slice_metric(slice_name, "hybrid_union", "ndcg_at_10")
+        title_ndcg = _slice_metric(slice_name, "title_only", "ndcg_at_10")
+        if not isinstance(hybrid_ndcg, (int, float)) or not isinstance(title_ndcg, (int, float)):
+            return ClaimStatus(
+                claim=claim_name,
+                status="needs_more_evidence",
+                blocker=f"{slice_name} slice NDCG@10 metrics are null",
+            )
+        if hybrid_ndcg > title_ndcg:
+            blockers = _paired_blockers(
+                "hybrid_union_vs_title_only",
+                ["ndcg_at_10"],
+                scope=f"slice:{slice_name}",
+            )
+            if blockers:
+                return ClaimStatus(
+                    claim=claim_name,
+                    status="needs_more_evidence",
+                    blocker="slice paired comparison evidence not supportive: " + "; ".join(blockers),
+                )
+            return ClaimStatus(
+                claim=claim_name,
+                status="supported",
+                evidence=f"hybrid {slice_name} NDCG@10={hybrid_ndcg} > title={title_ndcg}; slice paired CI evidence positive",
+            )
+        return ClaimStatus(
+            claim=claim_name,
+            status="unsupported",
+            evidence=f"hybrid {slice_name} NDCG@10={hybrid_ndcg}, title={title_ndcg}",
+        )
 
     # Judgment coverage gates
     judged_query_count = config.get("judged_query_count", 0)
@@ -85,13 +191,21 @@ def decide_claim_status(
                 blocker="Some comparison metrics are null",
             ))
         elif hybrid_ndcg > title_ndcg and hybrid_recall > title_recall and hybrid_mrr > title_mrr:
-            claims.append(ClaimStatus(
-                claim="Hybrid beats title baseline",
-                status="supported",
-                evidence=f"hybrid NDCG@10={hybrid_ndcg} > title={title_ndcg}, "
-                         f"Recall@10={hybrid_recall} > {title_recall}, "
-                         f"MRR@10={hybrid_mrr} > {title_mrr}",
-            ))
+            blockers = _paired_blockers("hybrid_union_vs_title_only", ["ndcg_at_10", "recall_at_10", "mrr_at_10"])
+            if blockers:
+                claims.append(ClaimStatus(
+                    claim="Hybrid beats title baseline",
+                    status="needs_more_evidence",
+                    blocker="paired comparison evidence not supportive: " + "; ".join(blockers),
+                ))
+            else:
+                claims.append(ClaimStatus(
+                    claim="Hybrid beats title baseline",
+                    status="supported",
+                    evidence=f"hybrid NDCG@10={hybrid_ndcg} > title={title_ndcg}, "
+                             f"Recall@10={hybrid_recall} > {title_recall}, "
+                             f"MRR@10={hybrid_mrr} > {title_mrr}; paired CI evidence positive",
+                ))
         else:
             claims.append(ClaimStatus(
                 claim="Hybrid beats title baseline",
@@ -114,11 +228,22 @@ def decide_claim_status(
         b_n = bm25.get("ndcg_at_10")
         if all(x is not None for x in [h_n, v_n, b_n]):
             if h_n > v_n and h_n > b_n:
-                claims.append(ClaimStatus(
-                    claim="Hybrid beats single-channel baselines",
-                    status="supported",
-                    evidence=f"hybrid={h_n} > vector={v_n}, bm25={b_n}",
-                ))
+                blockers = (
+                    _paired_blockers("hybrid_union_vs_vector_only", ["ndcg_at_10"]) +
+                    _paired_blockers("hybrid_union_vs_bm25_only", ["ndcg_at_10"])
+                )
+                if blockers:
+                    claims.append(ClaimStatus(
+                        claim="Hybrid beats single-channel baselines",
+                        status="needs_more_evidence",
+                        blocker="paired comparison evidence not supportive: " + "; ".join(blockers),
+                    ))
+                else:
+                    claims.append(ClaimStatus(
+                        claim="Hybrid beats single-channel baselines",
+                        status="supported",
+                        evidence=f"hybrid={h_n} > vector={v_n}, bm25={b_n}; paired NDCG@10 CI evidence positive",
+                    ))
             else:
                 claims.append(ClaimStatus(
                     claim="Hybrid beats single-channel baselines",
@@ -190,6 +315,19 @@ def decide_claim_status(
             blocker=f"Vietnamese slice has only {vi_judged} judged queries (need >= 5) "
                     f"or overall judgment gates not met",
         ))
+    elif (vi_diag := _slice_diag("vietnamese", "hybrid_union")) is None:
+        claims.append(ClaimStatus(
+            claim="Vietnamese robustness",
+            status="needs_more_evidence",
+            blocker="Vietnamese slice confidence diagnostic missing",
+        ))
+    elif vi_diag.get("confidence") == "low" or vi_diag.get("blockers"):
+        blockers = vi_diag.get("blockers") or ["low slice confidence"]
+        claims.append(ClaimStatus(
+            claim="Vietnamese robustness",
+            status="needs_more_evidence",
+            blocker="Vietnamese slice evidence is sparse: " + "; ".join(str(b) for b in blockers),
+        ))
     elif not isinstance(vi_hybrid_ndcg, (int, float)) or not isinstance(vi_title_ndcg, (int, float)):
         claims.append(ClaimStatus(
             claim="Vietnamese robustness",
@@ -197,11 +335,23 @@ def decide_claim_status(
             blocker="Vietnamese slice NDCG@10 metrics are null",
         ))
     elif vi_hybrid_ndcg > vi_title_ndcg:
-        claims.append(ClaimStatus(
-            claim="Vietnamese robustness",
-            status="supported",
-            evidence=f"hybrid Vietnamese NDCG@10={vi_hybrid_ndcg} > title={vi_title_ndcg}",
-        ))
+        blockers = _paired_blockers(
+            "hybrid_union_vs_title_only",
+            ["ndcg_at_10"],
+            scope="slice:vietnamese",
+        )
+        if blockers:
+            claims.append(ClaimStatus(
+                claim="Vietnamese robustness",
+                status="needs_more_evidence",
+                blocker="slice paired comparison evidence not supportive: " + "; ".join(blockers),
+            ))
+        else:
+            claims.append(ClaimStatus(
+                claim="Vietnamese robustness",
+                status="supported",
+                evidence=f"hybrid Vietnamese NDCG@10={vi_hybrid_ndcg} > title={vi_title_ndcg}; slice paired CI evidence positive",
+            ))
     else:
         claims.append(ClaimStatus(
             claim="Vietnamese robustness",
@@ -209,38 +359,57 @@ def decide_claim_status(
             evidence=f"hybrid Vietnamese NDCG@10={vi_hybrid_ndcg}, title={vi_title_ndcg}",
         ))
 
-    # Claim 6: Live end-to-end latency
+    claims.append(_slice_quality_claim("price_filter", "Price-filter retrieval quality"))
+    claims.append(_slice_quality_claim("compatibility", "Compatibility retrieval quality"))
+
+    # Claim 8: live latency evidence, split by measured scope.
     use_cached = config.get("use_cached_fixtures", True)
     mongodb_live = config.get("mongodb_live")
     model_download = config.get("model_download_observed", False)
     latency_sample_count = config.get("latency_sample_count", 0)
-    if use_cached or not mongodb_live:
-        claims.append(ClaimStatus(
-            claim="Live end-to-end latency",
-            status="needs_more_evidence",
-            blocker="Cached fixtures used or MongoDB not live" if use_cached else "MongoDB not confirmed live",
-        ))
-    elif model_download:
-        claims.append(ClaimStatus(
-            claim="Live end-to-end latency",
-            status="needs_more_evidence",
-            blocker="Model download observed — latency is cold runtime, not normal serving",
-        ))
-    elif latency_sample_count < 20:
-        claims.append(ClaimStatus(
-            claim="Live end-to-end latency",
-            status="needs_more_evidence",
-            blocker=f"Latency sample count {latency_sample_count} < 20",
-        ))
-    else:
-        claims.append(ClaimStatus(
-            claim="Live end-to-end latency",
+    latency_summary = config.get("latency_summary", {})
+    search_summary = latency_summary.get("search_latency_ms", {}) if isinstance(latency_summary, dict) else {}
+    total_summary = latency_summary.get("total_latency_ms", {}) if isinstance(latency_summary, dict) else {}
+
+    def _latency_claim(claim_name: str, label: str, summary: dict[str, Any]) -> ClaimStatus:
+        sample_count = int(summary.get("sample_count", latency_sample_count) or 0)
+        if use_cached or not mongodb_live:
+            return ClaimStatus(
+                claim=claim_name,
+                status="needs_more_evidence",
+                blocker="Cached fixtures used or MongoDB not live" if use_cached else "MongoDB not confirmed live",
+            )
+        if model_download:
+            return ClaimStatus(
+                claim=claim_name,
+                status="needs_more_evidence",
+                blocker="Model download observed - latency is cold runtime, not normal serving",
+            )
+        if sample_count < 20:
+            return ClaimStatus(
+                claim=claim_name,
+                status="needs_more_evidence",
+                blocker=f"{label} latency sample count {sample_count} < 20",
+            )
+        if summary.get("p95") is None or summary.get("p50") is None:
+            return ClaimStatus(
+                claim=claim_name,
+                status="needs_more_evidence",
+                blocker=f"{label} latency percentile summary missing",
+            )
+        return ClaimStatus(
+            claim=claim_name,
             status="supported",
-            evidence=f"Live MongoDB with fresh fixtures, {latency_sample_count} samples",
-        ))
+            evidence=(
+                f"Live MongoDB with fresh fixtures; {label} P50={summary.get('p50')}ms, "
+                f"{label} P95={summary.get('p95')}ms, samples={sample_count}"
+            ),
+        )
+
+    claims.append(_latency_claim("Live search latency evidence", "search", search_summary))
+    claims.append(_latency_claim("Live total path latency evidence", "total path", total_summary))
 
     return claims
-
 
 def generate_variant_availability_table(
     variants: list[str],
@@ -273,6 +442,12 @@ def generate_metrics_summary_md(
     latency = run_data.get("latency", [])
     coverage_stats = run_data.get("coverage_stats", config)
     cold_warm_ratio = run_data.get("cold_warm_ratio", config.get("cold_warm_ratio", {}))
+    variant_comparisons = run_data.get("variant_comparisons", config.get("variant_comparisons", []))
+    slice_variant_comparisons = run_data.get("slice_variant_comparisons", config.get("slice_variant_comparisons", []))
+    slice_confidence = run_data.get("slice_confidence", config.get("slice_confidence", []))
+    slice_metrics = run_data.get("slice_metrics", config.get("slice_metrics", {}))
+    judgment_audit = run_data.get("judgment_audit", config.get("judgment_audit", {}))
+    latency_summary = run_data.get("latency_summary", config.get("latency_summary", {}))
 
     lines: list[str] = []
     lines.append("# Evaluation Report")
@@ -316,6 +491,33 @@ def generate_metrics_summary_md(
     lines.append(f"| Result coverage rate | {rjcr:.1%} | — | — |")
     lines.append(f"| Report status | **{report_status}** | — | — |")
     lines.append("")
+
+    if isinstance(judgment_audit, dict) and judgment_audit:
+        lines.append("## Judgment Provenance")
+        lines.append("")
+        lines.append(f"- **Overall audit status:** `{judgment_audit.get('overall_status', 'unknown')}`")
+        lines.append(f"- **Human-audited rate:** `{judgment_audit.get('human_audited_rate', 0)}`")
+        source_counts = judgment_audit.get("source_counts", {})
+        if isinstance(source_counts, dict) and source_counts:
+            lines.append("")
+            lines.append("| Source | Count |")
+            lines.append("|---|---|")
+            for source, count in sorted(source_counts.items()):
+                lines.append(f"| {source} | {count} |")
+        slice_audit = judgment_audit.get("slice_audit", [])
+        if isinstance(slice_audit, list) and slice_audit:
+            lines.append("")
+            lines.append("| Slice | Queries | Judged | Human-audited queries | Audit status | Demo readiness | Blockers |")
+            lines.append("|---|---|---|---|---|---|---|")
+            for row in slice_audit:
+                blockers = row.get("blockers") or []
+                blocker_text = "; ".join(str(blocker) for blocker in blockers) if blockers else "-"
+                lines.append(
+                    f"| {row.get('slice', '')} | {row.get('query_count', 0)} | "
+                    f"{row.get('judged_query_count', 0)} | {row.get('human_audited_query_count', 0)} | "
+                    f"{row.get('audit_status', '')} | {row.get('demo_readiness', '')} | {blocker_text} |"
+                )
+        lines.append("")
 
     # Cold/Warm Distribution
     if cold_warm_ratio:
@@ -378,15 +580,21 @@ def generate_metrics_summary_md(
     lines.append("")
 
     # Ablation Impact Table
-    _add_ablation_impact(lines, variant_summaries)
+    _add_ablation_impact(lines, variant_summaries, variant_comparisons)
 
     # Slice Analysis
     slice_summaries = run_data.get("slice_summaries", [])
     if slice_summaries:
-        _add_slice_analysis(lines, slice_summaries, jqc)
+        _add_slice_analysis(lines, slice_summaries, jqc, slice_confidence)
 
     # Claim Status
-    claims = decide_claim_status(variant_summaries, config, failures)
+    claim_config = dict(config)
+    claim_config.setdefault("variant_comparisons", variant_comparisons)
+    claim_config.setdefault("slice_variant_comparisons", slice_variant_comparisons)
+    claim_config.setdefault("slice_confidence", slice_confidence)
+    claim_config.setdefault("slice_metrics", slice_metrics)
+    claim_config.setdefault("latency_summary", latency_summary)
+    claims = decide_claim_status(variant_summaries, claim_config, failures)
     lines.append("## Claim Status")
     lines.append("")
     lines.append("| claim | status | evidence | blocker |")
@@ -394,6 +602,40 @@ def generate_metrics_summary_md(
     for c in claims:
         status_emoji = {"supported": "✅", "unsupported": "❌", "needs_more_evidence": "⚠️"}.get(c.status, "")
         lines.append(f"| {c.claim} | {status_emoji} {c.status} | {c.evidence} | {c.blocker} |")
+    lines.append("")
+
+    supported_claims = [claim for claim in claims if claim.status == "supported"]
+    blocked_claims = [claim for claim in claims if claim.status != "supported"]
+
+    lines.append("## What We Can Claim")
+    lines.append("")
+    if supported_claims:
+        for claim in supported_claims:
+            lines.append(f"- **{claim.claim}:** {claim.evidence}")
+    else:
+        lines.append("- No supported claims yet. Treat all metrics as directional.")
+    lines.append("")
+
+    lines.append("## What We Cannot Claim Yet")
+    lines.append("")
+    if blocked_claims:
+        for claim in blocked_claims:
+            reason = claim.blocker or claim.evidence or "No supporting evidence."
+            lines.append(f"- **{claim.claim}:** {claim.status}; {reason}")
+    else:
+        lines.append("- No blocked claims in this run.")
+    lines.append("")
+
+    lines.append("## Claim Blockers")
+    lines.append("")
+    blockers = [claim for claim in claims if claim.blocker]
+    if blockers:
+        lines.append("| claim | blocker |")
+        lines.append("|---|---|")
+        for claim in blockers:
+            lines.append(f"| {claim.claim} | {claim.blocker} |")
+    else:
+        lines.append("- No explicit claim blockers.")
     lines.append("")
 
     # Failure Dashboard
@@ -414,11 +656,13 @@ def generate_metrics_summary_md(
             lines.append(f"- **Sample size:** {len(search_latencies)}")
             lines.append(f"- **P50 search latency:** {s_p50:.1f}ms")
             lines.append(f"- **P95 search latency:** {s_p95:.1f}ms")
+            lines.append("- Search latency is not total path latency.")
             if total_latencies:
                 t_p50 = total_latencies[len(total_latencies) // 2]
                 t_p95 = total_latencies[min(int(len(total_latencies) * 0.95), len(total_latencies) - 1)]
                 lines.append(f"- **P50 total latency:** {t_p50:.1f}ms")
                 lines.append(f"- **P95 total latency:** {t_p95:.1f}ms")
+                lines.append("- Total path latency includes query processing plus search.")
             confidence = "high" if len(search_latencies) >= 50 else ("medium" if len(search_latencies) >= 20 else "low")
             lines.append(f"- **Latency confidence:** {confidence}")
             if confidence == "low":
@@ -470,7 +714,11 @@ def generate_metrics_summary_md(
     return "\n".join(lines)
 
 
-def _add_ablation_impact(lines: list[str], variant_summaries: list[dict[str, object]]) -> None:
+def _add_ablation_impact(
+    lines: list[str],
+    variant_summaries: list[dict[str, object]],
+    variant_comparisons: list[dict[str, object]] | None = None,
+) -> None:
     """Add ablation impact comparison table."""
 
     def _get(name: str) -> dict[str, object] | None:
@@ -497,9 +745,27 @@ def _add_ablation_impact(lines: list[str], variant_summaries: list[dict[str, obj
 
     lines.append("## Ablation Impact")
     lines.append("")
-    lines.append("| comparison | delta_NDCG@10 | delta_MRR@10 | delta_ColdRelevantRate@10 | interpretation |")
-    lines.append("|---|---|---|---|---|")
+    lines.append("| comparison | delta_NDCG@10 | delta_MRR@10 | delta_ColdRelevantRate@10 | paired evidence | interpretation |")
+    lines.append("|---|---|---|---|---|---|")
+    comparison_keys = {
+        "hybrid vs title_only": "hybrid_union_vs_title_only",
+        "hybrid vs vector_only": "hybrid_union_vs_vector_only",
+        "hybrid vs bm25_only": "hybrid_union_vs_bm25_only",
+        "hybrid vs no_cold_boost": "hybrid_union_vs_hybrid_no_cold_boost",
+    }
     for label, a, b in comparisons:
+        comparison_key = comparison_keys.get(label, label.replace("hybrid vs ", "hybrid_union_vs_"))
+
+        def _evidence(metric: str) -> str:
+            for diag in variant_comparisons or []:
+                if diag.get("comparison") == comparison_key and diag.get("metric") == metric:
+                    status = str(diag.get("significance", "unknown"))
+                    blockers = diag.get("blockers") or []
+                    if blockers:
+                        return f"{status}: {'; '.join(str(b) for b in blockers)}"
+                    return status
+            return "missing paired comparison"
+
         def _delta(key: str) -> str:
             av = a.get(key)
             bv = b.get(key)
@@ -512,10 +778,13 @@ def _add_ablation_impact(lines: list[str], variant_summaries: list[dict[str, obj
         d_ndcg = _delta("ndcg_at_10")
         d_mrr = _delta("mrr_at_10")
         d_cold = _delta("cold_relevant_rate_at_10")
+        evidence = _evidence("ndcg_at_10")
         interp = "—"
         if d_ndcg != "N/A":
             val = float(d_ndcg)
-            if val > 0.05:
+            if not evidence.startswith("positive"):
+                interp = "Directional only; do not treat as supported"
+            elif val > 0.05:
                 interp = "Clear improvement ✅"
             elif val > 0:
                 interp = "Slight improvement"
@@ -523,11 +792,16 @@ def _add_ablation_impact(lines: list[str], variant_summaries: list[dict[str, obj
                 interp = "Negligible difference"
             else:
                 interp = "Regression ❌"
-        lines.append(f"| {label} | {d_ndcg} | {d_mrr} | {d_cold} | {interp} |")
+        lines.append(f"| {label} | {d_ndcg} | {d_mrr} | {d_cold} | {evidence} | {interp} |")
     lines.append("")
 
 
-def _add_slice_analysis(lines: list[str], slice_summaries: list[dict[str, object]], judged_count: int) -> None:
+def _add_slice_analysis(
+    lines: list[str],
+    slice_summaries: list[dict[str, object]],
+    judged_count: int,
+    slice_confidence: list[dict[str, object]] | None = None,
+) -> None:
     """Add slice analysis with language and intent sub-tables."""
     lines.append("## Slice Analysis")
     lines.append("")
@@ -598,6 +872,21 @@ def _add_slice_analysis(lines: list[str], slice_summaries: list[dict[str, object
                 lines.append(f"| {sl} | {qc} | {judged} | {conf} {conf_mark} | {h_ndcg} | {best_var} |")
         lines.append("")
 
+    if slice_confidence:
+        lines.append("### Slice Confidence Diagnostics")
+        lines.append("")
+        lines.append("| Slice | Variant | Confidence | Judged | Positive Judged | Result Coverage | Blockers |")
+        lines.append("|-------|---------|------------|--------|-----------------|-----------------|----------|")
+        for diag in slice_confidence:
+            blockers = diag.get("blockers") or []
+            blocker_text = "; ".join(str(b) for b in blockers) if blockers else "-"
+            lines.append(
+                f"| {diag.get('slice', '')} | {diag.get('variant', '')} | {diag.get('confidence', '')} | "
+                f"{diag.get('judged_query_count', 0)} | {diag.get('positive_judged_query_count', 0)} | "
+                f"{diag.get('result_judgment_coverage_rate', 0)} | {blocker_text} |"
+            )
+        lines.append("")
+
 
 def _add_failure_dashboard(lines: list[str], failures: list[dict[str, Any]]) -> None:
     """Generate detailed failure dashboard."""
@@ -654,6 +943,8 @@ def _add_explanation_coverage(lines: list[str], results: list[dict[str, Any]]) -
     has_fact = stats["has_matched_fact"]
     has_both = stats["has_both_explanations"]
     full_coverage = stats["full_explanation_coverage"]
+    both_missing_rate = stats.get("both_missing_rate")
+    quality = stats.get("explanation_quality")
 
     lines.append("## Explanation Coverage")
     lines.append("")
@@ -661,6 +952,8 @@ def _add_explanation_coverage(lines: list[str], results: list[dict[str, Any]]) -
     lines.append(f"- **Has matched_intent:** {has_intent} ({round(has_intent / total * 100, 1) if total else 0}%)")
     lines.append(f"- **Has matched_fact:** {has_fact} ({round(has_fact / total * 100, 1) if total else 0}%)")
     lines.append(f"- **Has both explanations:** {has_both} ({round(has_both / total * 100, 1) if total else 0}%)")
+    lines.append(f"- **Has neither explanation:** {stats.get('has_no_explanation')} ({round(float(both_missing_rate) * 100, 1) if isinstance(both_missing_rate, (int, float)) else 0}%)")
+    lines.append(f"- **Explanation quality:** {quality}")
     if full_coverage is not None and full_coverage < 0.5:
         lines.append("")
         lines.append("> ⚠️ Less than 50% of results have full explanations (both matched_intent and matched_fact). "
@@ -718,6 +1011,112 @@ def _generate_recommendations(variant_summaries: list[dict[str, object]]) -> lis
                 )
 
     return recs
+
+
+def generate_judge_facing_executive_summary_md(run_data: dict[str, Any]) -> str:
+    """Generate a short judge-facing summary with explicit claim boundaries."""
+    config = run_data.get("config", {})
+    variant_summaries = run_data.get("variant_summaries", [])
+    failures = run_data.get("failures", [])
+    claim_config = dict(config)
+    claim_config.setdefault("variant_comparisons", run_data.get("variant_comparisons", []))
+    claim_config.setdefault("slice_variant_comparisons", run_data.get("slice_variant_comparisons", []))
+    claim_config.setdefault("slice_confidence", run_data.get("slice_confidence", []))
+    claim_config.setdefault("slice_metrics", run_data.get("slice_metrics", {}))
+    claim_config.setdefault("latency_summary", run_data.get("latency_summary", {}))
+    claims = decide_claim_status(variant_summaries, claim_config, failures)
+    supported = [claim for claim in claims if claim.status == "supported"]
+    blocked = [claim for claim in claims if claim.status != "supported"]
+    judgment_audit = run_data.get("judgment_audit", config.get("judgment_audit", {}))
+
+    lines = [
+        "# Judge-Facing Executive Summary",
+        "",
+        f"**Run ID:** {config.get('run_id', 'unknown')}",
+        f"**Evaluation schema:** {config.get('evaluation_schema_version', 'unknown')}",
+        f"**Artifact contract:** {config.get('artifact_contract_version', '1.0')}",
+        "",
+        "## What We Can Claim",
+        "",
+    ]
+    if supported:
+        for claim in supported:
+            lines.append(f"- **{claim.claim}:** {claim.evidence}")
+    else:
+        lines.append("- No supported claims yet. Use metrics as directional evidence only.")
+
+    lines.extend(["", "## What We Cannot Claim Yet", ""])
+    if blocked:
+        for claim in blocked:
+            reason = claim.blocker or claim.evidence or "No supporting evidence."
+            lines.append(f"- **{claim.claim}:** {claim.status}; {reason}")
+    else:
+        lines.append("- No blocked claims in this run.")
+
+    lines.extend([
+        "",
+        "## Evidence Caveats",
+        "",
+        "- Claim states are deterministic: supported, unsupported, or needs_more_evidence.",
+        "- Search latency and total path latency are separate evidence scopes.",
+        "- Slice claims require slice coverage plus paired evidence, not raw metric deltas alone.",
+    ])
+    if isinstance(judgment_audit, dict) and judgment_audit:
+        lines.append(
+            f"- Judgment provenance status: `{judgment_audit.get('overall_status', 'unknown')}`; "
+            f"human-audited rate `{judgment_audit.get('human_audited_rate', 0)}`."
+        )
+
+    lines.extend([
+        "",
+        "## Report Pack Files",
+        "",
+        "- metrics_summary.md",
+        "- hackathon_impact_report.md",
+        "- evaluation_upgrade_report_vi.md (optional static attachment copied from repo root if available)",
+        "- judge_facing_executive_summary.md",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def write_judge_report_pack(run_data: dict[str, Any], output_dir: str | Path) -> dict[str, str]:
+    """Write additive judge-facing report pack files."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    summary_path = out / "judge_facing_executive_summary.md"
+    manifest_path = out / "judge_report_pack_manifest.json"
+    vietnamese_report_path = out / "evaluation_upgrade_report_vi.md"
+    summary_path.write_text(generate_judge_facing_executive_summary_md(run_data), encoding="utf-8")
+    source_vietnamese_report = Path(__file__).resolve().parents[2] / "evaluation_upgrade_report_vi.md"
+    missing_required_files: list[str] = []
+    missing_optional_static_files: list[str] = []
+    files_written = {
+        "executive_summary": str(summary_path),
+        "manifest": str(manifest_path),
+    }
+    if source_vietnamese_report.exists():
+        copyfile(source_vietnamese_report, vietnamese_report_path)
+        files_written["evaluation_upgrade_report_vi"] = str(vietnamese_report_path)
+    else:
+        missing_optional_static_files.append("evaluation_upgrade_report_vi.md")
+    manifest = {
+        "run_id": run_data.get("config", {}).get("run_id", "unknown"),
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "artifact_contract_version": run_data.get("config", {}).get("artifact_contract_version", "1.0"),
+        "expected_pack_files": [
+            "metrics_summary.md",
+            "hackathon_impact_report.md",
+            "judge_facing_executive_summary.md",
+        ],
+        "optional_static_pack_files": [
+            "evaluation_upgrade_report_vi.md",
+        ],
+        "files_written": files_written,
+        "missing_required_files": missing_required_files,
+        "missing_optional_static_files": missing_optional_static_files,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    return files_written
 
 
 def write_evaluation_outputs(run_data: dict[str, Any], output_dir: str | Path) -> dict[str, str]:

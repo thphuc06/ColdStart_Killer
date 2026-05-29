@@ -128,12 +128,12 @@ Tạo report giả để kiểm tra framework hoạt động đúng — **không
 
 | Checklist Item | Status | Note |
 |---|---|---|
-| `test_evaluation_dataset.py -v` passes | ✅ 21 tests | |
-| `test_evaluation_diagnostics.py -v` passes | ✅ 3 tests | |
-| `test_evaluation_guardrails.py -v` passes | ✅ 5 tests | |
-| `test_evaluation_metrics.py -v` passes | ✅ 14 tests | |
-| `test_evaluation_runner.py -v` passes | ✅ 8 tests | |
-| `test_evaluation_variants.py -v` passes | ✅ 6 tests | |
+| `test_evaluation_dataset.py -v` passes | ✅ | Covered in the latest focused evaluation batch |
+| `test_evaluation_diagnostics.py -v` passes | ✅ | Covered in the latest focused evaluation batch |
+| `test_evaluation_guardrails.py -v` passes | ✅ | Covered in the latest focused evaluation batch |
+| `test_evaluation_metrics.py -v` passes | ✅ | Covered in the latest focused evaluation batch |
+| `test_evaluation_runner.py -v` passes | ✅ | Covered in the latest focused evaluation batch |
+| `test_evaluation_variants.py -v` passes | ✅ | Covered in the latest focused evaluation batch |
 | `test_pipeline.py test_validation.py` passes | ✅ 8 tests | Existing tests still pass |
 | `test_llm_client.py` passes | ⚠️ | Pre-existing: `ollama` not installed |
 | `run_eval_diagnostics.py --help` works | ✅ | |
@@ -183,7 +183,7 @@ scripts/                                 ← CLI entrypoints
   run_evaluation.py                      ← Full evaluation CLI (+ smoke test)
   summarize_evaluation.py                ← Re-summarize existing run
 
-tests/                                   ← 64 offline tests
+tests/                                   ← Offline evaluation and guardrail tests
   test_evaluation_dataset.py             ← Contract + loading tests
   test_evaluation_diagnostics.py         ← Probe runner tests
   test_evaluation_guardrails.py          ← Import safety + read-only + mutation

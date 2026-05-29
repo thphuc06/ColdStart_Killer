@@ -51,6 +51,18 @@ def _get_variant_summary(run_data: dict[str, Any], name: str) -> dict[str, Any] 
     return None
 
 
+def _comparison_evidence_note(run_data: dict[str, Any], comparison: str, metric: str) -> str:
+    """Return compact paired-evidence caveat text for a comparison metric."""
+    for diag in run_data.get("variant_comparisons", []):
+        if diag.get("comparison") == comparison and diag.get("metric") == metric:
+            status = str(diag.get("significance", "unknown"))
+            blockers = diag.get("blockers") or []
+            if blockers:
+                return f"{status}; {'; '.join(str(blocker) for blocker in blockers)}"
+            return status
+    return "missing paired comparison; delta is directional only"
+
+
 def _format_delta(a_val: object, b_val: object) -> tuple[str, str, str]:
     """Format delta and improvement % between two values.
 
@@ -133,6 +145,7 @@ def _comparison_hybrid_vs_title(run_data: dict[str, Any]) -> str:
         "## Hybrid vs Title-Only Baseline",
         "",
         "> Title-only uses simple keyword regex matching. Hybrid uses semantic vector + BM25 fusion.",
+        f"> Paired evidence for NDCG@10: {_comparison_evidence_note(run_data, 'hybrid_union_vs_title_only', 'ndcg_at_10')}.",
         "",
         "| Metric | Hybrid | Title-Only | Delta | Improvement |",
         "|--------|--------|------------|-------|-------------|",
@@ -162,6 +175,7 @@ def _comparison_hybrid_vs_single_channel(run_data: dict[str, Any]) -> str:
         "## Hybrid vs Single-Channel Baselines",
         "",
         "> Shows that fusion outperforms individual retrieval channels.",
+        "> Deltas are claim-grade only when paired comparison evidence is positive.",
         "",
     ]
 
@@ -174,6 +188,8 @@ def _comparison_hybrid_vs_single_channel(run_data: dict[str, Any]) -> str:
     if vector:
         lines.extend([
             "### Hybrid vs Vector-Only",
+            "",
+            f"> Paired evidence for NDCG@10: {_comparison_evidence_note(run_data, 'hybrid_union_vs_vector_only', 'ndcg_at_10')}.",
             "",
             "| Metric | Hybrid | Vector-Only | Delta | Improvement |",
             "|--------|--------|------------|-------|-------------|",
@@ -190,6 +206,8 @@ def _comparison_hybrid_vs_single_channel(run_data: dict[str, Any]) -> str:
     if bm25:
         lines.extend([
             "### Hybrid vs BM25-Only",
+            "",
+            f"> Paired evidence for NDCG@10: {_comparison_evidence_note(run_data, 'hybrid_union_vs_bm25_only', 'ndcg_at_10')}.",
             "",
             "| Metric | Hybrid | BM25-Only | Delta | Improvement |",
             "|--------|--------|-----------|-------|-------------|",
@@ -385,6 +403,9 @@ def _latency_profile(run_data: dict[str, Any]) -> str:
         "## ⚡ Latency Profile",
         "",
         f"**Sample size:** {len(search_latencies)} measurements",
+        "",
+        "> Search latency is not total path latency.",
+        "> Total path latency includes query processing plus search.",
         "",
         "| Stage | P50 | P95 | Min | Max |",
         "|-------|-----|-----|-----|-----|",

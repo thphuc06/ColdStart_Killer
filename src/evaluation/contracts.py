@@ -67,6 +67,8 @@ VALID_RELEVANCE_VALUES = frozenset({0, 1, 2, 3})
 
 VALID_RELEVANCE_THRESHOLDS = frozenset({1, 2, 3})
 
+VALID_JUDGMENT_SOURCES = frozenset({"ai_assisted", "human_audited", "mixed"})
+
 
 # ---------------------------------------------------------------------------
 # Dataclasses
@@ -109,6 +111,9 @@ class RelevanceJudgment:
     relevance: int
     reason: str = ""
     labels: list[str] = field(default_factory=list)
+    judgment_source: str = "ai_assisted"
+    annotator_id: str = ""
+    audited_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -236,6 +241,10 @@ def validate_relevance_judgment(judgment: RelevanceJudgment) -> RelevanceJudgmen
     if judgment.relevance not in VALID_RELEVANCE_VALUES:
         raise ContractValidationError(
             f"relevance {judgment.relevance} not in {sorted(VALID_RELEVANCE_VALUES)}"
+        )
+    if judgment.judgment_source not in VALID_JUDGMENT_SOURCES:
+        raise ContractValidationError(
+            f"judgment_source '{judgment.judgment_source}' not in {sorted(VALID_JUDGMENT_SOURCES)}"
         )
     return judgment
 

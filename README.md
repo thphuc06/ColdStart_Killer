@@ -119,7 +119,7 @@ Latest verified live run:
 python scripts/run_evaluation.py \
   --queries evaluation/queries/retrieval_queries_seed.json \
   --judgments evaluation/judgments/retrieval_judgments_seed.json \
-  --out .runtime/evaluation/plan_review_live
+  --out .runtime/evaluation/notebook_run
 ```
 
 Result summary:
@@ -130,12 +130,12 @@ Result summary:
 | AI-assisted conservative judgments | 2,119 |
 | Judged queries | 50 |
 | Queries with relevance >= 2 | 43 |
-| Live retrieval results | 2,425 |
+| Live retrieval results | 2,428 |
 | Evaluation failures | 0 |
 | Report status | sufficient |
 | Dataset cold percentage | 100.0% |
-| Search P95 latency | 116.5ms |
-| Total P95 latency | 1173.0ms |
+| Search P95 latency | 183.8ms |
+| Total P95 latency | 956.2ms |
 
 Live MongoDB data snapshot:
 
@@ -156,20 +156,20 @@ Main live metrics:
 
 | Variant | NDCG@10 | Recall@10 | MRR@10 | HitRate@10 | ColdRelevantRate@10 |
 |---|---:|---:|---:|---:|---:|
-| `title_only` | 0.5537 | 0.3154 | 0.4992 | 0.74 | 0.3020 |
-| `vector_only` | 0.7195 | 0.4005 | 0.5537 | 0.74 | 0.3727 |
-| `bm25_only` | 0.6042 | 0.3303 | 0.5546 | 0.76 | 0.3363 |
-| `hybrid_union` | 0.7735 | 0.4478 | 0.6817 | 0.78 | 0.3920 |
-| `hybrid_no_cold_boost` | 0.7735 | 0.4478 | 0.6817 | 0.78 | 0.3920 |
+| `title_only` | 0.5530 | 0.3154 | 0.4992 | 0.74 | 0.3020 |
+| `vector_only` | 0.7191 | 0.4005 | 0.5537 | 0.74 | 0.3727 |
+| `bm25_only` | 0.6003 | 0.3257 | 0.5571 | 0.76 | 0.3342 |
+| `hybrid_union` | 0.7715 | 0.4525 | 0.6817 | 0.78 | 0.3940 |
+| `hybrid_no_cold_boost` | 0.7715 | 0.4525 | 0.6817 | 0.78 | 0.3940 |
 
 Live report artifacts:
 
-- `.runtime/evaluation/plan_review_live/metrics_summary.md`
-- `.runtime/evaluation/plan_review_live/hackathon_impact_report.md`
-- `.runtime/evaluation/plan_review_live/config.json`
-- `.runtime/evaluation/plan_review_live/layer2_metrics_summary.json`
-- `.runtime/evaluation/plan_review_live/layer2_metrics_by_query.csv`
-- `.runtime/evaluation/plan_review_live/layer2_raw_results.json`
+- `.runtime/evaluation/notebook_run/metrics_summary.md`
+- `.runtime/evaluation/notebook_run/hackathon_impact_report.md`
+- `.runtime/evaluation/notebook_run/config.json`
+- `.runtime/evaluation/notebook_run/layer2_metrics_summary.json`
+- `.runtime/evaluation/notebook_run/layer2_metrics_by_query.csv`
+- `.runtime/evaluation/notebook_run/layer2_raw_results.json`
 
 Interpretation caveats:
 
@@ -177,6 +177,7 @@ Interpretation caveats:
 
 - The current relevance labels are AI-assisted conservative relevance judgments (2,119 query-item pairs labeled using LLM with conservative scoring — human audit recommended before claiming as full ground truth). They are sufficient for local evaluation gates, but a human audit is recommended before publication-grade claims.
 - The live dataset is cold-dominant (`warm_items = 0` in the latest run), so cold-start metrics are framed as **exposure quality**, not cold-vs-warm lift.
+- `Hybrid beats title-only baseline` currently remains `needs_more_evidence` because paired Recall@10 evidence is directional-only in the latest run (`null_metric_pair_count = 7`), even though the raw metric deltas are positive.
 - `Cold-start window was measured` remains `needs_more_evidence` until source data includes `indexed_at` and `first_seen_in_top_k_at`.
 - Live MongoDB search latency is below the 400ms target in the latest run, but total reported latency is still above 400ms. Treat query processing and embedding/translation caching as demo hardening work.
 - Python 3.14 currently runs the project, but `torch/sentence-transformers` emits a stability warning. Python 3.10-3.12 is still the safer demo runtime.

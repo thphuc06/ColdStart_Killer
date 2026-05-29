@@ -13,13 +13,15 @@
 
 ## Abstract
 
-The item cold-start problem — the failure of Collaborative Filtering to recommend newly listed products with zero interaction history — constitutes a fundamental architectural gap in production e-commerce recommendation systems. In real marketplaces, cold-start is also continuous: products, users, and returning-user intents can all become sparse when category, budget, occasion, or persona changes [14]. This paper presents **ColdStart Killer**, a HyPE-assisted personalized recommendation engine that adapts Hypothetical Prompt Embeddings [1] and the HyDE design pattern [6] to product recommendation. Rather than generating hypothetical documents at query time and placing synchronous LLM latency on the serving path, the system precomputes 3 to 6 buyer-intent queries per product, stratified by semantic aspect, entirely at indexing time. This transforms the asymmetric question-to-document retrieval problem into symmetric question-to-question matching, enabling zero-interaction products to be retrieved by semantic intent without any prior behavioral signal.
+The item cold-start problem — the inability of Collaborative Filtering to surface newly listed products with zero interaction history — is a persistent architectural gap in production e-commerce recommendation systems. Cold-start is also continuous: a product is cold on Day 1, a new user is cold on first visit, and a returning user behaves cold whenever category, budget, occasion, or persona shifts outside their established history [14]. This paper presents **ColdStart Killer**, a three-pillar recommendation engine built natively on MongoDB Atlas.
 
-The system implements a **Dual-Space Multi-Aspect Retrieval** architecture in which HyPE units serve a dense intent retrieval channel via MongoDB Atlas Vector Search [19], while atomic proposition units serve a sparse factual retrieval channel via MongoDB Atlas Search (BM25) [10]. Both channels are executed and fused through Reciprocal Rank Fusion (k=60) [21] within a single MongoDB Aggregation Pipeline — using `$vectorSearch`, `$search`, `$unionWith`, `$group`, `$lookup`, `$addFields`, `$sort`, and `$project` [7][20] — with zero intermediate application-layer processing. MongoDB Atlas operates as the unified computational engine for retrieval, rank fusion, filtering, scoring, and explanation generation.
+**Pillar 1 — Indexing-time semantic representation (HyPE).** Rather than embedding each product as a single vector, the system generates 3 to 6 buyer-intent queries per product at indexing time — offline, once per product, with zero LLM cost at query time. These Hypothetical Prompt Embeddings [1], stratified by semantic aspect (function, persona, occasion, compatibility, style, spec, constraint, gift), are embedded with BAAI/bge-m3 (1024-dim) and stored as dense retrieval units. Atomic proposition facts are stored in parallel as sparse BM25 units. Every zero-interaction product therefore has multiple semantic and factual entry points from the moment it enters the catalog.
 
-A behavior layer built on MongoDB collections (`clickstream_events`, `user_item_signals`, `user_profiles`, `item_item_cf_edges`) enables a principled transition from cold-start content retrieval to warm behavioral recommendation, through multi-interest user profiling and item-item Collaborative Filtering derived strictly from multi-user implicit co-interaction signals.
+**Pillar 2 — MongoDB Aggregation Pipeline as the unified computational engine.** Both retrieval channels are executed and fused through Reciprocal Rank Fusion (k=60) [21] inside a single MongoDB Aggregation Pipeline — using `$vectorSearch`, `$search`, `$unionWith`, `$group`, `$lookup`, `$addFields`, `$sort`, and `$project` [7][19][20] — with zero intermediate application-layer processing. MongoDB Atlas is not a datastore for this system; it is the retrieval, fusion, scoring, filtering, and explanation engine.
 
-Empirical evaluation on 3,000 products across 50 retrieval queries with 2,119 relevance judgments yields an NDCG@10 of **0.7735** (+39.7% over title-only baseline), a Vietnamese-query NDCG@10 of **0.856** (+74.2%), and a MongoDB search P95 latency of **116.5ms** against a 400ms production target. Zero pipeline failures were observed across 2,425 live evaluation results. End-to-end total pipeline P95 is **1,173ms**, so query and embedding caching remain required before claiming full serving-path latency readiness.
+**Pillar 3 — Behavior-attributed Collaborative Filtering.** A behavior layer co-located in MongoDB (`clickstream_events`, `user_item_signals`, `user_profiles`, `item_item_cf_edges`) accumulates implicit interaction signals and derives item-item CF edges strictly from multi-user co-interaction data — never from semantic similarity. This enables a principled, attributable transition from cold-start content retrieval to warm personalized recommendation as user and item signals mature.
+
+Empirical evaluation on 3,000 products across 50 retrieval queries with 2,119 relevance judgments yields a hybrid NDCG@10 of **0.7715** (raw delta **+39.5%** vs title-only baseline), a Vietnamese-query NDCG@10 of **0.8462** (+72.2%), and a MongoDB search P95 latency of **183.8ms** against a 400ms production target. Zero pipeline failures were observed across **2,428** live evaluation results. End-to-end total pipeline P95 is **956.2ms**; query and embedding caching remain required before claiming full serving-path latency readiness. Under the stricter evidence gate, the raw hybrid-vs-title metric win remains real, but the formal claim still stays at `needs_more_evidence` because paired Recall@10 evidence is directional only in the latest run.
 
 **Keywords:** item cold-start, recommendation systems, Hypothetical Prompt Embeddings, MongoDB Atlas Vector Search, Aggregation Pipeline, Reciprocal Rank Fusion, collaborative filtering, cross-lingual retrieval, e-commerce personalization
 
@@ -30,8 +32,8 @@ Empirical evaluation on 3,000 products across 50 retrieval queries with 2,119 re
 | **Problem** | Item cold-start and continuous cold-start in e-commerce: new products, new users, and shifted returning-user intents lack reliable behavior evidence. |
 | **Solution** | Indexing-time HyPE buyer-intent units + proposition fact units create multiple semantic and factual entry points per product. |
 | **MongoDB role** | Vector Search + Atlas Search + Aggregation Pipeline + co-located behavior data execute retrieval, fusion, scoring, joins, filtering, explanations, and attribution. |
-| **Evidence** | NDCG@10 **0.7735**; **+39.7%** vs title-only; Vietnamese NDCG@10 **0.856**; MongoDB search P95 **116.5ms**; **0/2,425** pipeline failures. |
-| **Caveat** | MongoDB search latency meets target, but end-to-end total pipeline P95 is **1,173ms** and still needs query/embedding caching. |
+| **Evidence** | Hybrid NDCG@10 **0.7715**; raw delta **+39.5%** vs title-only; Vietnamese NDCG@10 **0.8462**; MongoDB search P95 **183.8ms**; **0/2,428** pipeline failures. |
+| **Caveat** | MongoDB search latency meets target, but total path P95 is **956.2ms** and still needs query/embedding caching. The stricter evidence gate keeps `Hybrid beats title-only baseline` at `needs_more_evidence` in the latest run. |
 
 > **Core Thesis:** ColdStart Killer turns a zero-interaction product from one unrankable catalog row into several searchable buyer-intent and factual retrieval units, then lets MongoDB Atlas perform the serving-time recommendation computation.
 
@@ -57,7 +59,6 @@ Beyond the Vietnamese context, the core problem is universal:
 - CF-only engines may require a business-specific interaction warm-up period before a new item becomes recommendable, leaving launch visibility dependent on first impressions, clicks, carts, or purchases [15].
 - Vocabulary mismatch between buyer queries and seller descriptions (especially across languages) makes keyword-only search insufficient.
 - Modern shoppers increasingly express intent as natural-language, multi-constraint requests; Bloomreach reported that 41.4% of surveyed respondents use natural language when searching and 61.3% are interested in a conversational search bar [17].
-- Early product visibility is one plausible contributor to seller retention, because products that receive little exposure struggle to collect the behavioral evidence required by traditional recommendation systems.
 
 ### 1.3 The Solution
 
@@ -75,14 +76,14 @@ ColdStart Killer introduces a **Dual-Space Multi-Aspect Retrieval** architecture
 
 | Metric | Measured Value | Comparison |
 |---|---|---|
-| NDCG@10 (Hybrid) | **0.7735** | +39.7% vs title-only (0.5537) |
-| Vietnamese NDCG@10 | **0.856** | +74.2% vs title-only (0.4913) |
+| NDCG@10 (Hybrid) | **0.7715** | raw delta +39.5% vs title-only (0.5530) |
+| Vietnamese NDCG@10 | **0.8462** | +72.2% vs title-only (0.4913) |
 | MRR@10 (Hybrid) | **0.6817** | +36.6% vs title-only (0.4992) |
-| Recall@10 (Hybrid) | **0.4478** | +42.0% vs title-only (0.3154) |
+| Recall@10 (Hybrid) | **0.4525** | +43.5% vs title-only (0.3154) |
 | HitRate@10 (Hybrid) | **0.78** | — |
-| ColdRelevantRate@10 | **0.3920** | Cold items appearing relevantly |
-| Search P95 Latency | **116.5ms** | Below 400ms target |
-| Evaluation Failures | **0 / 2,425** | Zero pipeline failures |
+| ColdRelevantRate@10 | **0.3940** | Cold items appearing relevantly |
+| Search P95 Latency | **183.8ms** | Below 400ms target |
+| Evaluation Failures | **0 / 2,428** | Zero pipeline failures |
 
 ### 1.5 MongoDB as the Core Recommendation Engine
 
@@ -98,7 +99,7 @@ ColdStart Killer shares surface similarity with Retrieval-Augmented Generation p
 | **Cold-start coverage** | New documents have no semantic advantage until indexed | Every cold item has multiple HyPE entry points before any user interaction |
 | **Explainability** | Relevance score is a black-box similarity distance | Every result carries `matched_intent` and `matched_fact` from retrieval metadata |
 | **Collaborative Filtering** | Not present | Behavioral CF edges derived strictly from multi-user co-interaction; explicitly separated from semantic similarity to avoid fake-CF claims |
-| **LLM at query time** | Often present in HyDE/RAG generation flows | Zero LLM calls at query time; all LLM computation is amortized at indexing time |
+| **LLM at query time** | Often present in LLM-augmented generation flows | Zero LLM calls at query time; all LLM computation is amortized at indexing time |
 | **Database role** | Storage + retrieval only | MongoDB executes retrieval, RRF fusion [21], scoring, filtering, join, and explanation generation natively |
 
 The result is a system that targets the cold-start problem — which standard RAG/search does not address — with a production-oriented zero-query-time-LLM serving design. End-to-end latency optimization remains roadmap work.
@@ -137,7 +138,7 @@ For buyers, the pain is poor intent matching. Modern e-commerce search is moving
 | **Collaborative Filtering** | Requires co-interaction history. Zero-interaction items are mathematically invisible. |
 | **Lexical BM25 Search** | Fails on vocabulary mismatch — buyers search "sunscreen for oily office workers" but sellers describe "SPF50+ PA++++ milk texture oil control". |
 | **Dense Retrieval (1 vector/item)** | A single embedding cannot capture diverse buyer intents for the same product. |
-| **HyDE-style query-time LLM** | Can improve semantic alignment, but puts LLM generation on the online path [6]. |
+| **Query-time LLM generation** | Can improve semantic alignment, but places synchronous LLM latency on the online serving path, limiting production viability. |
 | **Popularity Ranking** | Reinforces head-item bias; new products remain dependent on early exposure to become recommendable [16]. |
 
 ### 2.5 Why Now
@@ -149,13 +150,13 @@ The convergence of market pressure and technology maturity makes this solution b
 - New seller attrition is a measurable platform health problem; cold-start bias can plausibly contribute to seller pressure by reducing early visibility for newly listed products.
 - Cross-lingual commerce (Vietnamese queries ↔ English product metadata) is a growing reality that pure keyword search cannot address.
 - Cross-category behavioral sparsity is increasingly visible in multi-vertical marketplaces: users may have rich history in one vertical and sparse behavior in another, as also discussed in industry engineering work on behavioral silos [18].
-- Cold-start recommendation in the LLM era remains an active research direction, especially for using textual and generated representations when interaction history is limited [11].
 
 **Technology Enablers:**
 1. **MongoDB Atlas Vector Search** enables semantic search with filter fields inside an Aggregation Pipeline [19].
 2. **MongoDB hybrid search patterns** combine full-text and vector search results using rank fusion techniques [7].
 3. **Local LLMs** (Qwen3:8B via Ollama) make offline HyPE generation cost-effective at scale — no API costs per product.
 4. **Multilingual embedding models** (BAAI/bge-m3) handle cross-lingual query-product matching natively across many languages [4].
+5. **LLM-era cold-start research** confirms that textual and generated representations are a viable path when interaction history is limited [11] — this project applies that direction at indexing time, not query time.
 
 ---
 
@@ -194,23 +195,23 @@ The convergence of market pressure and technology maturity makes this solution b
 
 | Requirement | Specification | Empirical Validation |
 |---|---|---|
-| Dual-space hybrid retrieval | Candidates SHALL be retrieved via simultaneous dense vector search over HyPE intent representations and sparse BM25 search over proposition fact units, fused via RRF [21] within a single MongoDB Aggregation Pipeline. | Hybrid NDCG@10 = 0.7735; exceeds both single-channel variants (vector-only: 0.7195, BM25-only: 0.6042). |
-| Zero-interaction item discoverability | Products with `interaction_count = 0` SHALL appear in retrieval results immediately after indexing, without prior behavioral signal. | All 3,000 items are cold; ColdRelevantRate@10 = 0.3920. |
+| Dual-space hybrid retrieval | Candidates SHALL be retrieved via simultaneous dense vector search over HyPE intent representations and sparse BM25 search over proposition fact units, fused via RRF [21] within a single MongoDB Aggregation Pipeline. | Hybrid NDCG@10 = 0.7715; exceeds both single-channel variants (vector-only: 0.7191, BM25-only: 0.6003). |
+| Zero-interaction item discoverability | Products with `interaction_count = 0` SHALL appear in retrieval results immediately after indexing, without prior behavioral signal. | All 3,000 items are cold; ColdRelevantRate@10 = 0.3940. |
 | User-state-aware homepage feed | The feed generation pipeline SHALL adapt candidate sourcing and scoring weights based on user profile maturity (cold / warming / warm). | Verified across 8 synthetic persona archetypes with profile state transition logging. |
 | Query-adaptive personalized search | Profile-based reranking weight SHALL scale inversely with query specificity to preserve query-intent primacy. | Specific queries: `query_hybrid` weight = 0.82; exploratory: 0.50. |
 | Attributable behavioral signal collection | Every interaction event SHALL be linkable to the recommendation context that generated it via a stable `request_id` snapshot. | `clickstream_events` ↔ `recommendation_logs` join verified across 514 CF edge derivations. |
 | Behavior-derived Collaborative Filtering | CF edges SHALL be derived exclusively from multi-user implicit co-interaction signals, not from semantic similarity. | 514 `item_item_cf_edges`; avg. support = 2.51; semantic neighbors served separately. |
-| Attribution-backed explainability | Every recommendation output SHALL carry traceable `matched_intent`, `matched_fact`, `matched_channels` fields from retrieval metadata; zero LLM calls at query time. | 0/2,425 output attribution failures in live evaluation. |
+| Attribution-backed explainability | Every recommendation output SHALL carry traceable `matched_intent`, `matched_fact`, `matched_channels` fields from retrieval metadata; zero LLM calls at query time. | 0/2,428 output attribution failures in live evaluation. |
 | Reproducible offline evaluation | The system SHALL support deterministic IR metric computation across ablation variants against a fixed query-judgment corpus. | 50 queries × 2,119 judgments × 5 variants; 0 pipeline failures. |
 
 ### 4.2 Non-Functional Requirements
 
 | Requirement | Target | Current Status |
 |---|---|---|
-| Search P95 latency | < 400ms | 116.5ms ✅ |
-| Total pipeline P95 latency | < 400ms | 1,173ms (needs query caching optimization) |
+| Search P95 latency | < 400ms | 183.8ms ✅ |
+| Total pipeline P95 latency | < 400ms | 956.2ms (needs query caching optimization) |
 | Atlas Free Tier (M0) compatible | Required | ✅ Uses `$unionWith` instead of `$rankFusion` |
-| Zero evaluation pipeline failures | Required | 0/2,425 ✅ |
+| Zero evaluation pipeline failures | Required | 0/2,428 ✅ |
 
 ### 4.3 MongoDB Hackathon Alignment
 
@@ -314,7 +315,7 @@ The business claim is intentionally scoped: the MVP shows improved retrieval qua
 
 | Business Objective | KPI | Status |
 |---|---|---|
-| Seller/product launch visibility | ColdRelevantRate@10 | Measured: **0.3920** |
+| Seller/product launch visibility | ColdRelevantRate@10 | Measured: **0.3940** |
 | Seller/product launch visibility | Cold-start window | Planned: needs `indexed_at` and `first_seen_in_top_k_at` |
 | Buyer discovery quality | NDCG@10, Recall@10, MRR@10 | Measured in current offline evaluation |
 | Platform diversity | Catalog coverage, seller exposure distribution | Production KPI / planned instrumentation |
@@ -744,32 +745,32 @@ The evaluation workflow compares five retrieval variants over a fixed query set 
 | Diagnostic probes | 20 |
 | AI-assisted relevance judgments | 2,119 query-item pairs |
 | Retrieval variants tested | 5 (`title_only`, `vector_only`, `bm25_only`, `hybrid_union`, `hybrid_no_cold_boost`) |
-| Live retrieval results | 2,425 |
+| Live retrieval results | 2,428 |
 | Evaluation failures | 0 |
 
 ### 14.2 Ablation Study Results
 
 | Variant | NDCG@10 | Recall@10 | MRR@10 | Precision@5 | HitRate@10 | ColdRelevantRate@10 |
 |---|---|---|---|---|---|---|
-| `title_only` (baseline) | 0.5537 | 0.3154 | 0.4992 | 0.312 | 0.74 | 0.3020 |
-| `vector_only` | 0.7195 | 0.4005 | 0.5537 | 0.428 | 0.74 | 0.3727 |
-| `bm25_only` | 0.6042 | 0.3303 | 0.5546 | 0.340 | 0.76 | 0.3363 |
-| **`hybrid_union`** | **0.7735** | **0.4478** | **0.6817** | **0.480** | **0.78** | **0.3920** |
-| `hybrid_no_cold_boost` | 0.7735 | 0.4478 | 0.6817 | 0.480 | 0.78 | 0.3920 |
+| `title_only` (baseline) | 0.5530 | 0.3154 | 0.4992 | 0.316 | 0.74 | 0.3020 |
+| `vector_only` | 0.7191 | 0.4005 | 0.5537 | 0.428 | 0.74 | 0.3727 |
+| `bm25_only` | 0.6003 | 0.3257 | 0.5571 | 0.344 | 0.76 | 0.3342 |
+| **`hybrid_union`** | **0.7715** | **0.4525** | **0.6817** | **0.480** | **0.78** | **0.3940** |
+| `hybrid_no_cold_boost` | 0.7715 | 0.4525 | 0.6817 | 0.480 | 0.78 | 0.3940 |
 
 ### 14.3 Key Improvements (Hybrid vs Title-Only Baseline)
 
 | Metric | Delta | Improvement |
 |---|---|---|
-| NDCG@10 | +0.2198 | **+39.7%** |
+| NDCG@10 | +0.2185 | **+39.5%** |
 | MRR@10 | +0.1825 | **+36.6%** |
-| Recall@10 | +0.1324 | **+42.0%** |
+| Recall@10 | +0.1371 | **+43.5%** |
 
 ### 14.4 Vietnamese Query Robustness
 
 | Query Type | Hybrid NDCG@10 | Title-Only NDCG@10 | Improvement |
 |---|---|---|---|
-| Vietnamese queries | **0.856** | 0.4913 | **+74.2%** |
+| Vietnamese queries | **0.8462** | 0.4913 | **+72.2%** |
 
 BGE-M3's cross-lingual capabilities allow Vietnamese user queries to map into the same semantic space as English-indexed HyPE units, effectively bridging the vocabulary gap that causes pure keyword search to fail. This is a critical result for the Vietnamese e-commerce context, where buyers naturally search in Vietnamese while product metadata is predominantly in English.
 
@@ -779,20 +780,20 @@ BGE-M3's cross-lingual capabilities allow Vietnamese user queries to map into th
 
 | Component | P50 | P95 | Target |
 |---|---|---|---|
-| MongoDB search aggregation | 83.6ms | **116.5ms** | < 400ms ✅ |
-| Total pipeline (incl. query processing) | 1,140.1ms | 1,173.0ms | Needs optimization |
+| MongoDB search aggregation | 89.3ms | **183.8ms** | < 400ms ✅ |
+| Total pipeline (incl. query processing) | 861.6ms | 956.2ms | Needs optimization |
 
-> **What Is Measured vs. What Is Planned:** MongoDB search aggregation P95 is **116.5ms**, which meets the 400ms target for the database retrieval/ranking stage. Total pipeline P95 is **1,173ms**, which does **not** yet meet the target because it includes query translation, embedding, and request processing. Query translation caching, hot embedding caching, and Vietnamese fast paths are planned optimizations.
+> **What Is Measured vs. What Is Planned:** MongoDB search aggregation P95 is **183.8ms**, which meets the 400ms target for the database retrieval/ranking stage. Total pipeline P95 is **956.2ms**, which does **not** yet meet the target because it includes query translation, embedding, and request processing. Query translation caching, hot embedding caching, and Vietnamese fast paths are planned optimizations.
 
 ### 14.6 Evidence-Gated Claims
 
 | Claim | Status | Evidence |
 |---|---|---|
-| Hybrid beats title-only baseline | ✅ Supported | NDCG@10, Recall@10, MRR@10 all improve significantly |
-| Hybrid beats single-channel baselines | ✅ Supported | Hybrid NDCG@10 > vector-only and BM25-only |
-| Vietnamese query robustness | ✅ Supported | Hybrid NDCG@10 = 0.856 vs title-only 0.4913 |
-| MongoDB search latency under 400ms | ✅ Supported | P95 = 116.5ms |
-| End-to-end latency under 400ms | ⏳ Not yet met | Total pipeline P95 = 1,173ms; caching planned |
+| Hybrid beats title-only baseline | ⚠️ Needs more evidence | Raw deltas are positive, but paired Recall@10 evidence remains directional-only because `null_metric_pair_count = 7` |
+| Hybrid beats single-channel baselines | ✅ Supported | Hybrid NDCG@10 = 0.7715 > vector-only 0.7191 and BM25-only 0.6003; paired NDCG evidence is positive |
+| Vietnamese query robustness | ✅ Supported | Hybrid Vietnamese NDCG@10 = 0.8462 vs title-only 0.4913 |
+| MongoDB search latency under 400ms | ✅ Supported | Search P95 = 183.8ms |
+| End-to-end latency under 400ms | ⏳ Not yet met | Total pipeline P95 = 956.2ms; caching planned |
 | Cold-start window measurement | ⏳ Not yet instrumented | `indexed_at` / `first_seen_in_top_k_at` not tracked |
 | Aspect-aware CF | ⏳ Roadmap | `matched_unit_ids` coverage currently at 7.18%; evidence gate not passed |
 
@@ -835,7 +836,7 @@ BGE-M3's cross-lingual capabilities allow Vietnamese user queries to map into th
 | BGE-M3 encoding (RTX 5060 8GB) | 688 texts/sec |
 | LLM HyPE generation (Qwen3:8B) | ~3-8 sec/item |
 | Bulk indexing 3,000 items | ~2.5-4 hours (offline, one-time) |
-| MongoDB search aggregation P95 | 116.5ms |
+| MongoDB search aggregation P95 | 183.8ms |
 
 ### 15.3 Technical Feasibility
 
@@ -854,7 +855,7 @@ BGE-M3's cross-lingual capabilities allow Vietnamese user queries to map into th
 | Risk | Severity | Mitigation |
 |---|---|---|
 | **LLM hallucination in HyPE/Propositions** | Medium | Two-stage pipeline: propositions from source text first, then HyPE from product context + propositions. Confidence threshold ≥ 0.60. |
-| **Total latency exceeds target** | Medium | MongoDB search P95 = 116.5ms (within target). Total latency bottleneck is query translation, embedding, and request processing — mitigated by translation caching, hot embedding caching, and rule-based Vietnamese fast paths. |
+| **Total latency exceeds target** | Medium | MongoDB search P95 = 183.8ms (within target). Total latency bottleneck is query translation, embedding, and request processing — mitigated by translation caching, hot embedding caching, and rule-based Vietnamese fast paths. |
 | **Embedding drift (VN↔EN)** | Low | BGE-M3 trained on 100+ languages with cross-lingual alignment. Contextual Chunk Headers anchor semantic neighborhood. |
 | **Atlas Free Tier limitations** | Low | `$unionWith` manual RRF [21] is the default. Native `$rankFusion` is retained as an upgrade path for deployments where `$rankFusion` is available. |
 | **CF evidence sparsity in MVP** | Medium | CF edges are clearly labeled as synthetic-behavior-derived in UI. True CF requires real multi-user interaction data. |
@@ -894,7 +895,7 @@ BGE-M3's cross-lingual capabilities allow Vietnamese user queries to map into th
 | Proposition extraction | ✅ Implemented | 16,173 proposition units |
 | Atlas Vector Search | ✅ Implemented | HyPE retrieval channel in MongoDB |
 | Atlas BM25 Search | ✅ Implemented | Proposition factual retrieval channel |
-| Hybrid retrieval + manual RRF | ✅ Implemented | 10-stage Aggregation Pipeline; hybrid NDCG@10 = 0.7735 |
+| Hybrid retrieval + manual RRF | ✅ Implemented | 10-stage Aggregation Pipeline; hybrid NDCG@10 = 0.7715 |
 | Query transformation VN→EN | ✅ Implemented | Vietnamese-query NDCG@10 = 0.856 |
 | Evaluation framework | ✅ Implemented | 50 queries; 2,119 relevance judgments; 5 retrieval variants |
 | Recommendation attribution | ✅ Implemented | Recommendation logs linked to clickstream events |
@@ -938,7 +939,7 @@ The system includes a native `$rankFusion` migration path for deployments where 
 
 ### 20.1 Short-Term (Next Phase)
 
-- **Query/embedding caching:** Reduce total pipeline latency from ~1,173ms to target < 400ms
+- **Query/embedding caching:** Reduce total pipeline latency from ~956.2ms to target < 400ms
 - **Cold-start window measurement:** Track `indexed_at` and `first_seen_in_top_k_at` to measure the time-to-first-discovery flagship metric
 - **Human audit of relevance labels:** Validate AI-assisted judgments for publication-grade metric claims
 
@@ -961,7 +962,7 @@ The system includes a native `$rankFusion` migration path for deployments where 
 
 ### MVP Limitations
 
-- **Total pipeline latency** (P95 **1,173ms**) exceeds the 400ms target due to query-time translation, embedding, and request processing; MongoDB search aggregation alone is **116.5ms P95**
+- **Total pipeline latency** (P95 **956.2ms**) exceeds the 400ms target due to query-time translation, embedding, and request processing; MongoDB search aggregation alone is **183.8ms P95**
 - **Dataset scope** is limited to 2 categories (All_Beauty, Cell_Phones_and_Accessories) with 3,000 items
 - **CF evidence** is derived from synthetic behavior data, not real multi-user interactions
 - **Cold-start window** metric cannot be precisely reported because `indexed_at` and `first_seen_in_top_k_at` timestamps are not yet instrumented in the current MVP
@@ -989,7 +990,7 @@ ColdStart Killer shows that the item cold-start problem — one of the most pers
 
 The architecture is built natively on MongoDB Atlas, using the Aggregation Pipeline as the sole computational engine for hybrid retrieval, RRF fusion [21], scoring, filtering, and explainable output. This eliminates the need for external search engines, vector databases, or ranking microservices — making the entire system deployable on a single Atlas Free Tier (M0) cluster for the MVP submission, with a clear scaling path to dedicated clusters for production workloads.
 
-The evaluation shows measurable improvements: **+39.7% NDCG@10** over title-only baseline, with MongoDB search latency well within the 400ms target at **116.5ms P95**. The behavior pipeline provides a clean transition path from cold-start content retrieval to warm behavioral recommendation through user profiles and item-item collaborative filtering — without ever mislabeling semantic similarity as collaborative filtering.
+The evaluation shows measurable improvements: a raw **+39.5% NDCG@10** delta over the title-only baseline, with MongoDB search latency still well within the 400ms target at **183.8ms P95**. Under the stricter evidence gate, this raw hybrid-vs-title win is real but not yet promoted to a fully supported claim because paired Recall@10 evidence remains directional-only in the latest run. The behavior pipeline still provides a clean transition path from cold-start content retrieval to warm behavioral recommendation through user profiles and item-item collaborative filtering — without ever mislabeling semantic similarity as collaborative filtering.
 
 This project is not just a search engine. It is a **recommendation engine** that handles the full lifecycle — from zero-interaction product discovery, through behavioral personalization, to explainable ranking — powered entirely by MongoDB.
 

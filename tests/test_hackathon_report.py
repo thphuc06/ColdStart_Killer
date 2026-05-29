@@ -73,3 +73,38 @@ def test_qualitative_examples_use_highest_delta_and_raw_query() -> None:
     assert "Why hybrid is better" in report
     assert "Intent match" in report
     assert "Fact match" in report
+
+
+def test_hackathon_report_caveats_directional_deltas_and_latency_scope() -> None:
+    run_data = {
+        "config": {"run_id": "demo"},
+        "variant_summaries": [
+            {"variant": "hybrid_union", "ndcg_at_10": 0.8, "hit_rate_at_10": 1.0, "mrr_at_10": 1.0},
+            {"variant": "title_only", "ndcg_at_10": 0.2, "hit_rate_at_10": 0.5, "mrr_at_10": 0.5},
+        ],
+        "variant_comparisons": [
+            {
+                "comparison": "hybrid_union_vs_title_only",
+                "metric": "ndcg_at_10",
+                "significance": "directional_only",
+                "blockers": ["paired_query_count 3 < 30"],
+            }
+        ],
+        "latency_summary": {
+            "search_latency_ms": {"sample_count": 25, "p50": 15.0, "p95": 40.0, "confidence": "medium"},
+            "total_latency_ms": {"sample_count": 25, "p50": 500.0, "p95": 900.0, "confidence": "medium"},
+        },
+        "latency": [
+            {"variant": "hybrid_union", "search_latency_ms": 15.0, "query_processing_latency_ms": 485.0, "total_latency_ms": 500.0},
+            {"variant": "hybrid_union", "search_latency_ms": 40.0, "query_processing_latency_ms": 860.0, "total_latency_ms": 900.0},
+        ],
+        "per_query_metrics": [],
+        "results": [],
+    }
+
+    report = generate_hackathon_report(run_data)
+
+    assert "directional_only" in report
+    assert "paired_query_count 3 < 30" in report
+    assert "Search latency is not total path latency" in report
+    assert "Total path latency includes query processing plus search" in report

@@ -18,16 +18,18 @@ def test_explanation_quality_stats() -> None:
         {"matched_intent": "", "matched_fact": ""},
     ])
 
-    assert stats == {
-        "total_results": 3,
-        "has_matched_intent": 2,
-        "has_matched_fact": 1,
-        "has_both_explanations": 1,
-        "has_no_explanation": 1,
-        "intent_coverage": round(2 / 3, 4),
-        "fact_coverage": round(1 / 3, 4),
-        "full_explanation_coverage": round(1 / 3, 4),
-    }
+    assert stats["total_results"] == 3
+    assert stats["has_matched_intent"] == 2
+    assert stats["has_matched_fact"] == 1
+    assert stats["has_both_explanations"] == 1
+    assert stats["has_no_explanation"] == 1
+    assert stats["intent_coverage"] == round(2 / 3, 4)
+    assert stats["fact_coverage"] == round(1 / 3, 4)
+    assert stats["full_explanation_coverage"] == round(1 / 3, 4)
+    assert stats["missing_intent_count"] == 1
+    assert stats["missing_fact_count"] == 2
+    assert stats["both_missing_rate"] == round(1 / 3, 4)
+    assert stats["explanation_quality"] == "weak"
 
 
 def test_notebook_explains_na_metrics() -> None:

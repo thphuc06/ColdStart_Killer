@@ -48,6 +48,7 @@ def sanitize_evaluation_run_document(doc: dict[str, Any] | None) -> dict[str, An
         "ranking_version": str(compact.get("ranking_version") or "unknown"),
         "data_label": str(compact.get("data_label") or "synthetic_demo"),
         "synthetic_data": bool(compact.get("synthetic_data", True)),
+        "evaluation_data_mode": str(compact.get("evaluation_data_mode") or "synthetic_demo"),
         "metrics": compact.get("metrics") if isinstance(compact.get("metrics"), dict) else {},
         "baseline_summaries": compact.get("baseline_summaries")
         if isinstance(compact.get("baseline_summaries"), list)

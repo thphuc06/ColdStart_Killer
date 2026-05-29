@@ -14,7 +14,7 @@ Latest verified live run:
 python scripts/run_evaluation.py \
   --queries evaluation/queries/retrieval_queries_seed.json \
   --judgments evaluation/judgments/retrieval_judgments_seed.json \
-  --out .runtime/evaluation/plan_review_live
+  --out .runtime/evaluation/notebook_run
 ```
 
 Result summary:
@@ -26,11 +26,11 @@ Result summary:
 | AI-assisted conservative judgments | 2,119 |
 | Judged queries | 50 |
 | Queries with relevance >= 2 | 43 |
-| Live retrieval results | 2,425 |
+| Live retrieval results | 2,428 |
 | Evaluation failures | 0 |
 | Report status | sufficient |
-| Search P95 latency | 116.5ms |
-| Total P95 latency | 1173.0ms |
+| Search P95 latency | 183.8ms |
+| Total P95 latency | 956.2ms |
 
 Live MongoDB data snapshot:
 
@@ -51,18 +51,19 @@ Main live metrics:
 
 | Variant | NDCG@10 | Recall@10 | MRR@10 | HitRate@10 | ColdRelevantRate@10 |
 |---|---:|---:|---:|---:|---:|
-| `title_only` | 0.5537 | 0.3154 | 0.4992 | 0.74 | 0.3020 |
-| `vector_only` | 0.7195 | 0.4005 | 0.5537 | 0.74 | 0.3727 |
-| `bm25_only` | 0.6042 | 0.3303 | 0.5546 | 0.76 | 0.3363 |
-| `hybrid_union` | 0.7735 | 0.4478 | 0.6817 | 0.78 | 0.3920 |
-| `hybrid_no_cold_boost` | 0.7735 | 0.4478 | 0.6817 | 0.78 | 0.3920 |
+| `title_only` | 0.5530 | 0.3154 | 0.4992 | 0.74 | 0.3020 |
+| `vector_only` | 0.7191 | 0.4005 | 0.5537 | 0.74 | 0.3727 |
+| `bm25_only` | 0.6003 | 0.3257 | 0.5571 | 0.76 | 0.3342 |
+| `hybrid_union` | 0.7715 | 0.4525 | 0.6817 | 0.78 | 0.3940 |
+| `hybrid_no_cold_boost` | 0.7715 | 0.4525 | 0.6817 | 0.78 | 0.3940 |
 
 Important caveats:
 
 - The current labels are AI-assisted conservative judgments. They pass local coverage gates, but a human audit is recommended before publication-grade claims.
 - The latest live run is cold-dominant: 300 cold items, 0 warm items, 0 unknown items in the sampled top results. Cold-start metrics therefore measure **exposure quality**, not cold-vs-warm lift.
 - Cold-start window measurement is not available until source data includes lifecycle timestamps such as `indexed_at` and `first_seen_in_top_k_at`.
-- Search P95 latency is under 400ms, but total P95 latency is 1173.0ms in the latest run. The report therefore supports measured live latency, not a claim that the full query path is already below 400ms.
+- `Hybrid beats title baseline` remains `needs_more_evidence` in the latest run because paired Recall@10 evidence is directional-only (`null_metric_pair_count = 7`), even though the raw metric deltas are positive.
+- Search P95 latency is under 400ms, but total P95 latency is 956.2ms in the latest run. The report therefore supports measured live latency, not a claim that the full query path is already below 400ms.
 
 ## Structure
 
@@ -143,12 +144,13 @@ Current live claim summary:
 
 | Claim | Status | Notes |
 |---|---|---|
-| Hybrid beats title baseline | supported | Hybrid NDCG/Recall/MRR beat title-only |
+| Hybrid beats title baseline | needs_more_evidence | Raw deltas are positive, but paired Recall@10 evidence is directional-only (`null_metric_pair_count = 7`) |
 | Hybrid beats single-channel baselines | supported | Hybrid NDCG beats vector-only and BM25-only |
 | Cold-start exposure quality | supported | ColdRelevantRate@10 is positive, but dataset is cold-dominant |
 | Cold-start window was measured | needs_more_evidence | Missing lifecycle timestamps |
-| Vietnamese robustness | supported | Hybrid Vietnamese NDCG@10 = 0.856 > title = 0.4913 |
-| Live end-to-end latency | supported | Measured on live MongoDB with fresh fixtures and 250 samples; search P95 = 116.5ms, total P95 = 1173.0ms |
+| Vietnamese robustness | supported | Hybrid Vietnamese NDCG@10 = 0.8462 > title = 0.4913 |
+| Live search latency evidence | supported | Measured on live MongoDB with fresh fixtures and 250 samples; search P95 = 183.8ms |
+| Live total path latency evidence | supported | Measured on live MongoDB with fresh fixtures and 250 samples; total path P95 = 956.2ms |
 
 ## Relevance Labeling Rules
 
@@ -270,10 +272,13 @@ python scripts/run_evaluation.py \
   --out .runtime/evaluation/eval_seed
 ```
 
-`scripts/run_evaluation.py` writes both:
+`scripts/run_evaluation.py` writes:
 
 - `metrics_summary.md`
 - `hackathon_impact_report.md`
+- `judge_facing_executive_summary.md`
+- `judge_report_pack_manifest.json`
+- `evaluation_upgrade_report_vi.md` (optional static attachment copied when available)
 
 ### Phase 12 Personalization Evaluation
 
@@ -295,8 +300,10 @@ python scripts/run_personalization_evaluation.py \
 Optional MongoDB summary write after local artifacts are created:
 
 ```bash
-python scripts/run_personalization_evaluation.py --write-evaluation-run
+python scripts/run_personalization_evaluation.py --write-evaluation-run --confirm EVAL_RUN_WRITE
 ```
+
+`--write-evaluation-run` is rejected unless the exact confirmation string is provided.
 
 Phase 12 baselines:
 
@@ -305,6 +312,7 @@ Phase 12 baselines:
 - `popularity`
 - `profile_only`
 - `profile_plus_cf`
+- `profile_plus_qualified_cf`
 
 Phase 12 artifacts:
 

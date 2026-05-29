@@ -34,7 +34,7 @@ sys.path.insert(0, str(ROOT))
 from src.evaluation.contracts import RunConfig, validate_run_config
 from src.evaluation.dataset import load_eval_queries, load_relevance_judgments
 from src.evaluation.hackathon_report import generate_hackathon_report
-from src.evaluation.reporting import write_evaluation_outputs
+from src.evaluation.reporting import write_evaluation_outputs, write_judge_report_pack
 from src.evaluation.runner import run_evaluation
 from src.evaluation.variants import EVALUATION_VARIANTS
 
@@ -67,12 +67,6 @@ def main() -> int:
     parser.add_argument("--use-fake-results", action="store_true", help="Use fake results for smoke testing")
     parser.add_argument("--use-cached-fixtures", action="store_true", default=False, help="Use cached fixtures")
     parser.add_argument("--allow-stale-fixtures", action="store_true", default=False, help="Allow stale fixture cache")
-    parser.add_argument(
-        "--generate-hackathon-report",
-        action="store_true",
-        help="Write hackathon_report.md alongside the standard evaluation artifacts",
-    )
-
     args = parser.parse_args()
 
     # Validate inputs
@@ -143,6 +137,7 @@ def main() -> int:
         queries=queries,
         judgments=judgments,
         use_fake_results=args.use_fake_results,
+        allow_stale_fixtures=args.allow_stale_fixtures,
     )
     t_end = time.perf_counter()
 
@@ -151,6 +146,7 @@ def main() -> int:
     hackathon_path = Path(args.out) / "hackathon_impact_report.md"
     hackathon_path.write_text(generate_hackathon_report(run_data), encoding="utf-8")
     paths["hackathon_impact_report"] = str(hackathon_path)
+    paths.update({f"judge_pack_{key}": value for key, value in write_judge_report_pack(run_data, args.out).items()})
 
     # Print summary
     n_failures = len(run_data.get("failures", []))

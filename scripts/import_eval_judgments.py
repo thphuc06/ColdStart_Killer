@@ -18,7 +18,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from src.evaluation.contracts import RelevanceJudgment, validate_relevance_judgment, ContractValidationError
+from src.evaluation.contracts import (
+    VALID_JUDGMENT_SOURCES,
+    ContractValidationError,
+    RelevanceJudgment,
+    validate_relevance_judgment,
+)
 
 
 def main() -> int:
@@ -26,6 +31,12 @@ def main() -> int:
     parser.add_argument("--csv", required=True, help="Path to labeled judgment_pool.csv")
     parser.add_argument("--out", default="evaluation/judgments/retrieval_judgments_seed.json", help="Output JSON path")
     parser.add_argument("--strict", action="store_true", help="Raise error if relevance is empty/invalid instead of skipping")
+    parser.add_argument(
+        "--judgment-source",
+        choices=sorted(VALID_JUDGMENT_SOURCES),
+        default="human_audited",
+        help="Provenance label assigned to imported judgments",
+    )
 
     args = parser.parse_args()
 
@@ -50,6 +61,8 @@ def main() -> int:
             relevance_str = row.get("relevance", "").strip()
             reason = row.get("reason", "").strip()
             labels_str = row.get("labels", "").strip()
+            annotator_id = row.get("annotator_id", "").strip()
+            audited_at = row.get("audited_at", "").strip()
 
             if not query_id or not item_id:
                 print(f"WARNING: Row {row_idx} is missing query_id or item_id. Skipped.", file=sys.stderr)
@@ -89,7 +102,10 @@ def main() -> int:
                     item_id=item_id,
                     relevance=relevance,
                     reason=reason,
-                    labels=labels
+                    labels=labels,
+                    judgment_source=args.judgment_source,
+                    annotator_id=annotator_id,
+                    audited_at=audited_at,
                 )
                 validate_relevance_judgment(j)
             except (ContractValidationError, ValueError) as exc:
@@ -106,7 +122,10 @@ def main() -> int:
                 "item_id": j.item_id,
                 "relevance": j.relevance,
                 "reason": j.reason,
-                "labels": j.labels
+                "labels": j.labels,
+                "judgment_source": j.judgment_source,
+                "annotator_id": j.annotator_id,
+                "audited_at": j.audited_at,
             })
             seen_pairs.add(pair)
             imported += 1

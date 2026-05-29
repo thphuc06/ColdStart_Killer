@@ -14,6 +14,7 @@ def _run_data() -> dict:
             "algorithm_version": "algo_eval",
             "ranking_version": "rank_eval",
             "synthetic_data": True,
+            "evaluation_data_mode": "synthetic_demo",
             "data_label": "synthetic/demo evaluation; metrics must be interpreted with explicit synthetic/demo caveats.",
             "user_count": 2,
             "event_count": 10,
@@ -61,6 +62,14 @@ def _run_data() -> dict:
             "qualified_directional_edge_count": 4,
             "current_build_stats": {"large": "not persisted in compact metrics"},
         },
+        "cohort_diagnostics": {
+            "evaluated_user_count": 2,
+            "cold_start_user_count": 1,
+            "sparse_user_count": 1,
+            "deliberate_intent_user_count": 1,
+            "negative_feedback_user_count": 0,
+            "qualified_cf_source_user_count": 1,
+        },
         "per_user_metrics": [{"user_id_hash": "u_should_not_be_persisted", "recommended_item_ids": ["A", "B"]}],
     }
 
@@ -90,9 +99,11 @@ def test_persist_evaluation_run_writes_compact_caveated_document_to_fake_collect
     assert doc["algorithm_version"] == "algo_eval"
     assert doc["ranking_version"] == "rank_eval"
     assert doc["synthetic_data"] is True
+    assert doc["evaluation_data_mode"] == "synthetic_demo"
     assert "Synthetic/demo behavior data" in doc["caveat"]
     assert doc["live_state_counts"]["items"] == 3000
     assert doc["metrics"]["baseline_count"] == 1
+    assert doc["metrics"]["cohort_diagnostics"]["sparse_user_count"] == 1
     assert doc["artifacts"]["written"] is False
     assert "per_user_metrics" not in doc
     serialized = json.dumps(doc)

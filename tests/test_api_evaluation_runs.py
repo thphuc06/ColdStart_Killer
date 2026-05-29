@@ -52,7 +52,12 @@ def _doc(run_id: str, created_at: str) -> dict:
         "ranking_version": "rank_v1",
         "data_label": "synthetic/demo evaluation",
         "synthetic_data": True,
-        "metrics": {"baseline_count": 2, "comparison_count": 1},
+        "evaluation_data_mode": "synthetic_demo",
+        "metrics": {
+            "baseline_count": 2,
+            "comparison_count": 1,
+            "cohort_diagnostics": {"sparse_user_count": 3},
+        },
         "baseline_summaries": [
             {
                 "baseline": "profile_plus_cf",
@@ -106,6 +111,7 @@ def test_latest_evaluation_run_returns_sanitized_newest_doc(monkeypatch) -> None
     assert latest["run_id"] == "new_run"
     assert latest["algorithm_version"] == "algo_v1"
     assert latest["ranking_version"] == "rank_v1"
+    assert latest["evaluation_data_mode"] == "synthetic_demo"
     assert "Synthetic/demo behavior data" in latest["caveat"]
     assert "per_user_metrics" not in latest
     assert "raw_events" not in latest
@@ -142,6 +148,7 @@ def test_sanitize_evaluation_run_document_drops_heavy_raw_payloads() -> None:
 
     assert sanitized is not None
     assert sanitized["run_id"] == "sanitize_run"
+    assert sanitized["metrics"]["cohort_diagnostics"]["sparse_user_count"] == 3
     assert "per_user_metrics" not in sanitized
     assert "raw_events" not in sanitized
     assert "u_raw_should_not_leak" not in str(sanitized)

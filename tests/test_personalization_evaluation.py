@@ -15,6 +15,7 @@ from src.evaluation.personalization_eval import (
     PersonalizationEvalConfig,
     _build_cf_edges,
     _build_train_signals,
+    _qualified_cf_gate,
     compute_ranking_metrics,
     evaluate_personalization,
     temporal_split_events,
@@ -279,6 +280,50 @@ def test_write_personalization_outputs_writes_reproducible_artifacts_and_caveats
     assert "popularity" in summary_md
 
 
+def test_personalization_eval_reports_data_mode_and_user_cohorts() -> None:
+    items = [
+        _item("A", title="Phone Case", brand="CaseCo", category_id="phones"),
+        _item("B", title="Hidden Charger", brand="ChargeCo", category_id="phones"),
+        _item("C", title="Screen Protector", brand="CaseCo", category_id="phones"),
+        _item("D", title="Phone Stand", brand="StandCo", category_id="phones"),
+        _item("E", title="Wireless Earbuds", brand="AudioCo", category_id="audio"),
+    ]
+    events = [
+        _event("u_sparse_negative", "A", "click", 0),
+        _event("u_sparse_negative", "B", "hide", 1),
+        _event("u_sparse_negative", "C", "click", 2),
+        _event("u_sparse_negative", "D", "add_to_cart", 3),
+        _event("u_dense", "A", "click", 10),
+        _event("u_dense", "B", "click", 11),
+        _event("u_dense", "C", "add_to_cart", 12),
+        _event("u_dense", "D", "click", 13),
+        _event("u_dense", "E", "add_to_cart", 14),
+    ]
+
+    run_data = evaluate_personalization(
+        items=items,
+        clickstream_events=events,
+        config=PersonalizationEvalConfig(run_id="cohort_test", synthetic_data=True),
+    )
+    cohorts = run_data["cohort_diagnostics"]
+
+    assert run_data["config"]["evaluation_data_mode"] == "synthetic_demo"
+    assert cohorts["evaluated_user_count"] == 2
+    assert cohorts["cold_start_user_count"] == 1
+    assert cohorts["sparse_user_count"] == 1
+    assert cohorts["deliberate_intent_user_count"] == 2
+    assert cohorts["negative_feedback_user_count"] == 1
+    assert cohorts["qualified_cf_source_user_count"] == 1
+    assert "synthetic/demo" in cohorts["caveat"]
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        paths = write_personalization_outputs(run_data, tmpdir)
+        summary_md = Path(paths["metrics_summary"]).read_text(encoding="utf-8")
+
+    assert "## Cohort Diagnostics" in summary_md
+    assert "negative_feedback_user_count" in summary_md
+
+
 def test_cli_artifact_policy_makes_dry_run_filesystem_dry_by_default() -> None:
     assert _should_write_artifacts(Namespace(dry_run=True, write_artifacts=False, no_artifacts=False)) is False
     assert _should_write_artifacts(Namespace(dry_run=True, write_artifacts=True, no_artifacts=False)) is True
@@ -381,3 +426,69 @@ def test_evaluator_uses_production_dwell_tiers_for_seed_eligibility() -> None:
 
     assert by_item["SHORT"]["seed_eligible"] is False
     assert by_item["LONG"]["seed_eligible"] is True
+
+
+def test_qualified_cf_gate_needs_more_evidence_for_tiny_eval_slice() -> None:
+    summary_by_baseline = {
+        "profile_plus_cf": {
+            "evaluated_user_count": 2,
+            "deliberate_evaluated_user_count": 1,
+            "recall_at_20": 1.0,
+            "map_at_20": 1.0,
+            "ndcg_at_20": 1.0,
+            "deliberate_recall_at_20": 1.0,
+            "deliberate_ndcg_at_20": 1.0,
+            "deliberate_mrr_at_10": 1.0,
+        },
+        "profile_plus_qualified_cf": {
+            "evaluated_user_count": 2,
+            "deliberate_evaluated_user_count": 1,
+            "cf_supported_recommendation_count": 2,
+            "negative_reexposure_rate": 0.0,
+            "recall_at_20": 1.0,
+            "map_at_20": 1.0,
+            "ndcg_at_20": 1.0,
+            "deliberate_recall_at_20": 1.0,
+            "deliberate_ndcg_at_20": 1.0,
+            "deliberate_mrr_at_10": 1.0,
+        },
+    }
+
+    gate = _qualified_cf_gate(summary_by_baseline, qualified_directional_edge_count=2)
+
+    assert gate["decision"] == "needs_more_evidence"
+    assert "evaluated_user_count 2 < 10" in gate["reason"]
+    assert gate["evidence"]["evaluated_user_count"] == 2
+    assert gate["minimums"]["evaluated_user_count"] == 10
+
+
+def test_qualified_cf_gate_adopts_only_with_sufficient_clean_evidence() -> None:
+    summary_by_baseline = {
+        "profile_plus_cf": {
+            "evaluated_user_count": 12,
+            "deliberate_evaluated_user_count": 6,
+            "recall_at_20": 0.5,
+            "map_at_20": 0.4,
+            "ndcg_at_20": 0.4,
+            "deliberate_recall_at_20": 0.5,
+            "deliberate_ndcg_at_20": 0.4,
+            "deliberate_mrr_at_10": 0.4,
+        },
+        "profile_plus_qualified_cf": {
+            "evaluated_user_count": 12,
+            "deliberate_evaluated_user_count": 6,
+            "cf_supported_recommendation_count": 8,
+            "negative_reexposure_rate": 0.0,
+            "recall_at_20": 0.5,
+            "map_at_20": 0.4,
+            "ndcg_at_20": 0.4,
+            "deliberate_recall_at_20": 0.5,
+            "deliberate_ndcg_at_20": 0.4,
+            "deliberate_mrr_at_10": 0.4,
+        },
+    }
+
+    gate = _qualified_cf_gate(summary_by_baseline, qualified_directional_edge_count=8)
+
+    assert gate["decision"] == "adopt"
+    assert gate["evidence"]["qualified_directional_edge_count"] == 8

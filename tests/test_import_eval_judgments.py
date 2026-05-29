@@ -50,6 +50,9 @@ def test_import_script_success() -> None:
             "relevance": 3,
             "reason": "Matches perfect intent",
             "labels": ["cold_item"],
+            "judgment_source": "human_audited",
+            "annotator_id": "",
+            "audited_at": "",
         }
         assert judgments[1] == {
             "query_id": "q001",
@@ -57,6 +60,9 @@ def test_import_script_success() -> None:
             "relevance": 1,
             "reason": "Tangential",
             "labels": [],
+            "judgment_source": "human_audited",
+            "annotator_id": "",
+            "audited_at": "",
         }
         assert judgments[2] == {
             "query_id": "q002",
@@ -64,10 +70,47 @@ def test_import_script_success() -> None:
             "relevance": 0,
             "reason": "",
             "labels": ["new_seller"],
+            "judgment_source": "human_audited",
+            "annotator_id": "",
+            "audited_at": "",
         }
 
     finally:
         # Cleanup
+        try:
+            Path(csv_file_name).unlink()
+            Path(json_file_name).unlink()
+        except OSError:
+            pass
+
+
+def test_import_script_accepts_auditor_metadata() -> None:
+    with tempfile.NamedTemporaryFile(mode="w", newline="", suffix=".csv", delete=False) as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["query_id", "item_id", "relevance", "reason", "labels", "annotator_id", "audited_at"])
+        writer.writerow(["q001", "item_A", "3", "Human checked", "core", "auditor_a", "2026-05-29T12:00:00+00:00"])
+        csv_file_name = csv_file.name
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as json_file:
+        json_file_name = json_file.name
+
+    try:
+        cmd = [
+            sys.executable,
+            str(ROOT / "scripts" / "import_eval_judgments.py"),
+            "--csv", csv_file_name,
+            "--out", json_file_name,
+            "--judgment-source", "mixed",
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        assert "Successfully imported 1 judgments" in result.stdout
+
+        judgments = json.loads(Path(json_file_name).read_text(encoding="utf-8"))
+        assert judgments[0]["judgment_source"] == "mixed"
+        assert judgments[0]["annotator_id"] == "auditor_a"
+        assert judgments[0]["audited_at"] == "2026-05-29T12:00:00+00:00"
+
+    finally:
         try:
             Path(csv_file_name).unlink()
             Path(json_file_name).unlink()

@@ -124,6 +124,9 @@ def load_relevance_judgments(path: str | Path) -> list[RelevanceJudgment]:
                 relevance=item.get("relevance", -1),
                 reason=item.get("reason", ""),
                 labels=item.get("labels", []),
+                judgment_source=item.get("judgment_source", "ai_assisted"),
+                annotator_id=item.get("annotator_id", ""),
+                audited_at=item.get("audited_at", ""),
             )
             validate_relevance_judgment(judgment)
         except (ContractValidationError, TypeError) as exc:

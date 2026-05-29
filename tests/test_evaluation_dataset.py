@@ -72,11 +72,35 @@ class TestRelevanceJudgmentValidation:
     def test_valid_judgment(self) -> None:
         j = RelevanceJudgment(query_id="q001", item_id="B001", relevance=3)
         assert validate_relevance_judgment(j) == j
+        assert j.judgment_source == "ai_assisted"
 
     def test_invalid_relevance_fails(self) -> None:
         with pytest.raises(ContractValidationError, match="relevance"):
             validate_relevance_judgment(
                 RelevanceJudgment(query_id="q1", item_id="B1", relevance=5)
+            )
+
+    def test_valid_human_audited_judgment_metadata(self) -> None:
+        j = RelevanceJudgment(
+            query_id="q001",
+            item_id="B001",
+            relevance=3,
+            judgment_source="human_audited",
+            annotator_id="reviewer_1",
+            audited_at="2026-05-29T12:00:00+00:00",
+        )
+
+        assert validate_relevance_judgment(j) == j
+
+    def test_invalid_judgment_source_fails(self) -> None:
+        with pytest.raises(ContractValidationError, match="judgment_source"):
+            validate_relevance_judgment(
+                RelevanceJudgment(
+                    query_id="q001",
+                    item_id="B001",
+                    relevance=3,
+                    judgment_source="guessed",
+                )
             )
 
 
@@ -166,6 +190,28 @@ class TestLoadRelevanceJudgments:
             f.flush()
             with pytest.raises(ContractValidationError, match="Duplicate"):
                 load_relevance_judgments(f.name)
+
+    def test_loads_judgment_provenance_metadata(self) -> None:
+        data = [
+            {
+                "query_id": "q1",
+                "item_id": "B1",
+                "relevance": 3,
+                "judgment_source": "human_audited",
+                "annotator_id": "reviewer_1",
+                "audited_at": "2026-05-29T12:00:00+00:00",
+            },
+            {"query_id": "q1", "item_id": "B2", "relevance": 1},
+        ]
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            f.flush()
+            judgments = load_relevance_judgments(f.name)
+
+        assert judgments[0].judgment_source == "human_audited"
+        assert judgments[0].annotator_id == "reviewer_1"
+        assert judgments[0].audited_at == "2026-05-29T12:00:00+00:00"
+        assert judgments[1].judgment_source == "ai_assisted"
 
 
 class TestJudgmentsByQuery:

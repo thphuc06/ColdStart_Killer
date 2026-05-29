@@ -9,9 +9,26 @@ Import safety: no side effects at import time.
 from __future__ import annotations
 
 import math
+import random
+from statistics import median
 from typing import Any
 
 from .contracts import EvaluationResult
+
+
+DEFAULT_VARIANT_COMPARISONS: tuple[tuple[str, str], ...] = (
+    ("hybrid_union", "title_only"),
+    ("hybrid_union", "vector_only"),
+    ("hybrid_union", "bm25_only"),
+    ("hybrid_union", "hybrid_no_cold_boost"),
+)
+
+DEFAULT_COMPARISON_METRICS: tuple[str, ...] = (
+    "ndcg_at_10",
+    "recall_at_10",
+    "mrr_at_10",
+    "cold_relevant_rate_at_10",
+)
 
 
 def binary_relevant(relevance: int, threshold: int = 2) -> bool:
@@ -147,6 +164,196 @@ def compute_query_metrics(
     return metrics
 
 
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _stable_seed(*parts: str, base_seed: int) -> int:
+    return base_seed + sum((index + 1) * ord(ch) for index, part in enumerate(parts) for ch in part)
+
+
+def _bootstrap_mean_ci(
+    values: list[float],
+    *,
+    iterations: int,
+    confidence_level: float,
+    seed: int,
+) -> tuple[float | None, float | None]:
+    if not values:
+        return None, None
+    if len(values) == 1 or iterations <= 0:
+        value = round(values[0], 6)
+        return value, value
+
+    rng = random.Random(seed)
+    means: list[float] = []
+    n = len(values)
+    for _ in range(iterations):
+        sample = [values[rng.randrange(n)] for _ in range(n)]
+        means.append(sum(sample) / n)
+    means.sort()
+
+    alpha = max(0.0, min(1.0, 1.0 - confidence_level))
+    lower_idx = max(0, min(len(means) - 1, int((alpha / 2) * len(means))))
+    upper_idx = max(0, min(len(means) - 1, int((1 - alpha / 2) * len(means)) - 1))
+    return round(means[lower_idx], 6), round(means[upper_idx], 6)
+
+
+def compute_variant_comparisons(
+    rows: list[dict[str, object]],
+    *,
+    comparisons: list[tuple[str, str]] | tuple[tuple[str, str], ...] | None = None,
+    metric_keys: list[str] | tuple[str, ...] | None = None,
+    min_paired_queries: int = 30,
+    min_positive_judged_pairs: int = 20,
+    bootstrap_iterations: int = 500,
+    confidence_level: float = 0.95,
+    random_seed: int = 13,
+    scope: str = "overall",
+) -> list[dict[str, object]]:
+    """Compute conservative paired variant-comparison diagnostics.
+
+    A positive raw delta is not enough for a supported claim. The comparison
+    must have enough paired, positive-judged queries and a bootstrap CI whose
+    lower bound is above zero. Sparse or null evidence remains directional.
+    """
+    comparison_specs = comparisons or DEFAULT_VARIANT_COMPARISONS
+    metrics = metric_keys or DEFAULT_COMPARISON_METRICS
+
+    rows_by_query: dict[str, dict[str, dict[str, object]]] = {}
+    for row in rows:
+        query_id = str(row.get("query_id", ""))
+        variant = str(row.get("variant", ""))
+        if query_id and variant:
+            rows_by_query.setdefault(query_id, {})[variant] = row
+
+    diagnostics: list[dict[str, object]] = []
+    for left_variant, right_variant in comparison_specs:
+        paired_rows = [
+            (by_variant[left_variant], by_variant[right_variant])
+            for by_variant in rows_by_query.values()
+            if left_variant in by_variant and right_variant in by_variant
+        ]
+        paired_query_count = len(paired_rows)
+        judged_pair_count = sum(
+            1
+            for left_row, right_row in paired_rows
+            if left_row.get("has_judgments") is True or right_row.get("has_judgments") is True
+        )
+        positive_judged_pair_count = sum(
+            1
+            for left_row, right_row in paired_rows
+            if left_row.get("has_positive_judgment") is True or right_row.get("has_positive_judgment") is True
+        )
+
+        for metric_key in metrics:
+            deltas: list[float] = []
+            null_pair_count = 0
+            for left_row, right_row in paired_rows:
+                left_value = left_row.get(metric_key)
+                right_value = right_row.get(metric_key)
+                if _is_number(left_value) and _is_number(right_value):
+                    deltas.append(float(left_value) - float(right_value))
+                else:
+                    null_pair_count += 1
+
+            blockers: list[str] = []
+            if paired_query_count < min_paired_queries:
+                blockers.append(f"paired_query_count {paired_query_count} < {min_paired_queries}")
+            if positive_judged_pair_count < min_positive_judged_pairs:
+                blockers.append(
+                    f"positive_judged_pair_count {positive_judged_pair_count} < {min_positive_judged_pairs}"
+                )
+            if null_pair_count:
+                blockers.append(f"null_metric_pair_count {null_pair_count}")
+            if not deltas:
+                blockers.append("no non-null paired metric values")
+
+            mean_delta = round(sum(deltas) / len(deltas), 6) if deltas else None
+            median_delta = round(float(median(deltas)), 6) if deltas else None
+            wins = sum(1 for delta in deltas if delta > 0)
+            ties = sum(1 for delta in deltas if delta == 0)
+            losses = sum(1 for delta in deltas if delta < 0)
+            ci_lower, ci_upper = _bootstrap_mean_ci(
+                deltas,
+                iterations=bootstrap_iterations,
+                confidence_level=confidence_level,
+                seed=_stable_seed(left_variant, right_variant, metric_key, scope, base_seed=random_seed),
+            )
+
+            if blockers:
+                significance = "directional_only"
+            elif ci_lower is not None and ci_upper is not None and ci_lower > 0:
+                significance = "positive"
+            elif ci_lower is not None and ci_upper is not None and ci_upper < 0:
+                significance = "negative"
+            else:
+                significance = "directional_only"
+
+            diagnostics.append({
+                "scope": scope,
+                "comparison": f"{left_variant}_vs_{right_variant}",
+                "left_variant": left_variant,
+                "right_variant": right_variant,
+                "metric": metric_key,
+                "paired_query_count": paired_query_count,
+                "judged_pair_count": judged_pair_count,
+                "positive_judged_pair_count": positive_judged_pair_count,
+                "non_null_pair_count": len(deltas),
+                "null_metric_pair_count": null_pair_count,
+                "mean_delta": mean_delta,
+                "median_delta": median_delta,
+                "wins": wins,
+                "ties": ties,
+                "losses": losses,
+                "confidence_level": confidence_level,
+                "ci_lower": ci_lower,
+                "ci_upper": ci_upper,
+                "significance": significance,
+                "blockers": blockers,
+            })
+
+    return diagnostics
+
+
+def compute_slice_confidence(slice_summaries: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Build per-slice confidence diagnostics from aggregate slice summaries."""
+    diagnostics: list[dict[str, object]] = []
+    for summary in slice_summaries:
+        variant = str(summary.get("variant", ""))
+        slice_name = str(summary.get("slice", ""))
+        judged = int(summary.get("judged_query_count", 0) or 0)
+        positive = int(summary.get("positive_judged_query_count", 0) or 0)
+        result_coverage = float(summary.get("result_judgment_coverage_rate", 0.0) or 0.0)
+
+        blockers: list[str] = []
+        if judged < 5:
+            blockers.append(f"judged_query_count {judged} < 5")
+        if positive < 3:
+            blockers.append(f"positive_judged_query_count {positive} < 3")
+        if result_coverage < 0.25:
+            blockers.append(f"result_judgment_coverage_rate {result_coverage:.4f} < 0.25")
+
+        if judged >= 15 and positive >= 10 and result_coverage >= 0.5:
+            confidence = "high"
+        elif judged >= 5 and positive >= 3 and result_coverage >= 0.25:
+            confidence = "medium"
+        else:
+            confidence = "low"
+
+        diagnostics.append({
+            "variant": variant,
+            "slice": slice_name,
+            "query_count": summary.get("query_count", 0),
+            "judged_query_count": judged,
+            "positive_judged_query_count": positive,
+            "result_judgment_coverage_rate": round(result_coverage, 4),
+            "confidence": confidence,
+            "blockers": blockers,
+        })
+    return diagnostics
+
+
 def aggregate_metrics(
     rows: list[dict[str, object]],
     group_by: list[str],
@@ -201,6 +408,16 @@ def aggregate_metrics(
             summary["metric_confidence"] = "medium"
         else:
             summary["metric_confidence"] = "low"
+        confidence_blockers: list[str] = []
+        if judged_query_count < 15:
+            confidence_blockers.append(f"judged_query_count {judged_query_count} < 15")
+        if positive_judged_query_count < 5:
+            confidence_blockers.append(f"positive_judged_query_count {positive_judged_query_count} < 5")
+        if summary["result_judgment_coverage_rate"] < 0.25:
+            confidence_blockers.append(
+                f"result_judgment_coverage_rate {summary['result_judgment_coverage_rate']:.4f} < 0.25"
+            )
+        summary["metric_confidence_blockers"] = confidence_blockers
 
         # Find all numeric keys
         all_keys: set[str] = set()

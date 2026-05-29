@@ -205,6 +205,7 @@ class EvaluationRunDocument(BaseModel):
     ranking_version: str
     data_label: str = "synthetic_demo"
     synthetic_data: bool = True
+    evaluation_data_mode: str = "synthetic_demo"
     metrics: dict[str, Any] = Field(default_factory=dict)
     baseline_summaries: list[dict[str, Any]] = Field(default_factory=list)
     comparisons: list[dict[str, Any]] = Field(default_factory=list)
@@ -216,7 +217,7 @@ class EvaluationRunDocument(BaseModel):
 
     model_config = {"populate_by_name": True}
 
-    @field_validator("run_id", "run_type", "algorithm_version", "ranking_version", "data_label", "caveat")
+    @field_validator("run_id", "run_type", "algorithm_version", "ranking_version", "data_label", "evaluation_data_mode", "caveat")
     @classmethod
     def validate_required_text(cls, value: str, info) -> str:
         return _non_empty(value, info.field_name)

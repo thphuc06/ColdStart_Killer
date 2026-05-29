@@ -599,7 +599,7 @@ evaluation/                             # Evaluation data (queries, probes, judg
 
 Evaluation framework test không cần MongoDB, Ollama, hay BGE-M3.
 
-### Unit tests (66 tests)
+### Unit tests (current focused batch: 93 passed in latest verification)
 
 ```bash
 python -m pytest tests/test_evaluation_dataset.py tests/test_evaluation_metrics.py tests/test_evaluation_diagnostics.py tests/test_evaluation_guardrails.py tests/test_evaluation_runner.py tests/test_evaluation_variants.py tests/test_import_eval_judgments.py -v

@@ -49,6 +49,10 @@ BASELINE_NAMES = (
     "profile_plus_qualified_cf",
 )
 POSITIVE_EVENT_TYPES = frozenset({"click", "add_to_cart", "purchase", "view_detail", "wishlist"})
+QUALIFIED_CF_MIN_EVALUATED_USERS = 10
+QUALIFIED_CF_MIN_DELIBERATE_USERS = 5
+QUALIFIED_CF_MIN_DIRECTIONAL_EDGES = 2
+QUALIFIED_CF_MIN_SUPPORTED_RECS = 5
 
 
 @dataclass(frozen=True)
@@ -641,17 +645,54 @@ def _qualified_cf_gate(
     summary_by_baseline: dict[str, dict[str, Any]],
     *,
     qualified_directional_edge_count: int,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     current = summary_by_baseline["profile_plus_cf"]
     qualified = summary_by_baseline["profile_plus_qualified_cf"]
-    if int(qualified.get("deliberate_evaluated_user_count", 0)) == 0:
-        return {"decision": "needs_more_evidence", "reason": "No deliberate held-out targets were available for the qualified CF comparison."}
-    if qualified_directional_edge_count <= 0:
-        return {"decision": "needs_more_evidence", "reason": "Qualified CF produced no supported edges under min_support=2."}
-    if int(qualified.get("cf_supported_recommendation_count", 0)) == 0:
-        return {"decision": "needs_more_evidence", "reason": "Qualified CF produced no supported recommendations under min_support=2."}
+    evaluated_user_count = int(qualified.get("evaluated_user_count", 0))
+    deliberate_user_count = int(qualified.get("deliberate_evaluated_user_count", 0))
+    supported_recommendation_count = int(qualified.get("cf_supported_recommendation_count", 0))
+    evidence = {
+        "evaluated_user_count": evaluated_user_count,
+        "deliberate_evaluated_user_count": deliberate_user_count,
+        "qualified_directional_edge_count": qualified_directional_edge_count,
+        "cf_supported_recommendation_count": supported_recommendation_count,
+        "negative_reexposure_rate": _safe_float(qualified.get("negative_reexposure_rate"), 0.0),
+    }
+    minimums = {
+        "evaluated_user_count": QUALIFIED_CF_MIN_EVALUATED_USERS,
+        "deliberate_evaluated_user_count": QUALIFIED_CF_MIN_DELIBERATE_USERS,
+        "qualified_directional_edge_count": QUALIFIED_CF_MIN_DIRECTIONAL_EDGES,
+        "cf_supported_recommendation_count": QUALIFIED_CF_MIN_SUPPORTED_RECS,
+    }
+    blockers: list[str] = []
+    if evaluated_user_count < QUALIFIED_CF_MIN_EVALUATED_USERS:
+        blockers.append(f"evaluated_user_count {evaluated_user_count} < {QUALIFIED_CF_MIN_EVALUATED_USERS}")
+    if deliberate_user_count < QUALIFIED_CF_MIN_DELIBERATE_USERS:
+        blockers.append(f"deliberate_evaluated_user_count {deliberate_user_count} < {QUALIFIED_CF_MIN_DELIBERATE_USERS}")
+    if qualified_directional_edge_count < QUALIFIED_CF_MIN_DIRECTIONAL_EDGES:
+        blockers.append(
+            f"qualified_directional_edge_count {qualified_directional_edge_count} < {QUALIFIED_CF_MIN_DIRECTIONAL_EDGES}"
+        )
+    if supported_recommendation_count < QUALIFIED_CF_MIN_SUPPORTED_RECS:
+        blockers.append(
+            f"cf_supported_recommendation_count {supported_recommendation_count} < {QUALIFIED_CF_MIN_SUPPORTED_RECS}"
+        )
+    if blockers:
+        return {
+            "decision": "needs_more_evidence",
+            "reason": "; ".join(blockers),
+            "evidence": evidence,
+            "minimums": minimums,
+            "blockers": blockers,
+        }
     if _safe_float(qualified.get("negative_reexposure_rate"), 0.0) > 0:
-        return {"decision": "reject", "reason": "Qualified CF re-exposed items with negative evidence."}
+        return {
+            "decision": "reject",
+            "reason": "Qualified CF re-exposed items with negative evidence.",
+            "evidence": evidence,
+            "minimums": minimums,
+            "blockers": ["negative_reexposure_rate > 0"],
+        }
     guarded_metrics = (
         "recall_at_20",
         "map_at_20",
@@ -662,8 +703,20 @@ def _qualified_cf_gate(
     )
     degraded = [metric for metric in guarded_metrics if _safe_float(qualified.get(metric)) < _safe_float(current.get(metric))]
     if degraded:
-        return {"decision": "reject", "reason": f"Qualified CF reduced protected metrics: {', '.join(degraded)}."}
-    return {"decision": "adopt", "reason": "Qualified CF retained protected all-positive and deliberate metrics with usable supported coverage."}
+        return {
+            "decision": "reject",
+            "reason": f"Qualified CF reduced protected metrics: {', '.join(degraded)}.",
+            "evidence": evidence,
+            "minimums": minimums,
+            "blockers": degraded,
+        }
+    return {
+        "decision": "adopt",
+        "reason": "Qualified CF retained protected all-positive and deliberate metrics with sufficient supported coverage.",
+        "evidence": evidence,
+        "minimums": minimums,
+        "blockers": [],
+    }
 
 
 def evaluate_personalization(
@@ -719,6 +772,7 @@ def evaluate_personalization(
     qualified_cf_edges, qualified_cf_stats = _compute_eval_cf_edges(train_signals_by_user, qualified=True)
 
     per_user_metrics: list[dict[str, Any]] = []
+    cohort_rows: list[dict[str, Any]] = []
     evaluated_users = 0
     for user_id_hash, split in sorted(user_splits.items()):
         if not split.train_positive_item_ids or not split.held_out_positive_item_ids:
@@ -730,6 +784,15 @@ def evaluate_personalization(
         qualified_cf_source_item_ids = _cf_source_item_ids(user_signals, qualified=True)
         negative_item_ids = set(split.train_negative_item_ids)
         excluded_item_ids = set(split.train_positive_item_ids) | negative_item_ids
+        cohort_rows.append({
+            "user_id_hash": user_id_hash,
+            "train_positive_count": len(split.train_positive_item_ids),
+            "cold_start_user": len(split.train_positive_item_ids) <= 1,
+            "sparse_user": len(split.train_positive_item_ids) <= 2,
+            "deliberate_intent_user": bool(split.held_out_deliberate_item_ids),
+            "negative_feedback_user": bool(split.train_negative_item_ids),
+            "qualified_cf_source_user": bool(qualified_cf_source_item_ids),
+        })
 
         baseline_rankers = {
             "content_only": lambda: _rank_content_only(
@@ -833,8 +896,28 @@ def evaluate_personalization(
     ]
 
     synthetic_label = "synthetic/demo" if config.synthetic_data else "live/non-synthetic"
+    evaluation_data_mode = "synthetic_demo" if config.synthetic_data else "live_non_synthetic"
     algorithm_version = config.algorithm_version or _infer_version(recommendation_logs, "algorithm_version", "unknown")
     ranking_version = config.ranking_version or _infer_version(recommendation_logs, "ranking_version", "unknown")
+    cohort_denominator = max(len(cohort_rows), 1)
+    cohort_diagnostics = {
+        "evaluated_user_count": len(cohort_rows),
+        "cold_start_user_count": sum(1 for row in cohort_rows if row["cold_start_user"]),
+        "sparse_user_count": sum(1 for row in cohort_rows if row["sparse_user"]),
+        "deliberate_intent_user_count": sum(1 for row in cohort_rows if row["deliberate_intent_user"]),
+        "negative_feedback_user_count": sum(1 for row in cohort_rows if row["negative_feedback_user"]),
+        "qualified_cf_source_user_count": sum(1 for row in cohort_rows if row["qualified_cf_source_user"]),
+        "cold_start_user_rate": round(sum(1 for row in cohort_rows if row["cold_start_user"]) / cohort_denominator, 6),
+        "sparse_user_rate": round(sum(1 for row in cohort_rows if row["sparse_user"]) / cohort_denominator, 6),
+        "deliberate_intent_user_rate": round(sum(1 for row in cohort_rows if row["deliberate_intent_user"]) / cohort_denominator, 6),
+        "negative_feedback_user_rate": round(sum(1 for row in cohort_rows if row["negative_feedback_user"]) / cohort_denominator, 6),
+        "qualified_cf_source_user_rate": round(sum(1 for row in cohort_rows if row["qualified_cf_source_user"]) / cohort_denominator, 6),
+        "thresholds": {
+            "cold_start_user": "train_positive_item_count <= 1",
+            "sparse_user": "train_positive_item_count <= 2",
+        },
+        "caveat": f"{synthetic_label} cohort diagnostics; do not treat as production behavior mix unless live/non-synthetic.",
+    }
     config_dict = {
         "run_id": config.run_id,
         "created_at": config.created_at or _now_iso(),
@@ -846,6 +929,7 @@ def evaluate_personalization(
         "algorithm_version": algorithm_version,
         "ranking_version": ranking_version,
         "synthetic_data": bool(config.synthetic_data),
+        "evaluation_data_mode": evaluation_data_mode,
         "data_label": f"{synthetic_label} evaluation; metrics must be interpreted with explicit synthetic/demo caveats.",
         "event_count": len(clickstream_events),
         "user_count": len(events_by_user),
@@ -860,6 +944,7 @@ def evaluate_personalization(
         "per_user_metrics": per_user_metrics,
         "baseline_summaries": baseline_summaries,
         "comparisons": comparisons,
+        "cohort_diagnostics": cohort_diagnostics,
         "cf_diagnostics": {
             "min_support": DEFAULT_CF_MIN_SUPPORT,
             "current_directional_edge_count": sum(len(neighbors) for neighbors in cf_edges.values()),
@@ -896,6 +981,7 @@ def generate_personalization_summary_md(run_data: dict[str, Any]) -> str:
     comparisons = run_data.get("comparisons", [])
     gate = run_data.get("cf_qualified_gate", {})
     cf_diagnostics = run_data.get("cf_diagnostics", {})
+    cohort_diagnostics = run_data.get("cohort_diagnostics", {})
 
     lines = [
         "# Personalization Evaluation Report",
@@ -907,9 +993,31 @@ def generate_personalization_summary_md(run_data: dict[str, Any]) -> str:
         "",
         f"> {config.get('data_label', 'synthetic/demo evaluation caveat missing')}",
         "",
-        "## Baseline Metrics",
+        "## Cohort Diagnostics",
         "",
     ]
+    if isinstance(cohort_diagnostics, dict) and cohort_diagnostics:
+        lines.extend(_markdown_table(
+            [cohort_diagnostics],
+            [
+                ("evaluated_user_count", "evaluated_user_count"),
+                ("cold_start_user_count", "cold_start_user_count"),
+                ("sparse_user_count", "sparse_user_count"),
+                ("deliberate_intent_user_count", "deliberate_intent_user_count"),
+                ("negative_feedback_user_count", "negative_feedback_user_count"),
+                ("qualified_cf_source_user_count", "qualified_cf_source_user_count"),
+            ],
+        ))
+        lines.append("")
+        lines.append(f"> {cohort_diagnostics.get('caveat', 'cohort caveat missing')}")
+        lines.append("")
+    else:
+        lines.extend(["- No cohort diagnostics produced.", ""])
+
+    lines.extend([
+        "## Baseline Metrics",
+        "",
+    ])
     lines.extend(_markdown_table(
         baseline_summaries,
         [
@@ -980,6 +1088,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
     per_user_csv_path = output_path / "per_user_metrics.csv"
     baseline_path = output_path / "baseline_summaries.json"
     comparison_path = output_path / "comparisons.json"
+    cohort_path = output_path / "cohort_diagnostics.json"
     gate_path = output_path / "cf_qualified_gate.json"
     summary_path = output_path / "metrics_summary.md"
     manifest_path = output_path / "manifest.json"
@@ -988,6 +1097,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
     per_user_json_path.write_text(json.dumps(run_data.get("per_user_metrics", []), indent=2, ensure_ascii=False), encoding="utf-8")
     baseline_path.write_text(json.dumps(run_data.get("baseline_summaries", []), indent=2, ensure_ascii=False), encoding="utf-8")
     comparison_path.write_text(json.dumps(run_data.get("comparisons", []), indent=2, ensure_ascii=False), encoding="utf-8")
+    cohort_path.write_text(json.dumps(run_data.get("cohort_diagnostics", {}), indent=2, ensure_ascii=False), encoding="utf-8")
     gate_path.write_text(json.dumps(run_data.get("cf_qualified_gate", {}), indent=2, ensure_ascii=False), encoding="utf-8")
     summary_path.write_text(generate_personalization_summary_md(run_data), encoding="utf-8")
 
@@ -1035,6 +1145,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
             "per_user_metrics_csv": str(per_user_csv_path),
             "baseline_summaries": str(baseline_path),
             "comparisons": str(comparison_path),
+            "cohort_diagnostics": str(cohort_path),
             "cf_qualified_gate": str(gate_path),
             "metrics_summary": str(summary_path),
         },
@@ -1047,6 +1158,7 @@ def write_personalization_outputs(run_data: dict[str, Any], output_dir: str | Pa
         "per_user_metrics_csv": str(per_user_csv_path),
         "baseline_summaries": str(baseline_path),
         "comparisons": str(comparison_path),
+        "cohort_diagnostics": str(cohort_path),
         "cf_qualified_gate": str(gate_path),
         "metrics_summary": str(summary_path),
         "manifest": str(manifest_path),
@@ -1129,6 +1241,7 @@ def persist_evaluation_run(
             "current_directional_edge_count": run_data.get("cf_diagnostics", {}).get("current_directional_edge_count"),
             "qualified_directional_edge_count": run_data.get("cf_diagnostics", {}).get("qualified_directional_edge_count"),
         },
+        "cohort_diagnostics": run_data.get("cohort_diagnostics", {}),
     }
     artifacts = {
         "written": bool(artifact_paths),
@@ -1143,6 +1256,7 @@ def persist_evaluation_run(
         ranking_version=str(config.get("ranking_version", "unknown")),
         data_label=str(config.get("data_label", "synthetic/demo")),
         synthetic_data=bool(config.get("synthetic_data", True)),
+        evaluation_data_mode=str(config.get("evaluation_data_mode", "synthetic_demo")),
         metrics=compact_metrics,
         baseline_summaries=baseline_summaries if isinstance(baseline_summaries, list) else [],
         comparisons=run_data.get("comparisons", []) if isinstance(run_data.get("comparisons", []), list) else [],
