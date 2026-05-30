@@ -71,7 +71,10 @@ def test_seller_drafts_route_returns_disabled_state(monkeypatch) -> None:
     client = TestClient(create_app())
     response = client.get("/api/seller/drafts")
 
-    assert response.status_code == 403
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enabled"] is False
 
 
 def test_web_enrichment_preview_route_returns_disabled_state(monkeypatch) -> None:
@@ -94,7 +97,10 @@ def test_web_enrichment_preview_route_returns_disabled_state(monkeypatch) -> Non
     client = TestClient(create_app())
     response = client.post("/api/enrichment/seller-drafts/draft_missing/preview")
 
-    assert response.status_code == 403
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enabled"] is False
 
 
 def test_jobs_registry_route_requires_admin_and_returns_registry(monkeypatch) -> None:
@@ -933,13 +939,14 @@ def test_apply_pending_behavior_delegates_to_incremental_processor_and_clears_st
 
     client = _admin_client(monkeypatch)
     response = client.post(
-        "/api/debug/apply-pending-behavior?max_events=40&rebuild_item_stats=true&write=true&confirm=APPLY_PENDING_BEHAVIOR_WRITE",
+        "/api/debug/apply-pending-behavior?max_events=40&rebuild_item_stats=true&write=true&confirm=APPLY_PENDING_BEHAVIOR_WRITE&user_id_hash=u_current",
         headers=_admin_headers(),
     )
 
     assert response.status_code == 200
     assert response.json()["processing_mode"] == "incremental_pending"
     assert calls[0]["max_events"] == 40
+    assert calls[0]["user_id_hash"] == "u_current"
     assert calls[0]["write"] is True
     assert calls[0]["user_profiles_collection"] is sentinel
     assert cache_clears == [True]

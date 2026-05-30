@@ -55,8 +55,12 @@ def _stable_event_key(event: dict[str, Any]) -> tuple[str, str]:
     return (_event_timestamp(event) or "", str(event.get("event_id") or ""))
 
 
-def _load_pending_events(collection: Any, max_events: int) -> list[dict[str, Any]]:
-    pending = _find_events(collection, {"processed": {"$ne": True}})
+def _load_pending_events(collection: Any, max_events: int, user_id_hash: str | None = None) -> list[dict[str, Any]]:
+    filter_doc: dict[str, Any] = {"processed": {"$ne": True}}
+    normalized_user_id = str(user_id_hash or "").strip()
+    if normalized_user_id:
+        filter_doc["user_id_hash"] = normalized_user_id
+    pending = _find_events(collection, filter_doc)
     return sorted(pending, key=_stable_event_key)[:max_events]
 
 
@@ -85,6 +89,7 @@ def process_pending_behavior(
     rebuild_item_stats: bool = True,
     max_events: int = 100,
     batch_size: int = DEFAULT_BATCH_SIZE,
+    user_id_hash: str | None = None,
     updated_at: str | None = None,
 ) -> dict[str, Any]:
     if max_events <= 0:
@@ -102,7 +107,8 @@ def process_pending_behavior(
         raise ValueError("profile collections are required when write=True")
 
     updated_at = updated_at or utc_now_iso()
-    selected_events = _load_pending_events(clickstream_events_collection, max_events)
+    normalized_user_id_hash = str(user_id_hash or "").strip() or None
+    selected_events = _load_pending_events(clickstream_events_collection, max_events, normalized_user_id_hash)
     valid_events = _valid_pending_events(selected_events)
     affected_keys = sorted(
         {
@@ -125,6 +131,7 @@ def process_pending_behavior(
         "ok": True,
         "mode": "write" if write else "dry-run",
         "processing_mode": "incremental_pending",
+        "target_user_id_hash": normalized_user_id_hash,
         "events_selected": len(selected_events),
         "events_valid": len(valid_events),
         "affected_user_count": len(affected_user_ids),

@@ -669,14 +669,12 @@ def synthesize_enrichment(
             normalized_description = description.lower()
             if "your cart is empty" in normalized_description or "# specifications" in normalized_description:
                 raise ValueError("synthesis contains page-navigation text")
+            warnings: list[str] = []
             unverified_features = _asserted_unverified_seller_features(draft, description, evidence)
             if unverified_features:
-                retry_feedback = (
-                    "\n- Explicitly omit these seller features because they were not supported by evidence text: "
-                    + "; ".join(unverified_features)
-                    + ".\n"
+                warnings.append(
+                    "Some seller features were not fully supported by evidence text: " + "; ".join(unverified_features)
                 )
-                raise ValueError("synthesis description asserts a seller feature absent from evidence text")
             unsupported_claims = [
                 str(claim)[:300] for claim in payload.get("unsupported_claims") or [] if str(claim).strip()
             ]
@@ -684,12 +682,7 @@ def synthesize_enrichment(
                 claim for claim in unsupported_claims if claim.lower() in normalized_description
             ]
             if contradicted_claims:
-                retry_feedback = (
-                    "\n- Explicitly omit these unsupported claims from the description: "
-                    + "; ".join(contradicted_claims)
-                    + ".\n"
-                )
-                raise ValueError("synthesis description asserts an unsupported claim")
+                warnings.append("Description still includes unsupported claims: " + "; ".join(contradicted_claims))
             all_urls = sorted({url for fact in key_facts for url in fact["source_urls"]}) or sorted(allowed_urls)
             description_confidence = max((fact["confidence"] for fact in key_facts), default=0.55)
             suggestions: dict[str, dict[str, Any]] = {
@@ -729,7 +722,7 @@ def synthesize_enrichment(
                 "enriched_description": description,
                 "key_facts": key_facts,
                 "unsupported_claims": unsupported_claims,
-                "warnings": [],
+                "warnings": warnings,
             }
             description_word_count = len(description.split())
             evidence_word_count = len(_evidence_text_for_urls(evidence, sorted(allowed_urls)).split())

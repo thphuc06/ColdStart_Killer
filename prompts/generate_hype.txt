@@ -17,18 +17,34 @@ Product text:
 Rules:
 - English only.
 - Generate 3 to 6 canonical buyer search queries.
-- Write like real users typing into an e-commerce search bar.
 - Required aspects:
   function, persona, occasion.
 - Include each required aspect exactly once when possible.
 - Optional aspect values:
   constraint, compatibility, style, gift, spec, problem.
 - Avoid generic queries like "best product", "good item", "cheap product", or "high quality item".
-- Do not mention the brand unless the query is about compatibility with that brand.
+- Do not include the product title, model number, or brand name in any query.
+  Rewrite specs and features as buyer needs instead.
+  BAD:  "iphone 17 pro max 512gb with 48mp camera"
+  GOOD: "flagship smartphone 48mp camera for photography"
 - Ground every query in the product text or propositions.
 - Do not create search queries for use cases that are not supported by the product evidence.
 - Confidence must be from 0.60 to 1.00.
 - If there is not enough product evidence for optional aspects, generate only the 3 required aspect queries.
+
+Example output for a high-end smartphone:
+{{
+  "queries": [
+    {{"aspect": "function",  "raw_text": "smartphone with best camera for travel photography", "confidence": 0.85}},
+    {{"aspect": "persona",   "raw_text": "phone for professional photographer who edits on mobile", "confidence": 0.82}},
+    {{"aspect": "occasion",  "raw_text": "flagship phone as anniversary gift for tech enthusiast", "confidence": 0.78}},
+    {{"aspect": "spec",      "raw_text": "phone with 6.9 inch display and long battery life", "confidence": 0.75}}
+  ],
+  "generation_note": "Covered function, persona, occasion, spec. No brand mentioned."
+}}
+
+IMPORTANT: Every raw_text must be writable without knowing the product name.
+A buyer who has never heard of this product should be able to type this query naturally.
 
 Return this JSON shape:
 {{

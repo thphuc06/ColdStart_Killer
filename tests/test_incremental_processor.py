@@ -140,3 +140,38 @@ def test_incremental_processor_does_not_mark_events_when_profile_refresh_fails(m
         )
 
     assert events.docs[0]["processed"] is False
+
+
+def test_incremental_processor_can_scope_pending_events_to_one_user(monkeypatch) -> None:
+    events = FakeCollection(
+        [
+            {**_event("evt_other", "click", "2026-01-01T00:00:00+00:00", processed=False), "user_id_hash": "u_other"},
+            {**_event("evt_target", "add_to_cart", "2026-01-02T00:00:00+00:00", processed=False), "user_id_hash": "u_target"},
+        ]
+    )
+    profile_calls = []
+    monkeypatch.setattr(
+        processor,
+        "build_user_profiles",
+        lambda **kwargs: profile_calls.append(kwargs) or {"ok": True, "stats": {"profiles_built": 1, "profiles_written": 1}},
+    )
+
+    result = processor.process_pending_behavior(
+        clickstream_events_collection=events,
+        recommendation_logs_collection=FakeCollection(),
+        user_item_signals_collection=FakeCollection(),
+        item_stats_collection=FakeCollection(),
+        user_profiles_collection=FakeCollection(),
+        item_hype_profiles_collection=FakeCollection(),
+        items_collection=FakeCollection(),
+        write=True,
+        max_events=10,
+        user_id_hash="u_target",
+        updated_at=FIXED_NOW,
+    )
+
+    assert result["target_user_id_hash"] == "u_target"
+    assert result["events_selected"] == 1
+    assert profile_calls[0]["user_ids"] == {"u_target"}
+    assert next(doc for doc in events.docs if doc["event_id"] == "evt_target")["processed"] is True
+    assert next(doc for doc in events.docs if doc["event_id"] == "evt_other")["processed"] is False

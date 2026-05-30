@@ -96,6 +96,7 @@ export function DebugPage() {
     const [cfSupport, setCfSupport] = useState(2);
     const [cfConfirm, setCfConfirm] = useState("");
     const [applyWrite, setApplyWrite] = useState(false);
+    const [applyMaxEvents, setApplyMaxEvents] = useState("500");
     const [applyConfirm, setApplyConfirm] = useState("");
     const hasAdminToken = adminToken.trim().length > 0;
 
@@ -143,11 +144,12 @@ export function DebugPage() {
     const applyBehaviorMutation = useMutation({
         mutationFn: () =>
             applyPendingBehavior({
-                maxEvents: Number(processLimit) || 100,
+                maxEvents: Number(applyMaxEvents) || 500,
                 rebuildItemStats: true,
                 write: applyWrite,
                 confirm: applyConfirm || undefined,
                 adminToken,
+                userIdHash: userIdHash || undefined,
             }),
         onSuccess: refreshAdminState,
     });
@@ -453,8 +455,9 @@ export function DebugPage() {
                                 Apply interactions to personalization
                             </h3>
                             <p className="mt-2 text-sm leading-6 text-[var(--ink-soft)]">
-                                Impressions and actions are written to clickstream immediately. This action incrementally refreshes
-                                complete affected signals, item stats and profiles. CF is scheduled separately when its graph is stale.
+                                Impressions and actions are written to clickstream immediately. This action is scoped to the current
+                                shopper and incrementally refreshes affected signals, item stats and profiles. Preview mode does not
+                                write derived personalization state.
                             </p>
                         </div>
                         <button
@@ -471,6 +474,19 @@ export function DebugPage() {
                             <input checked={applyWrite} type="checkbox" onChange={(event) => setApplyWrite(event.target.checked)} />
                             write mode
                         </label>
+                        <label className="space-y-1 text-sm font-semibold text-[var(--ink-strong)]">
+                            max events for current shopper
+                            <input
+                                className="form-input"
+                                inputMode="numeric"
+                                value={applyMaxEvents}
+                                onChange={(event) => setApplyMaxEvents(event.target.value)}
+                            />
+                        </label>
+                        <p className="text-xs leading-5 text-[var(--ink-soft)]">
+                            Current shopper: {userIdHash || "n/a"}. Turn on write mode and enter the confirmation text to make homepage
+                            recommendations change.
+                        </p>
                         {applyWrite ? (
                             <input
                                 className="form-input"

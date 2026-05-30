@@ -499,6 +499,7 @@ def apply_pending_behavior(
     rebuild_item_stats: bool = True,
     write: bool = False,
     confirm: str | None = None,
+    user_id_hash: str | None = None,
 ) -> dict[str, Any]:
     _require_write_confirmation(
         write=write,
@@ -519,6 +520,7 @@ def apply_pending_behavior(
             write=write,
             rebuild_item_stats=rebuild_item_stats,
             max_events=max_events,
+            user_id_hash=user_id_hash,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

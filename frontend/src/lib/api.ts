@@ -1054,13 +1054,14 @@ export function processEvents(params: { limit?: number; rebuildItemStats?: boole
 }
 
 
-export function applyPendingBehavior(params: { maxEvents?: number; rebuildItemStats?: boolean; write?: boolean; confirm?: string; adminToken?: string }) {
+export function applyPendingBehavior(params: { maxEvents?: number; rebuildItemStats?: boolean; write?: boolean; confirm?: string; adminToken?: string; userIdHash?: string }) {
     return fetchJson<Record<string, unknown>>(
         `/api/debug/apply-pending-behavior${toQueryString({
             max_events: params.maxEvents ?? 100,
             rebuild_item_stats: params.rebuildItemStats ?? true,
             write: params.write ?? false,
             confirm: params.confirm,
+            user_id_hash: params.userIdHash,
         })}`,
         { method: "POST", headers: adminHeaders(params.adminToken) },
     );
