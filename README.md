@@ -9,6 +9,63 @@ Quick operational docs:
 - [DEMO_CHECKLIST.md](DEMO_CHECKLIST.md) — short demo rehearsal checklist.
 - [RELEASE_NOTES.md](RELEASE_NOTES.md) — current validated release snapshot.
 
+## Table of Contents
+
+- [Who This Repository Is For](#who-this-repository-is-for)
+- [3-Minute Quick Try](#3-minute-quick-try)
+- [7-Step Live Demo Script (Short)](#7-step-live-demo-script-short)
+- [Current Phase Scope](#current-phase-scope)
+- [Phase 14 Demo Quickstart](#phase-14-demo-quickstart)
+- [Current Evaluation Status](#current-evaluation-status)
+- [Technical Notebook Audit Path](#technical-notebook-audit-path)
+- [Known Limitations (Current)](#known-limitations-current)
+- [Reproducibility Snapshot](#reproducibility-snapshot)
+- [Project Structure](#project-structure)
+- [License and Contact](#license-and-contact)
+
+## Who This Repository Is For
+
+- Hackathon judges who need a clear browser-first demo path with evidence-backed claims.
+- Technical reviewers who want to verify retrieval quality, latency, and safety caveats from runnable commands.
+- Teammates/operators who need a reliable runbook for local setup, demo rehearsal, and guarded maintenance actions.
+
+## 3-Minute Quick Try
+
+Quick prerequisites (assumed for this path):
+
+- Local `.env` is already configured with valid `MONGODB_URI` and `MONGODB_DB_NAME`.
+- The target MongoDB demo database already contains `items` and `retrieval_units`.
+- Atlas Search indexes for the demo path are already ready.
+- Python dependencies are already installed in an active virtual environment.
+
+From repo root:
+
+```bash
+python -m uvicorn src.api.app:app --reload
+```
+
+In a second terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Then open `http://localhost:5173`, pick a demo user, and run one search query.
+
+If you need full setup and environment details, use [PROJECT_SETUP_AND_FULL_RUN_GUIDE.md](PROJECT_SETUP_AND_FULL_RUN_GUIDE.md).
+
+## 7-Step Live Demo Script (Short)
+
+1. Start backend and frontend.
+2. Select a profile-backed demo user.
+3. Open homepage and confirm personalized cards.
+4. Open one product detail and inspect score breakdown.
+5. Open similar products and verify semantic vs CF signal separation.
+6. Run one search query and confirm query-first results with personalized reranking.
+7. Open Debug/Admin, verify lineage and protected-collection warnings, and stop at dry-run for reset/rebuild actions.
+
 ## Current Phase Scope
 
 This phase includes:
@@ -51,20 +108,7 @@ python -m uvicorn src.api.app:app --reload
 Check API health:
 
 ```bash
-python - <<'PY'
-from fastapi.testclient import TestClient
-from src.api.app import create_app
-import os
-
-client = TestClient(create_app())
-for path in ["/api/health", "/api/users/demo"]:
-    r = client.get(path)
-    print(path, r.status_code)
-admin_token = os.getenv("ADMIN_TOKEN", "")
-if admin_token:
-    r = client.get("/api/demo/status", headers={"X-Admin-Token": admin_token})
-    print("/api/demo/status", r.status_code)
-PY
+python -c "from fastapi.testclient import TestClient; from src.api.app import create_app; import os; c=TestClient(create_app()); print('/api/health', c.get('/api/health').status_code); print('/api/users/demo', c.get('/api/users/demo').status_code); t=os.getenv('ADMIN_TOKEN',''); t and print('/api/demo/status', c.get('/api/demo/status', headers={'X-Admin-Token': t}).status_code)"
 ```
 
 Start the frontend:
@@ -79,16 +123,9 @@ npm run dev
 
 Recommended browser demo flow:
 
-1. Select a profile-backed demo user.
-2. Optionally create a cold shopper and open Preferences onboarding.
-3. Preview onboarding preferences without saving, then either skip or complete.
-4. Open the homepage and verify personalized cards.
-5. Expand score details on a product card.
-6. Click a product and open product detail.
-7. Verify similar products show semantic similarity and Collaborative Filtering as separate signals.
-8. Run a search query and verify query-first results with personalized reranking.
-9. Open Debug/Admin and verify lineage, demo counts, protected collections, and reset warnings.
-10. If seller tools are enabled for the demo, paste a configured seller or admin token into the seller page before create/preview/enrichment/approve-index actions.
+- Short flow: use [7-Step Live Demo Script (Short)](#7-step-live-demo-script-short).
+- Detailed rehearsal and safety checks: [DEMO_CHECKLIST.md](DEMO_CHECKLIST.md).
+- If seller tools are enabled for the demo, paste a configured seller or admin token into the seller page before create/preview/enrichment/approve-index actions.
 
 Demo safety commands:
 
@@ -192,6 +229,33 @@ The React website is the primary demo. The notebooks remain useful as the techni
 - `notebooks/04_demo_buyer_search.ipynb` runs the end-to-end buyer search demo.
 - `notebooks/05_evaluation_retrieval_quality.ipynb` runs the 3-layer evaluation: diagnostics → IR metrics → demo readiness claims.
 
+## Known Limitations (Current)
+
+- End-to-end total latency is not yet below 400ms in the latest verified run (`956.2ms` P95), even though MongoDB search latency is below target (`183.8ms` P95).
+- Evaluation labels are AI-assisted conservative judgments and are not fully human-audited ground truth.
+- The latest dataset snapshot is fully cold (`warm_items = 0`), so results should be interpreted as cold-start exposure quality rather than cold-vs-warm lift.
+- Python 3.14 can run this repo but may emit torch/sentence-transformers stability warnings; Python 3.10-3.12 remains the safer runtime.
+
+## Reproducibility Snapshot
+
+Use this exact command for the latest verified retrieval evaluation path:
+
+```bash
+python scripts/run_evaluation.py \
+  --queries evaluation/queries/retrieval_queries_seed.json \
+  --judgments evaluation/judgments/retrieval_judgments_seed.json \
+  --out .runtime/evaluation/notebook_run
+```
+
+Primary artifacts to verify:
+
+- `.runtime/evaluation/notebook_run/metrics_summary.md`
+- `.runtime/evaluation/notebook_run/hackathon_impact_report.md`
+- `.runtime/evaluation/notebook_run/config.json`
+- `.runtime/evaluation/notebook_run/layer2_metrics_summary.json`
+- `.runtime/evaluation/notebook_run/layer2_metrics_by_query.csv`
+- `.runtime/evaluation/notebook_run/layer2_raw_results.json`
+
 ## Project Structure
 
 - `src/query_processor.py` — query processing pipeline (language detection, translation via Qwen3:8b, price filter extraction, HyPE query generation, BGE-M3 embedding).
@@ -212,4 +276,9 @@ The React website is the primary demo. The notebooks remain useful as the techni
 - `RELEASE_NOTES.md` — concise validated release snapshot and residual risks.
 - `walkthrough_evaluation.md` — step-by-step evaluation walkthrough and usage guide.
 - `TESTING.md` — testing guide.
+
+## License and Contact
+
+- License: no license file is declared in this repository at the time of writing.
+- Contact: no maintainer contact is declared in this repository at the time of writing.
 
