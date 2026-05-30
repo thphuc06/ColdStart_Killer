@@ -663,8 +663,8 @@ Manual checklist:
 14. Open Debug/Admin.
 15. Verify evaluation dashboard latest/empty state.
 16. Verify jobs panel shows registry/runs and does not auto-trigger jobs.
-17. Open seller draft route if seller tools are enabled, otherwise verify disabled state.
-18. Verify enrichment disabled or provider-not-configured state if Tavily is not configured.
+17. Open seller draft route if seller tools are enabled; otherwise verify a readable disabled response (expected shape includes `ok=true`, `enabled=false`).
+18. Verify enrichment disabled or provider-not-configured state if Tavily is not configured; disabled mode should be readable (not a hard failure response).
 19. Check browser console/network for unexpected 500 errors.
 
 Default demo does not require Tavily, Redis, seller catalog writes, or job trigger API.
@@ -968,7 +968,7 @@ All protected by admin auth when `AUTH_MODE=demo` or `production`.
 | `POST` | `/api/demo/reset` | Soft: `write=true&confirm=DEMO_RESET`; full: `write=true&full=true&confirm=FULL_DEMO_RESET`. |
 | `POST` | `/api/demo/seed` | `write=true&confirm=SEED_DEMO_BEHAVIOR`. |
 | `POST` | `/api/debug/process-events` | `write=true&confirm=PROCESS_EVENTS_WRITE`. |
-| `POST` | `/api/debug/apply-pending-behavior` | `write=true&confirm=APPLY_PENDING_BEHAVIOR_WRITE`. |
+| `POST` | `/api/debug/apply-pending-behavior` | `write=true&confirm=APPLY_PENDING_BEHAVIOR_WRITE`; optional `user_id_hash` scopes processing to one shopper. |
 | `POST` | `/api/debug/rebuild-profiles` | `write=true&confirm=REBUILD_PROFILES_WRITE`. |
 | `POST` | `/api/debug/rebuild-cf` | `write=true&confirm=REBUILD_CF_WRITE`. |
 

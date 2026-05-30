@@ -146,6 +146,7 @@ Recommendation honesty:
 - Job orchestration is intentionally lightweight. `/api/jobs/*` is Admin-protected, job triggering is disabled unless `ENABLE_JOB_TRIGGER_API=true`, and CLI dry-runs default to `--no-track` unless a human explicitly requests compact `job_runs` tracking.
 - The backend cache layer is separate from Query Embedding Cache. It does not cache write endpoints, raw event histories, secrets, admin tokens, or personalized search/feed responses in the current implementation. Rollback is `CACHE_BACKEND=none`.
 - Auth/privacy guardrails keep public demo reads open while requiring admin/seller tokens for Debug/Admin controls, seller approve-index, enrichment request/apply, and job triggers. Live Debug/Admin write controls also require exact confirmation strings such as `SEED_DEMO_BEHAVIOR`, `PROCESS_EVENTS_WRITE`, `APPLY_PENDING_BEHAVIOR_WRITE`, `REBUILD_PROFILES_WRITE`, and `REBUILD_CF_WRITE`. Rollback for local-only emergency is `AUTH_MODE=disabled`.
+- Debug apply-pending behavior can be scoped to the current shopper via optional `user_id_hash`, so demo operators can refresh one shopper safely instead of scanning all pending events.
 - Judge clarification: CF does not need to be built with MongoDB Aggregation Pipeline. Aggregation Pipeline remains used in search/retrieval/ranking/filtering/evaluation/debug paths; a MongoDB-native CF proof is optional future research, not a current blocker.
 
 ## Current Evaluation Status

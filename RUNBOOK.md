@@ -343,6 +343,7 @@ Policy:
 - Public reads remain open: homepage feed, search, item detail, similar products, user selection, and onboarding.
 - Debug/Admin and demo reset/seed/rebuild controls require `ADMIN_TOKEN` when `AUTH_MODE=demo` or `production`.
 - Live Debug/Admin write controls require exact confirmation strings: `SEED_DEMO_BEHAVIOR`, `PROCESS_EVENTS_WRITE`, `APPLY_PENDING_BEHAVIOR_WRITE`, `REBUILD_PROFILES_WRITE`, and `REBUILD_CF_WRITE`.
+- `POST /api/debug/apply-pending-behavior` can optionally pass `user_id_hash` to scope writes to one shopper during demo operations.
 - Seller approve-index and enrichment request/apply require an admin or seller token plus their existing confirmation strings.
 - Job trigger API requires admin token and remains disabled unless `ENABLE_JOB_TRIGGER_API=true`.
 - Debug payloads redact secret-like fields and mask raw user identifiers when `PRIVACY_MASK_DEBUG_DATA=true`.
