@@ -1,6 +1,6 @@
 # ColdStart Killer — Full Setup & Run Guide
 
-This is the canonical setup and run guide for ColdStart Killer. Use this file for GitHub/submission.
+This is the canonical setup and run guide for ColdStart Killer. Use this file as the primary GitHub/submission reference.
 
 Do not put real secrets in this document. Do not commit `.env`.
 
@@ -223,13 +223,28 @@ Text Search index reference:
         "analyzer": "lucene.standard"
       },
       "unit_type": {
-        "type": "token"
+        "type": "string"
       },
       "language": {
-        "type": "token"
+        "type": "string"
       },
       "in_stock": {
         "type": "boolean"
+      },
+      "is_cold_item": {
+        "type": "boolean"
+      },
+      "category_id": {
+        "type": "string"
+      },
+      "confidence": {
+        "type": "number"
+      },
+      "proposition_type": {
+        "type": "string"
+      },
+      "aspect": {
+        "type": "string"
       }
     }
   }

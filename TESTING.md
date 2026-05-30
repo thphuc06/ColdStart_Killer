@@ -2,7 +2,7 @@
 
 Tài liệu này là testing guide chính thức cho ColdStart Killer. Nội dung bao gồm setup, unit tests, integration notebooks, demo end-to-end, CLI search, và checklist trước khi demo.
 
-Người nên đọc: teammate phụ trách indexing/seller flow, người phụ trách buyer search pipeline, và bất kỳ ai cần verify hệ thống trước khi push GitHub hoặc record demo.
+Đối tượng nên đọc: teammate phụ trách indexing/seller flow, người phụ trách buyer search pipeline, và bất kỳ ai cần verify hệ thống trước khi push GitHub hoặc record demo.
 
 ---
 

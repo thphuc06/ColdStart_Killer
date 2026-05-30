@@ -1,4 +1,4 @@
-# Evaluation Framework — Walkthrough & Hướng dẫn sử dụng
+# Evaluation Framework — Walkthrough và Hướng dẫn sử dụng
 
 ## Tổng quan
 
@@ -9,7 +9,7 @@ graph TD
     A["Layer 1: Diagnostics<br/>Offline, no MongoDB"] --> B["Layer 2: IR Metrics<br/>NDCG, Recall, MRR, Precision"]
     B --> C["Layer 3: Demo Readiness<br/>Claim Status, Latency"]
     D["50 Queries<br/>20 Probes"] --> A
-    E["Human Judgments<br/>(manual labeling)"] --> B
+    E["Judgments<br/>(AI-assisted seed hoặc manual labeling)"] --> B
     F["5 Variants<br/>title_only, vector_only, bm25_only<br/>hybrid_union, hybrid_no_cold_boost"] --> B
 ```
 
@@ -35,7 +35,7 @@ python scripts/run_eval_diagnostics.py \
 
 **Output:** `layer1_summary.md` với pass rate.
 
-### Bước 2: Build Judgment Pool — Cần MongoDB + Ollama + BGE-M3
+### Bước 2: Build Judgment Pool — Cần MongoDB (và Ollama + BGE-M3 cho live query processing)
 
 Chạy 50 queries qua tất cả 5 variants, thu thập kết quả để labeling:
 
@@ -47,6 +47,8 @@ python scripts/build_eval_pool.py \
 ```
 
 **Output:** `judgment_pool.csv` — mỗi row là 1 (query, item) pair cần bạn label:
+
+Lưu ý: repo hiện có sẵn bộ seed judgments theo hướng AI-assisted conservative. Nếu dùng để công bố/claim chính thức, vẫn nên có human audit.
 
 | Cột | Ý nghĩa |
 |---|---|
@@ -65,7 +67,7 @@ python scripts/build_eval_pool.py \
 
 ### Bước 3: Import judgments từ CSV sang JSON
 
-Sau khi đã điền đầy đủ nhãn vào file `judgment_pool.csv`, chạy script import để convert sang JSON và kiểm tra tính hợp lệ (validation) của data:
+Sau khi điền đầy đủ nhãn vào `judgment_pool.csv`, chạy script import để chuyển sang JSON và kiểm tra tính hợp lệ (validation) của dữ liệu:
 
 ```bash
 python scripts/import_eval_judgments.py \
@@ -73,7 +75,7 @@ python scripts/import_eval_judgments.py \
   --out evaluation/judgments/retrieval_judgments_seed.json
 ```
 
-*Tip: Bạn có thể thêm flag `--strict` nếu muốn script báo lỗi ngay khi gặp dòng trống hoặc nhãn sai định dạng.*
+*Tip: Thêm flag `--strict` nếu bạn muốn script báo lỗi ngay khi gặp dòng trống hoặc nhãn sai định dạng.*
 
 ### Bước 4: Full Evaluation (Layer 2+3) — Cần judgments
 
@@ -93,7 +95,7 @@ python scripts/run_evaluation.py \
 
 1. **Variant Availability** — variant nào available/unavailable
 2. **Variant Comparison** — NDCG@10, Recall@10, MRR@10, etc. cho mỗi variant
-3. **Claim Status** — "Hybrid beats title?" → supported/unsupported/needs_more_evidence
+3. **Claim Status** — "Hybrid beats title-only baseline?" → supported/unsupported/needs_more_evidence
 4. **Latency** — P50/P95 search latency
 5. **Recommendations** — tự động đề xuất fix dựa trên metrics
 6. **Commands** — liệt kê commands đã chạy và chưa chạy
