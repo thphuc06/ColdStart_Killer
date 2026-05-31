@@ -280,6 +280,6 @@ Primary artifacts to verify:
 
 ## License and Contact
 
-- License: no license file is declared in this repository at the time of writing.
+- License: MIT. See `LICENSE`.
 - Contact: no maintainer contact is declared in this repository at the time of writing.
 
